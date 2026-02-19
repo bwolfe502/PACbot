@@ -1,0 +1,21 @@
+# Virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Android platform tools (large binaries)
+platform-tools/
+
+# macOS
+.DS_Store
+
+# Debug output
+debug/
+
+# License key
+.license_key
+
+# IDE
+.claude/
