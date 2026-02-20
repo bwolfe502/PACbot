@@ -318,12 +318,41 @@ def join_rally(rally_type, device):
                     h, w = join_btn.shape[:2]
                     adb_tap(device, join_x + w // 2, join_y + h // 2)
 
-                    # Wait for slot
+                    # Wait for slot or full rally
+                    slot_found = False
+                    rally_full = False
                     start_time = time.time()
                     while time.time() - start_time < 5:
+                        s = load_screenshot(device)
+                        if s is not None and find_image(s, "full_rally.png", threshold=0.8):
+                            rally_full = True
+                            break
                         if tap_image("slot.png", device):
+                            slot_found = True
                             break
                         time.sleep(0.5)
+
+                    if rally_full:
+                        print(f"[{device}] Rally is full — closing")
+                        tap_image("full_rally.png", device)
+                        time.sleep(1)
+                        adb_tap(device, 75, 75)
+                        time.sleep(1)
+                        adb_tap(device, 75, 75)
+                        time.sleep(1)
+                        adb_tap(device, 965, 1865)
+                        time.sleep(1)
+                        return False
+
+                    if not slot_found:
+                        print(f"[{device}] No slot found — closing")
+                        adb_tap(device, 75, 75)
+                        time.sleep(1)
+                        adb_tap(device, 75, 75)
+                        time.sleep(1)
+                        adb_tap(device, 965, 1865)
+                        time.sleep(1)
+                        return False
 
                     time.sleep(1)
                     tap_image("depart.png", device)
@@ -579,7 +608,7 @@ def join_war_rallies(device):
         return
 
     # Rally types we do NOT want to join
-    exclude_types = ["titan", "eg"]
+    exclude_types = ["titan", "eg", "groot"]
 
     def _on_war_screen():
         """Check if we're still on the war screen by looking for war_screen.png."""

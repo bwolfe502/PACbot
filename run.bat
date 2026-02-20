@@ -40,21 +40,9 @@ if errorlevel 1 (
 )
 
 echo.
-echo Checking for updates...
 py updater.py
 
 echo.
-echo Validating license...
-py -c "from license import validate_license; validate_license()"
-if errorlevel 1 (
-  echo.
-  echo License validation failed.
-  pause
-  exit /b 1
-)
-
-echo.
-echo Running PACbot...
 py main.py
 echo.
 echo PACbot exited.

@@ -55,9 +55,10 @@ Turns on automatic quest completion. PACbot will:
   - Automatically complete the quest by starting a rally
   - Repeat on a loop until you turn it off
 
-IMPORTANT: Auto Quest only works during Battle League (BL) weeks.
-During rest week, BL is not available and Auto Quest won't have
-quests to complete. During rest week, use the Individual Actions
+IMPORTANT: Auto Quest only works during Broken Lands (BL) weeks,
+also known as Burning Expedition. During rest week, BL is not
+available and Auto Quest won't have quests to complete. During
+rest week, use the Individual Actions
 menu instead — expand it and use "Rally Titan" or "Rally Evil
 Guard" to farm manually or on a repeating timer.
 

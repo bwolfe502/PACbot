@@ -39,8 +39,6 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-echo ""
-echo "Running PACbot..."
 python main.py
 
 echo ""

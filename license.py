@@ -1,42 +1,113 @@
 """
 PACbot License Validation
 Validates license keys against a published Google Sheet (CSV).
-Stores the key locally so the user only enters it once.
+Keys are bound to the machine hardware so they can't be shared.
 """
 
 import os
 import sys
 import csv
 import io
+import base64
+import hashlib
+import hmac
+import platform
+import uuid
 
 # The local file where the license key is saved after first entry
 LICENSE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".license_key")
 
-# ============================================================
-# IMPORTANT: Set this to your published Google Sheet CSV URL
-#
-# To get this URL:
-#   1. Open your Google Sheet
-#   2. File → Share → Publish to web
-#   3. Select "Sheet1" and "Comma-separated values (.csv)"
-#   4. Click Publish and copy the URL
-# ============================================================
-SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTbryJkuOUqeLJmppNLuBpeBcTIKR7xtSlD2EJH1cQ0yO7av6eYN9iw7Bfa55bw5FduUQhBY0MO7Jl7/pub?output=csv"
+# Sheet URL (obfuscated — not plain text in source)
+_SHEET_DATA = "aHR0cHM6Ly9kb2NzLmdvb2dsZS5jb20vc3ByZWFkc2hlZXRzL2QvZS8yUEFDWC0xdlRicnlKa3VPVXFlTEptcHBOTHVCcGVCY1RJS1I3eHRTbEQyRUpIMWNRMHlPN2F2NmVZTjlpdzdCZmE1NWJ3NUZkdVVRaEJZME1PN0psNy9wdWI/b3V0cHV0PWNzdg=="
 
+def _get_sheet_url():
+    return base64.b64decode(_SHEET_DATA).decode()
+
+
+# ============================================================
+# MACHINE FINGERPRINT
+# ============================================================
+
+def _get_machine_id():
+    """
+    Generate a stable machine fingerprint from hardware identifiers.
+    This ties a license key to the specific machine it was activated on.
+    """
+    parts = []
+
+    # MAC address (primary hardware identifier)
+    mac = uuid.getnode()
+    # uuid.getnode() returns a random value if it can't find a real MAC;
+    # random MACs have bit 0 of the first octet set to 1
+    if (mac >> 40) & 1:
+        # Fallback: no real MAC found, use hostname + platform
+        parts.append(platform.node())
+        parts.append(platform.machine())
+        parts.append(platform.processor())
+    else:
+        parts.append(format(mac, '012x'))
+
+    # Add hostname for extra uniqueness
+    parts.append(platform.node())
+
+    raw = "|".join(parts)
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+# ============================================================
+# KEY STORAGE (machine-bound)
+# ============================================================
 
 def _load_saved_key():
-    """Load the locally saved license key, if any."""
-    if os.path.isfile(LICENSE_FILE):
+    """
+    Load the locally saved license key, if any.
+    Verifies the key was saved on THIS machine by checking the HMAC.
+    Returns the key string if valid, None otherwise.
+    """
+    if not os.path.isfile(LICENSE_FILE):
+        return None
+
+    try:
         with open(LICENSE_FILE, "r", encoding="utf-8") as f:
-            return f.read().strip()
-    return None
+            data = f.read().strip()
+
+        # Format: key:hmac_hex
+        if ":" not in data:
+            # Old format (plain key) — force re-activation
+            return None
+
+        key, stored_mac = data.split(":", 1)
+        expected_mac = _compute_key_mac(key)
+
+        if hmac.compare_digest(stored_mac, expected_mac):
+            return key
+        else:
+            # HMAC mismatch — file was copied from another machine
+            return None
+    except Exception:
+        return None
 
 
 def _save_key(key):
-    """Save the license key locally so user doesn't have to re-enter it."""
+    """Save the license key bound to this machine's hardware ID."""
+    mac = _compute_key_mac(key)
     with open(LICENSE_FILE, "w", encoding="utf-8") as f:
-        f.write(key.strip())
+        f.write(f"{key}:{mac}")
 
+
+def _compute_key_mac(key):
+    """Compute an HMAC of the key using the machine ID as the secret."""
+    machine_id = _get_machine_id()
+    return hmac.new(
+        machine_id.encode(),
+        key.encode(),
+        hashlib.sha256
+    ).hexdigest()
+
+
+# ============================================================
+# REMOTE VALIDATION
+# ============================================================
 
 def _fetch_valid_keys():
     """
@@ -45,13 +116,10 @@ def _fetch_valid_keys():
     """
     import requests
 
-    if not SHEET_CSV_URL:
-        print("ERROR: License sheet URL not configured.")
-        print("Please set SHEET_CSV_URL in license.py")
-        sys.exit(1)
+    url = _get_sheet_url()
 
     try:
-        resp = requests.get(SHEET_CSV_URL, timeout=10)
+        resp = requests.get(url, timeout=10)
         resp.raise_for_status()
     except requests.ConnectionError:
         print("ERROR: Cannot connect to the internet to validate license.")
@@ -80,6 +148,10 @@ def _fetch_valid_keys():
 
     return valid_keys
 
+
+# ============================================================
+# MAIN VALIDATION FLOW
+# ============================================================
 
 def validate_license():
     """
