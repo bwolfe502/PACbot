@@ -262,8 +262,20 @@ def create_gui():
     PAD_X = 20
 
     # ── Title ──
-    tk.Label(window, text=f"PACbot v{version}", font=("Arial", 16, "bold")).pack(pady=(8, 0))
-    tk.Label(window, text="Made by Nine", font=("Arial", 9), fg="gray").pack(pady=(0, 2))
+    title_frame = tk.Frame(window)
+    title_frame.pack(fill=tk.X, pady=(8, 2))
+    tk.Label(title_frame, text=f"PACbot v{version}", font=("Arial", 16, "bold")).pack()
+    tk.Label(title_frame, text="Made by Nine", font=("Arial", 9), fg="gray").pack()
+
+    def open_tutorial():
+        tutorial_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "TUTORIAL.txt")
+        if os.path.isfile(tutorial_path):
+            os.startfile(tutorial_path)
+        else:
+            messagebox.showinfo("Tutorial", "TUTORIAL.txt not found.")
+
+    tk.Button(title_frame, text="How to Use", command=open_tutorial,
+              font=("Arial", 8), relief=tk.GROOVE).pack(pady=(2, 0))
 
     # ── Devices ──
     device_frame = tk.LabelFrame(window, text="Devices", font=("Arial", 10, "bold"),
