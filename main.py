@@ -274,8 +274,10 @@ def create_gui():
         else:
             messagebox.showinfo("Tutorial", "TUTORIAL.txt not found.")
 
-    tk.Button(title_frame, text="How to Use", command=open_tutorial,
-              font=("Arial", 8), relief=tk.GROOVE).pack(pady=(2, 0))
+    how_to_label = tk.Label(title_frame, text="How to Use", font=("Arial", 10, "underline"),
+                            fg="#0066cc", cursor="hand2")
+    how_to_label.pack(pady=(2, 0))
+    how_to_label.bind("<Button-1>", lambda e: open_tutorial())
 
     # ── Devices ──
     device_frame = tk.LabelFrame(window, text="Devices", font=("Arial", 10, "bold"),
