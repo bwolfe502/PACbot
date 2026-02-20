@@ -22,6 +22,9 @@ PRESERVE_FILES = {
     ".license_key",
     ".venv",
     "__pycache__",
+    "platform-tools",
+    "_update.zip",
+    "_update_temp",
 }
 
 
@@ -54,8 +57,17 @@ def get_latest_release():
         data = resp.json()
 
         tag = data.get("tag_name", "")
-        # The source code zip is always available for releases
-        zip_url = data.get("zipball_url")
+
+        # Look for the uploaded .zip asset (the full package with platform-tools)
+        zip_url = None
+        for asset in data.get("assets", []):
+            if asset["name"].endswith(".zip"):
+                zip_url = asset["browser_download_url"]
+                break
+
+        # Fall back to source zipball if no asset found
+        if not zip_url:
+            zip_url = data.get("zipball_url")
 
         return tag, zip_url
 
