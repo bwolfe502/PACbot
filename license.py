@@ -114,6 +114,8 @@ def validate_license():
     print("  PACbot License Required")
     print("=" * 40)
     print()
+    print("Don't have a key? Message Nine on Discord.")
+    print()
 
     attempts = 3
     for attempt in range(attempts):

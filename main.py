@@ -262,7 +262,8 @@ def create_gui():
     PAD_X = 20
 
     # ── Title ──
-    tk.Label(window, text=f"PACbot v{version}", font=("Arial", 16, "bold")).pack(pady=(8, 2))
+    tk.Label(window, text=f"PACbot v{version}", font=("Arial", 16, "bold")).pack(pady=(8, 0))
+    tk.Label(window, text="Made by Nine", font=("Arial", 9), fg="gray").pack(pady=(0, 2))
 
     # ── Devices ──
     device_frame = tk.LabelFrame(window, text="Devices", font=("Arial", 10, "bold"),
