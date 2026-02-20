@@ -934,7 +934,7 @@ def create_gui():
         print("=== ALL TASKS STOPPED ===")
 
     stop_frame = tk.Frame(window, bg="#333333", cursor="hand2")
-    stop_label = tk.Label(stop_frame, text="\u25A0  STOP ALL", font=("Segoe UI", 11, "bold"),
+    stop_label = tk.Label(stop_frame, text="STOP ALL", font=("Segoe UI", 11, "bold"),
                           bg="#333333", fg="white", pady=8)
     stop_label.pack(fill=tk.X)
     stop_frame.bind("<Button-1>", lambda e: stop_all())
