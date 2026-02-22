@@ -1,42 +1,47 @@
 import subprocess
 import platform
 
-from config import adb_path
-
-# ============================================================
-# KNOWN EMULATOR ADB PORTS (for auto-connect)
-# ============================================================
-
-# MuMu Player 12: base port 16384, +32 per instance (up to 8 instances)
-# MuMu Player 5:  base port 5555, +2 per instance
-# BlueStacks 5:   base port 5555, +10 per instance (5555, 5565, 5575, 5585)
-EMULATOR_PORTS = [5555 + (i * 10) for i in range(8)]      # BlueStacks
-EMULATOR_PORTS += [5555 + (i * 2) for i in range(8)]       # MuMu 5
-EMULATOR_PORTS += [16384 + (i * 32) for i in range(8)]     # MuMu 12
-EMULATOR_PORTS = sorted(set(EMULATOR_PORTS))
+from config import adb_path, EMULATOR_PORTS
 
 # ============================================================
 # DEVICE DETECTION (cross-platform, multi-emulator)
 # ============================================================
 
+def auto_connect_emulators():
+    """Try to adb-connect known emulator ports so they show up in 'adb devices'.
 
-def _auto_connect():
-    """Silently try to adb-connect known emulator ports so they show up in 'adb devices'."""
-    for port in EMULATOR_PORTS:
+    MuMu Player 12 and some other emulators don't register with ADB automatically.
+    This pings all known ports and connects any that respond.
+    """
+    all_ports = set()
+    for ports in EMULATOR_PORTS.values():
+        all_ports.update(ports)
+
+    connected = []
+    for port in sorted(all_ports):
         addr = f"127.0.0.1:{port}"
         try:
-            subprocess.run(
+            result = subprocess.run(
                 [adb_path, "connect", addr],
                 capture_output=True, text=True, timeout=3
             )
+            output = result.stdout.strip()
+            # "connected to" or "already connected" means success
+            if "connected" in output.lower():
+                connected.append(addr)
+                print(f"  Connected: {addr}")
         except (subprocess.TimeoutExpired, Exception):
-            pass
+            pass  # Port not listening, skip silently
 
+    if connected:
+        print(f"Auto-connect found {len(connected)} emulator(s)")
+    else:
+        print("Auto-connect: no emulators found on known ports")
+    return connected
 
 def get_devices():
     """Get list of all connected ADB devices, deduplicating emulator/IP pairs."""
     try:
-        _auto_connect()
         result = subprocess.run([adb_path, "devices"], capture_output=True, text=True, timeout=10)
         lines = result.stdout.strip().split('\n')[1:]  # Skip "List of devices attached"
         devices = [line.split()[0] for line in lines if line.strip() and 'device' in line]
@@ -46,8 +51,6 @@ def get_devices():
         emulator_ports = set()
         for d in devices:
             if d.startswith("emulator-"):
-                # ADB console port is the emulator-XXXX number,
-                # the ADB data port is console_port + 1
                 emulator_ports.add(int(d.split("-")[1]) + 1)
 
         deduped = []
@@ -55,7 +58,7 @@ def get_devices():
             if ":" in d and not d.startswith("emulator-"):
                 port = int(d.split(":")[1])
                 if port in emulator_ports:
-                    continue  # skip, already have emulator-XXXX for this
+                    continue
             deduped.append(d)
 
         return deduped
