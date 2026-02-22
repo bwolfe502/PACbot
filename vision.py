@@ -93,10 +93,22 @@ def load_screenshot(device):
         print(f"[{device}] Failed to decode screenshot")
     return image
 
-def find_image(screen, image_name, threshold=0.8):
-    """Find an image template on screen. Returns (max_val, max_loc, h, w) or None."""
+def find_image(screen, image_name, threshold=0.8, region=None):
+    """Find an image template on screen. Returns (max_val, max_loc, h, w) or None.
+    region: optional (x1, y1, x2, y2) to restrict search area. Coordinates are in full-screen space."""
     button = get_template(f"elements/{image_name}")
     if screen is None or button is None:
+        return None
+
+    if region:
+        x1, y1, x2, y2 = region
+        cropped = screen[y1:y2, x1:x2]
+        result = cv2.matchTemplate(cropped, button, cv2.TM_CCOEFF_NORMED)
+        min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
+        if max_val > threshold:
+            h, w = button.shape[:2]
+            # Translate back to full-screen coordinates
+            return max_val, (max_loc[0] + x1, max_loc[1] + y1), h, w
         return None
 
     result = cv2.matchTemplate(screen, button, cv2.TM_CCOEFF_NORMED)
@@ -152,10 +164,18 @@ def tap(button_name, device):
     adb_tap(device, x, y)
     print(f"[{device}] Tapped {button_name} at {x}, {y}")
 
+# Region constraints for templates that should only match in specific screen areas.
+# Values are (x1, y1, x2, y2) defining the search region.
+# Screen is 1080x1920 — lower-left quadrant = (0, 960, 540, 1920)
+IMAGE_REGIONS = {
+    "heal.png": (0, 960, 540, 1920),
+}
+
 def tap_image(image_name, device, threshold=0.8):
     """Find an image on screen and tap it"""
     screen = load_screenshot(device)
-    match = find_image(screen, image_name, threshold=threshold)
+    region = IMAGE_REGIONS.get(image_name)
+    match = find_image(screen, image_name, threshold=threshold, region=region)
 
     if match:
         max_val, max_loc, h, w = match
