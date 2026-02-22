@@ -5,6 +5,7 @@ import queue
 import time
 import traceback
 import os
+import random
 
 import config
 from updater import get_current_version
@@ -48,6 +49,15 @@ TASK_FUNCTIONS = {
 # Thread-safe queue for alerts from tasks to GUI
 alert_queue = queue.Queue()
 
+def sleep_interval(base, variation, stop_check):
+    """Sleep for base ± variation seconds, checking stop_check each second."""
+    actual = base + random.randint(-variation, variation) if variation > 0 else base
+    actual = max(1, actual)
+    for _ in range(actual):
+        if stop_check():
+            break
+        time.sleep(1)
+
 def run_auto_quest(device, stop_event):
     print(f"[{device}] Auto Quest started")
     stop_check = stop_event.is_set
@@ -69,9 +79,9 @@ def run_auto_quest(device, stop_event):
         traceback.print_exc()
     print(f"[{device}] Auto Quest stopped")
 
-def run_auto_titan(device, stop_event, interval):
+def run_auto_titan(device, stop_event, interval, variation):
     """Loop rally_titan on a configurable interval."""
-    print(f"[{device}] Rally Titan started (interval: {interval}s)")
+    print(f"[{device}] Rally Titan started (interval: {interval}s ±{variation}s)")
     stop_check = stop_event.is_set
     try:
         while not stop_check():
@@ -84,18 +94,15 @@ def run_auto_titan(device, stop_event, interval):
                 print(f"[{device}] Not enough troops for Rally Titan")
             if stop_check():
                 break
-            for _ in range(interval):
-                if stop_check():
-                    break
-                time.sleep(1)
+            sleep_interval(interval, variation, stop_check)
     except Exception as e:
         print(f"[{device}] ERROR in Rally Titan: {e}")
         traceback.print_exc()
     print(f"[{device}] Rally Titan stopped")
 
-def run_auto_groot(device, stop_event, interval):
+def run_auto_groot(device, stop_event, interval, variation):
     """Loop join_rally('groot') on a configurable interval."""
-    print(f"[{device}] Rally Groot started (interval: {interval}s)")
+    print(f"[{device}] Rally Groot started (interval: {interval}s ±{variation}s)")
     stop_check = stop_event.is_set
     try:
         while not stop_check():
@@ -108,10 +115,7 @@ def run_auto_groot(device, stop_event, interval):
                 print(f"[{device}] Not enough troops for Rally Groot")
             if stop_check():
                 break
-            for _ in range(interval):
-                if stop_check():
-                    break
-                time.sleep(1)
+            sleep_interval(interval, variation, stop_check)
     except Exception as e:
         print(f"[{device}] ERROR in Rally Groot: {e}")
         traceback.print_exc()
@@ -129,7 +133,7 @@ def run_auto_occupy(device, stop_event):
     auto_occupy_loop(device)
     print(f"[{device}] Auto Occupy stopped")
 
-def run_auto_pass(device, stop_event, pass_mode, pass_interval):
+def run_auto_pass(device, stop_event, pass_mode, pass_interval, variation):
     stop_check = stop_event.is_set
 
     def _pass_attack(device):
@@ -213,39 +217,30 @@ def run_auto_pass(device, stop_event, pass_mode, pass_interval):
                         break
                     time.sleep(2)
             elif action == "reinforce":
-                for _ in range(pass_interval):
-                    if stop_check():
-                        break
-                    time.sleep(1)
+                sleep_interval(pass_interval, variation, stop_check)
             else:
-                for _ in range(10):
-                    if stop_check():
-                        break
-                    time.sleep(1)
+                sleep_interval(10, variation, stop_check)
     except Exception as e:
         print(f"[{device}] ERROR in Auto Pass Battle: {e}")
         traceback.print_exc()
     print(f"[{device}] Auto Pass Battle stopped")
 
-def run_auto_reinforce(device, stop_event, interval):
+def run_auto_reinforce(device, stop_event, interval, variation):
     """Loop reinforce_throne on a configurable interval."""
-    print(f"[{device}] Auto Reinforce Throne started (interval: {interval}s)")
+    print(f"[{device}] Auto Reinforce Throne started (interval: {interval}s ±{variation}s)")
     stop_check = stop_event.is_set
     try:
         while not stop_check():
             reinforce_throne(device)
             if stop_check():
                 break
-            for _ in range(interval):
-                if stop_check():
-                    break
-                time.sleep(1)
+            sleep_interval(interval, variation, stop_check)
     except Exception as e:
         print(f"[{device}] ERROR in Auto Reinforce Throne: {e}")
         traceback.print_exc()
     print(f"[{device}] Auto Reinforce Throne stopped")
 
-def run_repeat(device, task_name, function, interval, stop_event):
+def run_repeat(device, task_name, function, interval, variation, stop_event):
     stop_check = stop_event.is_set
     print(f"[{device}] Starting repeating task: {task_name}")
     try:
@@ -253,10 +248,7 @@ def run_repeat(device, task_name, function, interval, stop_event):
             print(f"[{device}] Running {task_name}...")
             function(device)
             print(f"[{device}] {task_name} completed, waiting {interval}s...")
-            for _ in range(interval):
-                if stop_check():
-                    break
-                time.sleep(1)
+            sleep_interval(interval, variation, stop_check)
     except Exception as e:
         print(f"[{device}] ERROR in {task_name}: {e}")
         traceback.print_exc()
@@ -537,8 +529,9 @@ def create_gui():
                     stop_event = threading.Event()
                     mode = pass_mode_var.get()
                     interval = int(pass_interval_var.get())
+                    variation = int(variation_var.get())
                     launch_task(device, "auto_pass",
-                                run_auto_pass, stop_event, args=(device, stop_event, mode, interval))
+                                run_auto_pass, stop_event, args=(device, stop_event, mode, interval, variation))
                     print(f"Started Auto Pass Battle on {device}")
         else:
             _stop_pass_battle()
@@ -583,8 +576,9 @@ def create_gui():
                 if task_key not in running_tasks:
                     stop_event = threading.Event()
                     interval = int(titan_interval_var.get())
+                    variation = int(variation_var.get())
                     launch_task(device, "auto_titan",
-                                run_auto_titan, stop_event, args=(device, stop_event, interval))
+                                run_auto_titan, stop_event, args=(device, stop_event, interval, variation))
                     print(f"Started Rally Titan on {device}")
         else:
             _stop_titan()
@@ -605,8 +599,9 @@ def create_gui():
                 if task_key not in running_tasks:
                     stop_event = threading.Event()
                     interval = int(groot_interval_var.get())
+                    variation = int(variation_var.get())
                     launch_task(device, "auto_groot",
-                                run_auto_groot, stop_event, args=(device, stop_event, interval))
+                                run_auto_groot, stop_event, args=(device, stop_event, interval, variation))
                     print(f"Started Rally Groot on {device}")
         else:
             _stop_groot()
@@ -626,8 +621,9 @@ def create_gui():
                 if task_key not in running_tasks:
                     stop_event = threading.Event()
                     interval = int(reinforce_interval_var.get())
+                    variation = int(variation_var.get())
                     launch_task(device, "auto_reinforce",
-                                run_auto_reinforce, stop_event, args=(device, stop_event, interval))
+                                run_auto_reinforce, stop_event, args=(device, stop_event, interval, variation))
                     print(f"Started Auto Reinforce Throne on {device}")
         else:
             _stop_reinforce_throne()
@@ -719,6 +715,16 @@ def create_gui():
 
     tk.Button(row1, text="Set", command=update_min_troops,
               font=("Segoe UI", 8)).pack(side=tk.LEFT)
+
+    tk.Frame(row1, width=20, bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
+
+    variation_var = tk.StringVar(value="0")
+    tk.Label(row1, text="Randomize \u00b1", font=("Segoe UI", 9),
+             bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
+    tk.Entry(row1, textvariable=variation_var, width=4, justify="center",
+             font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(4, 1))
+    tk.Label(row1, text="s", font=("Segoe UI", 9),
+             bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
 
     # Row 2 (BL): Pass mode & interval
     bl_settings_row = tk.Frame(settings_frame, bg=COLOR_SECTION_BG)
@@ -888,8 +894,9 @@ def create_gui():
                     if task_key not in running_tasks:
                         stop_event = threading.Event()
                         iv = int(interval.get())
+                        vr = int(variation_var.get())
                         launch_task(device, f"repeat:{name}",
-                                    run_repeat, stop_event, args=(device, name, func, iv, stop_event))
+                                    run_repeat, stop_event, args=(device, name, func, iv, vr, stop_event))
             else:
                 print(f"Stopping {name}")
                 for device in get_active_devices():
