@@ -10,7 +10,7 @@ import random
 import config
 from updater import get_current_version
 from config import set_min_troops, set_auto_heal, set_territory_config, running_tasks
-from devices import get_devices, get_emulator_instances, auto_connect_emulators
+from devices import get_devices, get_emulator_instances
 from navigation import check_screen
 from vision import adb_tap, tap_image, load_screenshot, find_image, wait_for_image_and_tap
 from troops import troops_avail, heal_all
@@ -388,9 +388,6 @@ def create_gui():
     btn_row = tk.Frame(device_frame, bg=COLOR_BG)
     btn_row.pack(pady=(2, 0))
     tk.Button(btn_row, text="Refresh", command=refresh_device_list,
-              font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=4)
-    tk.Button(btn_row, text="Auto-Connect",
-              command=lambda: (auto_connect_emulators(), refresh_device_list()),
               font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=4)
 
     def get_active_devices():
