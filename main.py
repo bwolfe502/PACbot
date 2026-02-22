@@ -53,6 +53,8 @@ def sleep_interval(base, variation, stop_check):
     """Sleep for base ± variation seconds, checking stop_check each second."""
     actual = base + random.randint(-variation, variation) if variation > 0 else base
     actual = max(1, actual)
+    if variation > 0:
+        print(f"    Waiting {actual}s (base {base} ±{variation})")
     for _ in range(actual):
         if stop_check():
             break
