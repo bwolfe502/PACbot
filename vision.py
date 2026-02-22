@@ -80,7 +80,6 @@ def get_template(image_path):
 
 def load_screenshot(device):
     """Take a screenshot and return the image directly in memory (no disk I/O)."""
-    time.sleep(random.uniform(0.1, 0.3))
     result = subprocess.run(
         [adb_path, "-s", device, "exec-out", "screencap", "-p"],
         capture_output=True

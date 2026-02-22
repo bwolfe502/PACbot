@@ -78,6 +78,10 @@ def check_screen(device):
                 best_val = max_val
                 best_name = screen_name
 
+            # High confidence — skip remaining templates
+            if max_val > 0.9:
+                break
+
         # Log all scores sorted by confidence
         score_str = " | ".join(f"{name}: {val*100:.0f}%" for name, val in
                                sorted(scores.items(), key=lambda x: x[1], reverse=True))
