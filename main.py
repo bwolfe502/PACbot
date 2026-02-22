@@ -1076,6 +1076,7 @@ def create_gui():
     def on_close():
         stop_all()
         window.destroy()
+        os._exit(0)
 
     window.protocol("WM_DELETE_WINDOW", on_close)
 
