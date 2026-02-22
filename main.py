@@ -6,6 +6,7 @@ import time
 import traceback
 import os
 import random
+import json
 
 import config
 from updater import get_current_version
@@ -18,6 +19,41 @@ from actions import (attack, reinforce_throne, target, check_quests, teleport,
                      rally_titan, rally_eg, join_rally, join_war_rallies)
 from territory import (attack_territory, auto_occupy_loop,
                        open_territory_manager, sample_specific_squares)
+
+# ============================================================
+# PERSISTENT SETTINGS
+# ============================================================
+
+SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
+
+DEFAULTS = {
+    "auto_heal": True,
+    "min_troops": 0,
+    "variation": 0,
+    "titan_interval": 30,
+    "groot_interval": 30,
+    "reinforce_interval": 30,
+    "pass_interval": 30,
+    "pass_mode": "Rally Joiner",
+    "my_team": "yellow",
+    "enemy_team": "green",
+    "mode": "bl",
+}
+
+def load_settings():
+    try:
+        with open(SETTINGS_FILE, "r") as f:
+            saved = json.load(f)
+        return {**DEFAULTS, **saved}
+    except (FileNotFoundError, json.JSONDecodeError):
+        return dict(DEFAULTS)
+
+def save_settings(settings):
+    try:
+        with open(SETTINGS_FILE, "w") as f:
+            json.dump(settings, f, indent=2)
+    except Exception as e:
+        print(f"Failed to save settings: {e}")
 
 # ============================================================
 # FUNCTION LOOKUP
@@ -318,12 +354,25 @@ def create_gui():
     global devices
 
     version = get_current_version()
+    settings = load_settings()
+
+    # Set app ID before creating window so taskbar shows our icon
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("pacbot.app")
+    except:
+        pass
 
     window = tk.Tk()
     window.title(f"PACbot v{version}")
     window.geometry(f"{WIN_WIDTH}x580")
     window.resizable(False, True)
     window.configure(bg=COLOR_BG)
+
+    # Set window icon (title bar + taskbar)
+    icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.ico")
+    if os.path.isfile(icon_path):
+        window.iconbitmap(icon_path)
 
     PAD_X = 16
 
@@ -389,9 +438,10 @@ def create_gui():
     btn_row.pack(pady=(2, 0))
     tk.Button(btn_row, text="Refresh", command=refresh_device_list,
               font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=4)
-    tk.Button(btn_row, text="Auto-Connect",
-              command=lambda: (auto_connect_emulators(), refresh_device_list()),
-              font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=4)
+    # Auto-Connect button hidden (crashes on click) but function still available
+    # tk.Button(btn_row, text="Auto-Connect",
+    #           command=lambda: (auto_connect_emulators(), refresh_device_list()),
+    #           font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=4)
 
     def get_active_devices():
         return [d for d in devices if device_checkboxes.get(d, tk.BooleanVar(value=False)).get()]
@@ -433,11 +483,11 @@ def create_gui():
     auto_occupy_var = tk.BooleanVar(value=False)
     auto_reinforce_var = tk.BooleanVar(value=False)
 
-    titan_interval_var = tk.StringVar(value="30")
-    groot_interval_var = tk.StringVar(value="30")
-    reinforce_interval_var = tk.StringVar(value="30")
-    pass_mode_var = tk.StringVar(value="Rally Joiner")
-    pass_interval_var = tk.StringVar(value="30")
+    titan_interval_var = tk.StringVar(value=str(settings["titan_interval"]))
+    groot_interval_var = tk.StringVar(value=str(settings["groot_interval"]))
+    reinforce_interval_var = tk.StringVar(value=str(settings["reinforce_interval"]))
+    pass_mode_var = tk.StringVar(value=settings["pass_mode"])
+    pass_interval_var = tk.StringVar(value=str(settings["pass_interval"]))
 
     # -- Sub-frames for each mode's toggles --
     bl_toggles_frame = tk.Frame(auto_frame, bg=COLOR_BG)
@@ -691,11 +741,12 @@ def create_gui():
     row1 = tk.Frame(settings_frame, bg=COLOR_SECTION_BG)
     row1.pack(fill=tk.X)
 
-    auto_heal_var = tk.BooleanVar(value=True)
-    set_auto_heal(True)
+    auto_heal_var = tk.BooleanVar(value=settings["auto_heal"])
+    set_auto_heal(settings["auto_heal"])
 
     def toggle_auto_heal():
         set_auto_heal(auto_heal_var.get())
+        save_current_settings()
 
     tk.Checkbutton(row1, text="Auto Heal", variable=auto_heal_var,
                    command=toggle_auto_heal, font=("Segoe UI", 9),
@@ -705,13 +756,15 @@ def create_gui():
 
     tk.Label(row1, text="Min Troops:", font=("Segoe UI", 9),
              bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
-    min_troops_var = tk.StringVar(value="0")
+    min_troops_var = tk.StringVar(value=str(settings["min_troops"]))
+    set_min_troops(settings["min_troops"])
     tk.Entry(row1, textvariable=min_troops_var, width=6,
              font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(4, 4))
 
     def update_min_troops():
         try:
             set_min_troops(int(min_troops_var.get()))
+            save_current_settings()
         except:
             pass
 
@@ -720,7 +773,7 @@ def create_gui():
 
     tk.Frame(row1, width=20, bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
 
-    variation_var = tk.StringVar(value="0")
+    variation_var = tk.StringVar(value=str(settings["variation"]))
     tk.Label(row1, text="Randomize \u00b1", font=("Segoe UI", 9),
              bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
     tk.Entry(row1, textvariable=variation_var, width=4, justify="center",
@@ -769,8 +822,10 @@ def create_gui():
     tk.Label(rw_settings_row, text="s", font=("Segoe UI", 9),
              bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
 
-    # Start with BL settings row visible
+    # Start with BL mode, then switch if saved mode was different
     bl_settings_row.pack(fill=tk.X, pady=(4, 0))
+    if settings["mode"] == "rw":
+        switch_mode("rw")
 
     # ============================================================
     # TERRITORY SETTINGS (collapsed by default)
@@ -806,19 +861,22 @@ def create_gui():
     teams_row.pack(fill=tk.X, pady=2)
     tk.Label(teams_row, text="My Team:", font=("Segoe UI", 9),
              bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
-    my_team_var = tk.StringVar(value="yellow")
+    my_team_var = tk.StringVar(value=settings["my_team"])
     ttk.Combobox(teams_row, textvariable=my_team_var,
                  values=["yellow", "red", "blue", "green"],
                  width=7, state="readonly", font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=(4, 12))
     tk.Label(teams_row, text="Attack:", font=("Segoe UI", 9),
              bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
-    enemy_var = tk.StringVar(value="green")
+    enemy_var = tk.StringVar(value=settings["enemy_team"])
     ttk.Combobox(teams_row, textvariable=enemy_var,
                  values=["green", "red", "blue", "yellow"],
                  width=7, state="readonly", font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=(4, 6))
 
+    set_territory_config(settings["my_team"], [settings["enemy_team"]])
+
     def update_territory_config():
         set_territory_config(my_team_var.get(), [enemy_var.get()])
+        save_current_settings()
 
     tk.Button(teams_row, text="Set", command=update_territory_config,
               font=("Segoe UI", 8)).pack(side=tk.LEFT)
@@ -830,6 +888,25 @@ def create_gui():
 
     tk.Button(territory_inner, text="Territory Square Manager",
               command=open_territory_mgr, font=("Segoe UI", 9)).pack(fill=tk.X, pady=(4, 0))
+
+    # ============================================================
+    # SETTINGS PERSISTENCE
+    # ============================================================
+
+    def save_current_settings():
+        save_settings({
+            "auto_heal": auto_heal_var.get(),
+            "min_troops": int(min_troops_var.get()) if min_troops_var.get().isdigit() else 0,
+            "variation": int(variation_var.get()) if variation_var.get().isdigit() else 0,
+            "titan_interval": int(titan_interval_var.get()) if titan_interval_var.get().isdigit() else 30,
+            "groot_interval": int(groot_interval_var.get()) if groot_interval_var.get().isdigit() else 30,
+            "reinforce_interval": int(reinforce_interval_var.get()) if reinforce_interval_var.get().isdigit() else 30,
+            "pass_interval": int(pass_interval_var.get()) if pass_interval_var.get().isdigit() else 30,
+            "pass_mode": pass_mode_var.get(),
+            "my_team": my_team_var.get(),
+            "enemy_team": enemy_var.get(),
+            "mode": mode_var.get(),
+        })
 
     # ============================================================
     # MORE ACTIONS (collapsed by default)
@@ -1077,8 +1154,12 @@ def create_gui():
     window.after(3000, cleanup_dead_tasks)
 
     def on_close():
-        stop_all()
-        window.destroy()
+        try:
+            save_current_settings()
+            stop_all()
+            window.destroy()
+        except:
+            pass
         os._exit(0)
 
     window.protocol("WM_DELETE_WINDOW", on_close)

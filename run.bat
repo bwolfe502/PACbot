@@ -46,4 +46,3 @@ echo.
 py main.py
 echo.
 echo PACbot exited.
-pause

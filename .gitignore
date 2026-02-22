@@ -17,5 +17,8 @@ debug/
 # License key
 .license_key
 
+# User settings
+settings.json
+
 # IDE
 .claude/

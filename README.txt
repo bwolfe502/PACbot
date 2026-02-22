@@ -1,31 +1,31 @@
-PACBOT (WINDOWS + BLUESTACKS ONLY)
+PACBOT (WINDOWS ONLY)
 
 This program only works on:
 
 Windows 10/11
 
-BlueStacks (Windows version)
+BlueStacks or MuMu Player (Windows version)
 
 It will NOT work on Mac.
 
 REQUIREMENTS
 
-BlueStacks installed and running
+BlueStacks or MuMu Player installed and running
 
 Python 3.11 or newer installed
 
 A valid license key (message Nine on Discord to get one)
 
-STEP 1 - SET UP BLUESTACKS
+STEP 1 - SET UP YOUR EMULATOR
 
-Before PACbot will work, you MUST change two settings in BlueStacks:
+Before PACbot will work, you MUST change two settings in your emulator:
 
-  1. Open BlueStacks Settings (gear icon)
+  1. Open your emulator's Settings (gear icon)
   2. Go to "Advanced" or "Device"
   3. Set Resolution to: 1080 x 1920
   4. Go to "Advanced"
   5. Turn ON "Android Debug Bridge (ADB)"
-  6. Click "Save" and restart BlueStacks if prompted
+  6. Click "Save" and restart the emulator if prompted
 
 PACbot will NOT work without these settings.
 
@@ -60,7 +60,7 @@ The first time you run it, it will automatically:
 
 NOTES
 
-Start BlueStacks BEFORE running PACbot
+Start your emulator BEFORE running PACbot
 
 If PACbot shows no devices, click Auto-Connect or Refresh in PACbot
 
@@ -75,7 +75,7 @@ If run.bat closes instantly:
 
 If you get "No devices found":
 
-  Make sure BlueStacks is fully loaded before starting PACbot.
+  Make sure your emulator is fully loaded before starting PACbot.
   Click Auto-Connect, then Refresh.
 
 LICENSE

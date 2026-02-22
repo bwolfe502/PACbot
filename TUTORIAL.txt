@@ -4,17 +4,17 @@ PACBOT - HOW TO USE
 This guide explains how to use every feature in PACbot.
 
 
-BLUESTACKS SETUP (DO THIS FIRST)
----------------------------------
+EMULATOR SETUP (DO THIS FIRST)
+-------------------------------
 
-PACbot will NOT work unless you change two settings in BlueStacks:
+PACbot will NOT work unless you change two settings in your emulator:
 
-  1. Open BlueStacks Settings (gear icon)
+  1. Open your emulator's Settings (gear icon)
   2. Go to "Advanced" or "Device"
   3. Set Resolution to: 1080 x 1920
   4. Go to "Advanced"
   5. Turn ON "Android Debug Bridge (ADB)"
-  6. Click "Save" and restart BlueStacks if prompted
+  6. Click "Save" and restart the emulator if prompted
 
 The resolution must be exactly 1080x1920 or PACbot won't be able
 to find buttons and UI elements on screen. ADB must be on or
@@ -24,16 +24,16 @@ PACbot won't be able to connect to the emulator at all.
 GETTING STARTED
 ---------------
 
-1. Open BlueStacks and wait for it to fully load
-2. Open your game inside BlueStacks
+1. Open your emulator and wait for it to fully load
+2. Open your game inside the emulator
 3. Double-click run.bat to start PACbot
 4. PACbot will open a window with your emulator listed under "Devices"
 
 If no devices show up:
   - Click "Auto-Connect" to detect emulators
   - Click "Refresh" to update the device list
-  - Make sure BlueStacks is running before starting PACbot
-  - Make sure ADB is turned ON in BlueStacks settings
+  - Make sure your emulator is running before starting PACbot
+  - Make sure ADB is turned ON in your emulator settings
 
 
 DEVICES
@@ -45,75 +45,102 @@ start a task. If you have multiple emulator instances running, you can
 select which ones to control.
 
 
-AUTO QUEST
-----------
+MODES: HOME SERVER vs BROKEN LANDS
+-----------------------------------
 
-Turns on automatic quest completion. PACbot will:
+PACbot has two modes, toggled by the buttons near the top of the window:
+
+  Home Server  - For rest weeks when Broken Lands is not active.
+                 Shows rally and reinforce toggles.
+
+  Broken Lands - For BL/Burning Expedition weeks.
+                 Shows quest, pass battle, and occupy toggles.
+
+Switching modes stops all running tasks. Each mode has its own set of
+auto toggles described below.
+
+
+HOME SERVER MODE
+----------------
+
+Auto Rally Titans
+  Automatically rallies Titans on a repeating loop.
+  - Heals troops first if Auto Heal is on
+  - Checks troop count before each rally
+  - Repeats on the "Titan every" interval (set in Settings)
+  - Turning this on will stop Auto Join Groot Rallies
+
+Auto Join Groot Rallies
+  Automatically joins Groot rallies started by alliance members.
+  - Heals troops first if Auto Heal is on
+  - Checks troop count before joining
+  - Repeats on the "Groot every" interval (set in Settings)
+  - Turning this on will stop Auto Rally Titans
+
+Auto Reinforce Throne
+  Automatically reinforces your alliance throne on a repeating loop.
+  - Navigates to the throne on the map and sends troops
+  - Repeats on the "Reinforce every" interval (set in Settings)
+  - Can run alongside Auto Rally Titans or Auto Join Groot Rallies
+
+
+BROKEN LANDS MODE
+-----------------
+
+Auto Quest
+  Turns on automatic quest completion. PACbot will:
   - Check your available troops
   - Open the quest screen and claim any rewards
   - Detect quest types (Evil Guard and Titan currently supported)
   - Automatically complete the quest by starting a rally
   - Repeat on a loop until you turn it off
 
-IMPORTANT: Auto Quest only works during Broken Lands (BL) weeks,
-also known as Burning Expedition. During rest week, BL is not
-available and Auto Quest won't have quests to complete. During
-rest week, use the Individual Actions
-menu instead — expand it and use "Rally Titan" or "Rally Evil
-Guard" to farm manually or on a repeating timer.
+  To use:
+    1. Make sure your game is on the map screen
+    2. Click "Auto Quest: OFF" to turn it on (it turns green)
+    3. Click it again to stop
 
-To use:
-  1. Make sure your game is on the map screen
-  2. Click "Auto Quest: OFF" to turn it on (it turns green)
-  3. Click it again to stop
+  Note: Auto Quest, Auto Occupy, and Auto Pass Battle are mutually
+  exclusive. Turning one on will stop the others.
 
-Note: Auto Quest, Auto Occupy, and Auto Pass Battle are mutually
-exclusive. Turning one on will stop the others.
+Auto Pass Battle
+  Automates pass/tower battles. This is the most complex auto mode.
 
+  Setup:
+    1. In your game, place a Personal "Enemy" marker on the pass or
+       tower you want to target
+    2. In PACbot Settings, choose your Pass Battle Mode:
+       - "Rally Joiner" - joins existing war rallies when the enemy
+         holds the pass
+       - "Rally Starter" - starts new rallies when the enemy holds
+         the pass
+    3. Set the Pass Battle Interval (in seconds) - how long to wait
+       between reinforcement checks (default: 30s)
 
-AUTO OCCUPY (Territory)
------------------------
+  To use:
+    1. Click "Auto Pass Battle: OFF" to turn it on
+    2. PACbot will:
+       - Navigate to your target marker
+       - If you own the pass: reinforce it, then wait the interval
+       - If the enemy owns it: join/start war rallies continuously
+    3. Click it again to stop
 
-Automatically attacks and occupies territory squares. PACbot will
-scan the territory grid, find enemy squares, and send troops to
-capture them.
+  IMPORTANT: You MUST set a Personal "Enemy" marker on the target
+  first. If PACbot can't find it, you'll get a warning popup.
 
-Before using:
-  1. Go to Settings and set "My Team" to your team color
-  2. Set "Attack" to the enemy team color you want to target
-  3. Click "Set" to save
+Auto Occupy (Territory)
+  Automatically attacks and occupies territory squares. PACbot will
+  scan the territory grid, find enemy squares, and send troops to
+  capture them.
 
-To use:
-  1. Click "Auto Occupy: OFF" to turn it on
-  2. PACbot will continuously scan and attack enemy territory
+  Before using:
+    1. Go to Territory Settings and set "My Team" to your team color
+    2. Set "Attack" to the enemy team color you want to target
+    3. Click "Set" to save
 
-
-AUTO PASS BATTLE
-----------------
-
-Automates pass/tower battles. This is the most complex auto mode.
-
-Setup:
-  1. In your game, place a Personal "Enemy" marker on the pass or
-     tower you want to target
-  2. In PACbot Settings, choose your Pass Battle Mode:
-     - "Rally Joiner" - joins existing war rallies when the enemy
-       holds the pass
-     - "Rally Starter" - starts new rallies when the enemy holds
-       the pass
-  3. Set the Pass Battle Interval (in seconds) - how long to wait
-     between reinforcement checks (default: 30s)
-
-To use:
-  1. Click "Auto Pass Battle: OFF" to turn it on
-  2. PACbot will:
-     - Navigate to your target marker
-     - If you own the pass: reinforce it, then wait the interval
-     - If the enemy owns it: join/start war rallies continuously
-  3. Click it again to stop
-
-IMPORTANT: You MUST set a Personal "Enemy" marker on the target
-first. If PACbot can't find it, you'll get a warning popup.
+  To use:
+    1. Click "Auto Occupy: OFF" to turn it on
+    2. PACbot will continuously scan and attack enemy territory
 
 
 SETTINGS
@@ -123,21 +150,27 @@ Auto Heal
   When enabled, PACbot will automatically heal your troops before
   any action that requires troops. Enabled by default.
 
-Pass Battle Mode
-  - Rally Joiner: joins existing rallies (good for support accounts)
-  - Rally Starter: starts new rallies (good for main accounts)
-
-Pass Battle Interval
-  How many seconds to wait between reinforcement checks during
-  Auto Pass Battle. Default is 30 seconds.
-
 Min Troops
   Set the minimum number of troops that must be available before
   PACbot will send them. If your available troops are at or below
   this number, PACbot will skip the action and wait.
   Type a number and click "Set".
 
-My Team / Attack
+Randomize +/-
+  Adds randomization to all time intervals. For example, if you set
+  an interval to 30s and Randomize to 5, PACbot will wait between
+  25-35 seconds each time. Set to 0 for no randomization.
+  The actual wait time is printed in the console window.
+
+Pass (BL mode only)
+  - Mode: "Rally Joiner" or "Rally Starter"
+  - Interval: seconds between reinforcement checks (default: 30s)
+
+Titan every / Groot every / Reinforce every (Home Server mode only)
+  Set the repeat interval (in seconds) for each auto toggle.
+  Default is 30 seconds each.
+
+My Team / Attack (Territory Settings)
   Used for Territory mode. Set your team color and the enemy team
   color you want to attack. Click "Set" to apply.
 
@@ -147,10 +180,10 @@ Territory Square Manager
   areas or avoiding squares you don't want to touch.
 
 
-INDIVIDUAL ACTIONS
-------------------
+MORE ACTIONS
+------------
 
-Click "Individual Actions" to expand a panel with three tabs:
+Click "More Actions" to expand a panel with three tabs:
 Farm, War, and Debug. These let you run tasks manually.
 
 Each task row has:
@@ -159,9 +192,6 @@ Each task row has:
   - A button: click to run the task once
 
 FARM TAB:
-
-  Rally Titan
-    Searches for a Titan on the map and starts a rally against it.
 
   Rally Evil Guard
     Searches for an Evil Guard boss and runs the full multi-step
@@ -174,6 +204,10 @@ FARM TAB:
   Join Evil Guard Rally
     Opens the war rally list and joins an available Evil Guard
     rally started by an alliance member.
+
+  Join Groot Rally
+    Opens the war rally list and joins an available Groot rally
+    started by an alliance member.
 
   Heal All
     Heals all wounded troops.
@@ -188,6 +222,9 @@ WAR TAB:
   Attack
     Attacks whatever is currently selected on the map. Checks
     troops first and heals if Auto Heal is on.
+
+  Reinforce Throne
+    Reinforces your alliance throne once.
 
   UP UP UP!
     Joins any available war rallies (castle, pass, or tower).
@@ -233,11 +270,12 @@ on every device immediately.
 TIPS
 ----
 
-- Always start BlueStacks and load your game BEFORE starting PACbot
+- Always start your emulator and load your game BEFORE starting PACbot
 - Make sure the game is on the map screen before starting auto tasks
 - Set your Min Troops if you want to keep a reserve
 - Use Auto Heal to avoid sending injured troops
 - For pass battles, always set your target marker FIRST
+- Use "Randomize +/-" to make intervals less predictable
 - If something seems stuck, hit STOP ALL and try again
 - Check the console/terminal window for detailed logs of what
   PACbot is doing
