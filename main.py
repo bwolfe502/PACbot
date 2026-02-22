@@ -766,9 +766,7 @@ def create_gui():
     set_auto_restore_ap(settings["auto_restore_ap"])
 
     # AP restore source options (shown when Auto Restore AP is checked)
-    ap_settings_container = tk.Frame(settings_frame, bg=COLOR_SECTION_BG)
-    ap_settings_container.pack(fill=tk.X)
-    ap_settings_row = tk.Frame(ap_settings_container, bg=COLOR_SECTION_BG)
+    ap_settings_row = tk.Frame(settings_frame, bg=COLOR_SECTION_BG)
 
     ap_use_free_var = tk.BooleanVar(value=settings["ap_use_free"])
     ap_use_potions_var = tk.BooleanVar(value=settings["ap_use_potions"])
@@ -812,7 +810,7 @@ def create_gui():
         enabled = auto_restore_ap_var.get()
         set_auto_restore_ap(enabled)
         if enabled:
-            ap_settings_row.pack(fill=tk.X, pady=(2, 0))
+            ap_settings_row.pack(fill=tk.X, pady=(2, 0), after=row1)
         else:
             ap_settings_row.pack_forget()
         window.update_idletasks()
@@ -825,15 +823,17 @@ def create_gui():
 
     # Show AP settings row if auto restore is already enabled
     if settings["auto_restore_ap"]:
-        ap_settings_row.pack(fill=tk.X, pady=(2, 0))
+        ap_settings_row.pack(fill=tk.X, pady=(2, 0), after=row1)
 
-    tk.Frame(row1, width=20, bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
+    # Row 1b: Min Troops + Randomize
+    row1b = tk.Frame(settings_frame, bg=COLOR_SECTION_BG)
+    row1b.pack(fill=tk.X, pady=(2, 0))
 
-    tk.Label(row1, text="Min Troops:", font=("Segoe UI", 9),
+    tk.Label(row1b, text="Min Troops:", font=("Segoe UI", 9),
              bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
     min_troops_var = tk.StringVar(value=str(settings["min_troops"]))
     set_min_troops(settings["min_troops"])
-    tk.Entry(row1, textvariable=min_troops_var, width=6,
+    tk.Entry(row1b, textvariable=min_troops_var, width=6,
              font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(4, 4))
 
     def update_min_troops():
@@ -843,17 +843,16 @@ def create_gui():
         except:
             pass
 
-    tk.Button(row1, text="Set", command=update_min_troops,
+    tk.Button(row1b, text="Set", command=update_min_troops,
               font=("Segoe UI", 8)).pack(side=tk.LEFT)
 
-    tk.Frame(row1, width=20, bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
-
     variation_var = tk.StringVar(value=str(settings["variation"]))
-    tk.Label(row1, text="Randomize \u00b1", font=("Segoe UI", 9),
+    tk.Frame(row1b, width=20, bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
+    tk.Label(row1b, text="Randomize \u00b1", font=("Segoe UI", 9),
              bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
-    tk.Entry(row1, textvariable=variation_var, width=4, justify="center",
+    tk.Entry(row1b, textvariable=variation_var, width=4, justify="center",
              font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(4, 1))
-    tk.Label(row1, text="s", font=("Segoe UI", 9),
+    tk.Label(row1b, text="s", font=("Segoe UI", 9),
              bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
 
     # Row 2 (BL): Pass mode & interval
