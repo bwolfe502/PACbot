@@ -1,51 +1,38 @@
 import subprocess
 import platform
 
-from config import adb_path, EMULATOR_PORTS
+from config import adb_path
 
 # ============================================================
 # DEVICE DETECTION (cross-platform, multi-emulator)
 # ============================================================
 
-def auto_connect_emulators():
-    """Try to adb-connect known emulator ports so they show up in 'adb devices'.
-
-    MuMu Player 12 and some other emulators don't register with ADB automatically.
-    This pings all known ports and connects any that respond.
-    """
-    all_ports = set()
-    for ports in EMULATOR_PORTS.values():
-        all_ports.update(ports)
-
-    connected = []
-    for port in sorted(all_ports):
-        addr = f"127.0.0.1:{port}"
-        try:
-            result = subprocess.run(
-                [adb_path, "connect", addr],
-                capture_output=True, text=True, timeout=3
-            )
-            output = result.stdout.strip()
-            # "connected to" or "already connected" means success
-            if "connected" in output.lower():
-                connected.append(addr)
-                print(f"  Connected: {addr}")
-        except (subprocess.TimeoutExpired, Exception):
-            pass  # Port not listening, skip silently
-
-    if connected:
-        print(f"Auto-connect found {len(connected)} emulator(s)")
-    else:
-        print("Auto-connect: no emulators found on known ports")
-    return connected
 
 def get_devices():
-    """Get list of all connected ADB devices."""
+    """Get list of all connected ADB devices, deduplicating emulator/IP pairs."""
     try:
         result = subprocess.run([adb_path, "devices"], capture_output=True, text=True, timeout=10)
         lines = result.stdout.strip().split('\n')[1:]  # Skip "List of devices attached"
         devices = [line.split()[0] for line in lines if line.strip() and 'device' in line]
-        return devices
+
+        # Deduplicate: if both "emulator-5554" and "127.0.0.1:5555" exist,
+        # they are the same instance. Keep only the emulator-XXXX form.
+        emulator_ports = set()
+        for d in devices:
+            if d.startswith("emulator-"):
+                # ADB console port is the emulator-XXXX number,
+                # the ADB data port is console_port + 1
+                emulator_ports.add(int(d.split("-")[1]) + 1)
+
+        deduped = []
+        for d in devices:
+            if ":" in d and not d.startswith("emulator-"):
+                port = int(d.split(":")[1])
+                if port in emulator_ports:
+                    continue  # skip, already have emulator-XXXX for this
+            deduped.append(d)
+
+        return deduped
     except Exception as e:
         print(f"Failed to get devices: {e}")
         return []

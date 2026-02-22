@@ -75,18 +75,6 @@ def _find_adb():
 adb_path = _find_adb()
 print(f"Using ADB: {adb_path}")
 
-# ============================================================
-# KNOWN EMULATOR ADB PORTS (for auto-connect)
-# ============================================================
-
-# MuMu Player 12: base port 16384, +32 per instance (up to 8 instances)
-# MuMu Player 5:  base port 5555, +2 per instance
-# BlueStacks 5:   base port 5555, +10 per instance (5555, 5565, 5575, 5585)
-EMULATOR_PORTS = {
-    "MuMu12":     [16384 + (i * 32) for i in range(8)],
-    "MuMu5":      [5555 + (i * 2)   for i in range(8)],
-    "BlueStacks": [5555 + (i * 10)  for i in range(8)],
-}
 
 # ============================================================
 # GLOBAL STATE
