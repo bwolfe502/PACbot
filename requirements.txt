@@ -3,4 +3,5 @@ numpy
 Pillow
 psutil
 requests
+easyocr
 pywin32; sys_platform == "win32"

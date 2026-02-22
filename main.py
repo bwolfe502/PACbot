@@ -5,15 +5,17 @@ import queue
 import time
 import traceback
 import os
+import sys
 import random
 import json
 
 import config
 from updater import get_current_version
-from config import set_min_troops, set_auto_heal, set_territory_config, running_tasks
+from config import (set_min_troops, set_auto_heal, set_auto_restore_ap,
+                     set_ap_restore_options, set_territory_config, running_tasks)
 from devices import get_devices, get_emulator_instances, auto_connect_emulators
 from navigation import check_screen
-from vision import adb_tap, tap_image, load_screenshot, find_image, wait_for_image_and_tap
+from vision import adb_tap, tap_image, load_screenshot, find_image, wait_for_image_and_tap, read_ap
 from troops import troops_avail, heal_all
 from actions import (attack, reinforce_throne, target, check_quests, teleport,
                      rally_titan, rally_eg, join_rally, join_war_rallies)
@@ -28,6 +30,12 @@ SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settin
 
 DEFAULTS = {
     "auto_heal": True,
+    "auto_restore_ap": False,
+    "ap_use_free": True,
+    "ap_use_potions": True,
+    "ap_allow_large_potions": True,
+    "ap_use_gems": False,
+    "ap_gem_limit": 0,
     "min_troops": 0,
     "variation": 0,
     "titan_interval": 30,
@@ -752,6 +760,73 @@ def create_gui():
                    command=toggle_auto_heal, font=("Segoe UI", 9),
                    bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.LEFT)
 
+    tk.Frame(row1, width=10, bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
+
+    auto_restore_ap_var = tk.BooleanVar(value=settings["auto_restore_ap"])
+    set_auto_restore_ap(settings["auto_restore_ap"])
+
+    # AP restore source options (shown when Auto Restore AP is checked)
+    ap_settings_container = tk.Frame(settings_frame, bg=COLOR_SECTION_BG)
+    ap_settings_container.pack(fill=tk.X)
+    ap_settings_row = tk.Frame(ap_settings_container, bg=COLOR_SECTION_BG)
+
+    ap_use_free_var = tk.BooleanVar(value=settings["ap_use_free"])
+    ap_use_potions_var = tk.BooleanVar(value=settings["ap_use_potions"])
+    ap_allow_large_var = tk.BooleanVar(value=settings["ap_allow_large_potions"])
+    ap_use_gems_var = tk.BooleanVar(value=settings["ap_use_gems"])
+    ap_gem_limit_var = tk.StringVar(value=str(settings["ap_gem_limit"]))
+
+    # Apply initial config
+    set_ap_restore_options(
+        settings["ap_use_free"], settings["ap_use_potions"],
+        settings["ap_allow_large_potions"], settings["ap_use_gems"],
+        settings["ap_gem_limit"])
+
+    def update_ap_options():
+        gem_limit = int(ap_gem_limit_var.get()) if ap_gem_limit_var.get().isdigit() else 0
+        set_ap_restore_options(
+            ap_use_free_var.get(), ap_use_potions_var.get(),
+            ap_allow_large_var.get(), ap_use_gems_var.get(), gem_limit)
+        save_current_settings()
+
+    tk.Checkbutton(ap_settings_row, text="Free", variable=ap_use_free_var,
+                   command=update_ap_options, font=("Segoe UI", 8),
+                   bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.LEFT)
+    tk.Checkbutton(ap_settings_row, text="Potions", variable=ap_use_potions_var,
+                   command=update_ap_options, font=("Segoe UI", 8),
+                   bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.LEFT)
+    tk.Checkbutton(ap_settings_row, text="Large Potions", variable=ap_allow_large_var,
+                   command=update_ap_options, font=("Segoe UI", 8),
+                   bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.LEFT)
+    tk.Checkbutton(ap_settings_row, text="Gems", variable=ap_use_gems_var,
+                   command=update_ap_options, font=("Segoe UI", 8),
+                   bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.LEFT)
+    tk.Label(ap_settings_row, text="Limit:", font=("Segoe UI", 8),
+             bg=COLOR_SECTION_BG).pack(side=tk.LEFT, padx=(4, 0))
+    tk.Entry(ap_settings_row, textvariable=ap_gem_limit_var, width=5,
+             font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=(2, 0))
+    tk.Button(ap_settings_row, text="Set", command=update_ap_options,
+              font=("Segoe UI", 7)).pack(side=tk.LEFT, padx=(2, 0))
+
+    def toggle_auto_restore_ap():
+        enabled = auto_restore_ap_var.get()
+        set_auto_restore_ap(enabled)
+        if enabled:
+            ap_settings_row.pack(fill=tk.X, pady=(2, 0))
+        else:
+            ap_settings_row.pack_forget()
+        window.update_idletasks()
+        window.geometry(f"{WIN_WIDTH}x{window.winfo_reqheight()}")
+        save_current_settings()
+
+    tk.Checkbutton(row1, text="Auto Restore AP", variable=auto_restore_ap_var,
+                   command=toggle_auto_restore_ap, font=("Segoe UI", 9),
+                   bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.LEFT)
+
+    # Show AP settings row if auto restore is already enabled
+    if settings["auto_restore_ap"]:
+        ap_settings_row.pack(fill=tk.X, pady=(2, 0))
+
     tk.Frame(row1, width=20, bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
 
     tk.Label(row1, text="Min Troops:", font=("Segoe UI", 9),
@@ -896,6 +971,12 @@ def create_gui():
     def save_current_settings():
         save_settings({
             "auto_heal": auto_heal_var.get(),
+            "auto_restore_ap": auto_restore_ap_var.get(),
+            "ap_use_free": ap_use_free_var.get(),
+            "ap_use_potions": ap_use_potions_var.get(),
+            "ap_allow_large_potions": ap_allow_large_var.get(),
+            "ap_use_gems": ap_use_gems_var.get(),
+            "ap_gem_limit": int(ap_gem_limit_var.get()) if ap_gem_limit_var.get().isdigit() else 0,
             "min_troops": int(min_troops_var.get()) if min_troops_var.get().isdigit() else 0,
             "variation": int(variation_var.get()) if variation_var.get().isdigit() else 0,
             "titan_interval": int(titan_interval_var.get()) if titan_interval_var.get().isdigit() else 30,
@@ -1041,6 +1122,7 @@ def create_gui():
     add_debug_button(debug_tab, "Save Screenshot", save_screenshot)
     add_debug_button(debug_tab, "Check Quests", check_quests)
     add_debug_button(debug_tab, "Check Troops", troops_avail)
+    add_debug_button(debug_tab, "Check AP", read_ap)
     add_debug_button(debug_tab, "Check Screen", check_screen)
     add_debug_button(debug_tab, "Attack Territory (Debug)", lambda dev: attack_territory(dev, debug=True))
     add_debug_button(debug_tab, "Sample Specific Squares", sample_specific_squares)
@@ -1092,8 +1174,22 @@ def create_gui():
     stop_label.bind("<Button-1>", lambda e: stop_all())
     stop_frame.pack(fill=tk.X, padx=PAD_X, pady=(6, 2))
 
-    tk.Button(window, text="Quit", command=lambda: on_close(),
-              font=("Segoe UI", 9), bg=COLOR_BG).pack(pady=(4, 8))
+    quit_row = tk.Frame(window, bg=COLOR_BG)
+    quit_row.pack(pady=(4, 8))
+
+    def restart():
+        save_current_settings()
+        stop_all()
+        from updater import check_and_update
+        check_and_update()
+        # Re-launch the same script and exit current process
+        window.destroy()
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+    tk.Button(quit_row, text="Restart", command=restart,
+              font=("Segoe UI", 9), bg=COLOR_BG).pack(side=tk.LEFT, padx=(0, 8))
+    tk.Button(quit_row, text="Quit", command=lambda: on_close(),
+              font=("Segoe UI", 9), bg=COLOR_BG).pack(side=tk.LEFT)
 
     # ============================================================
     # PERIODIC CLEANUP

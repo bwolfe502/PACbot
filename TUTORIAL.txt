@@ -150,6 +150,26 @@ Auto Heal
   When enabled, PACbot will automatically heal your troops before
   any action that requires troops. Enabled by default.
 
+Auto Restore AP
+  When enabled, PACbot will automatically restore your Action Points
+  before PvE actions that cost AP (Rally Titan = 20 AP, Rally Evil
+  Guard = 70 AP). If your AP is too low, PACbot will open the AP
+  Recovery menu and use available restore sources.
+
+  Checking the box reveals additional options:
+
+  - Free: Use free AP restores (25 AP each, 2 per day, resets at
+    midnight UTC)
+  - Potions: Use AP potions (10, 20, and 50 AP sizes)
+  - Large Potions: Also allow 100 and 200 AP potions
+  - Gems: Use gems to restore AP (50 AP per use, escalating cost
+    starting at 200 gems per use up to 3500)
+  - Limit: Maximum total gems to spend per restore session. Set to 0
+    to disable gem usage even if the Gems box is checked.
+
+  Restore order: Free restores first, then potions (smallest to
+  largest), then gems. PACbot stops as soon as you have enough AP.
+
 Min Troops
   Set the minimum number of troops that must be available before
   PACbot will send them. If your available troops are at or below
@@ -265,6 +285,18 @@ STOP ALL
 
 The dark "STOP ALL" bar at the bottom stops every running task
 on every device immediately.
+
+
+RESTART / QUIT
+--------------
+
+Restart
+  Saves your settings, stops all tasks, checks for updates, and
+  relaunches PACbot. Use this after updating or if you want to
+  reload any code changes.
+
+Quit
+  Saves your settings, stops all tasks, and closes PACbot.
 
 
 TIPS

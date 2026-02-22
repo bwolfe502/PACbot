@@ -6,7 +6,8 @@ import random
 import config
 from vision import (tap_image, wait_for_image_and_tap, load_screenshot,
                     find_image, find_all_matches, get_template,
-                    adb_tap, adb_swipe, logged_tap, clear_click_trail)
+                    adb_tap, adb_swipe, logged_tap, clear_click_trail,
+                    read_ap, read_text)
 from navigation import navigate, check_screen
 from troops import troops_avail, all_troops_home, heal_all
 
@@ -436,6 +437,240 @@ def join_rally(rally_type, device):
     time.sleep(1)
     return False
 
+# ============================================================
+# AP RESTORE
+# ============================================================
+
+# OCR region for AP bar inside the AP Recovery menu (right side where "136/400" shows)
+_AP_MENU_REGION = (400, 570, 790, 630)
+
+# AP Recovery menu button coordinates
+_AP_FREE_OPEN = (783, 1459)
+
+
+# Potion coordinates (left to right, smallest to largest, ~168px spacing)
+_AP_POTIONS_SMALL = [
+    (157, 692),  # 10 AP
+    (325, 692),  # 20 AP
+    (493, 692),  # 50 AP
+]
+_AP_POTIONS_LARGE = [
+    (661, 692),  # 100 AP
+    (829, 692),  # 200 AP
+]
+
+# Gem restore button + confirmation
+_AP_GEM_BUTTON = (300, 1466)
+_AP_GEM_CONFIRM = (774, 1098)
+_AP_GEM_COST_REGION = (100, 700, 750, 850)  # OCR region for "Spend X Gem(s)?" text
+
+def _close_ap_menu(device):
+    """Close the AP Recovery menu and the search menu behind it."""
+    tap_image("close_x.png", device)  # Close AP Recovery modal
+    time.sleep(0.5)
+    tap_image("close_x.png", device)  # Close search menu
+    time.sleep(0.5)
+
+def _read_ap_from_menu(device):
+    """Read current/max AP from the AP Recovery menu bar via OCR.
+    The AP bar has white text on a dark background, so we invert the image
+    before OCR to get reliable slash detection (e.g. '142/400').
+    Returns (current, max) tuple or None."""
+    import re
+    screen = load_screenshot(device)
+    if screen is None:
+        return None
+
+    x1, y1, x2, y2 = _AP_MENU_REGION
+    img = screen[y1:y2, x1:x2]
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+    inverted = cv2.bitwise_not(gray)
+
+    from vision import _get_ocr_reader
+    reader = _get_ocr_reader()
+    results = reader.readtext(inverted, allowlist="0123456789/", detail=0)
+    raw = " ".join(results).strip()
+
+    match = re.search(r"(\d+)/(\d+)", raw)
+    if match:
+        return int(match.group(1)), int(match.group(2))
+    return None
+
+def _read_gem_cost(device):
+    """Read the gem cost from the confirmation dialog ('Spend X Gem(s)?').
+    Returns the gem cost as an integer, or None if unreadable."""
+    import re
+    screen = load_screenshot(device)
+    if screen is None:
+        return None
+    x1, y1, x2, y2 = _AP_GEM_COST_REGION
+    img = screen[y1:y2, x1:x2]
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+    from vision import _get_ocr_reader
+    reader = _get_ocr_reader()
+    results = reader.readtext(gray, detail=0)
+    raw = " ".join(results).strip()
+    print(f"[{device}] Gem confirmation OCR: '{raw}'")
+    # Look for "Spend X Gem" pattern
+    match = re.search(r"(\d[\d,]*)\s*[Gg]em", raw)
+    if match:
+        return int(match.group(1).replace(",", ""))
+    # Fallback: just find any number
+    match = re.search(r"(\d[\d,]+)", raw)
+    if match:
+        return int(match.group(1).replace(",", ""))
+    return None
+
+def restore_ap(device, needed):
+    """Open the AP Recovery menu and restore AP until we have at least `needed`.
+    Uses free restores first, then AP potions (smallest first).
+    Returns True if AP >= needed after restoring, False otherwise.
+    """
+    print(f"[{device}] Attempting to restore AP (need {needed})...")
+
+    # Navigate to map screen
+    if not navigate("map_screen", device):
+        print(f"[{device}] Failed to navigate to map screen for AP restore")
+        return False
+
+    # Tap SEARCH button to open the search/rally menu
+    adb_tap(device, 900, 1800)
+    time.sleep(1)
+
+    # Tap the blue lightning bolt button (AP Recovery button in search menu)
+    adb_tap(device, 315, 1380)
+    time.sleep(1)
+
+    # Wait for AP Recovery menu to appear (check for apwindow.png)
+    menu_opened = False
+    for attempt in range(5):
+        screen = load_screenshot(device)
+        if screen is not None and find_image(screen, "apwindow.png", threshold=0.8):
+            menu_opened = True
+            break
+        time.sleep(1)
+
+    if not menu_opened:
+        print(f"[{device}] AP Recovery menu did not open")
+        # Try to close whatever is open
+        _close_ap_menu(device)
+        return False
+
+    # Read current AP
+    ap = _read_ap_from_menu(device)
+    if ap is None:
+        print(f"[{device}] Could not read AP from menu")
+        _close_ap_menu(device)
+        return False
+
+    current, maximum = ap
+    print(f"[{device}] Current AP: {current}/{maximum}")
+
+    if current >= needed:
+        print(f"[{device}] Already have enough AP ({current} >= {needed})")
+        _close_ap_menu(device)
+        return True
+
+    # Step 1: Try FREE restore (up to 2 attempts — 25 AP each, 2x daily max)
+    if config.AP_USE_FREE and current < needed:
+        for free_attempt in range(2):
+            if current >= needed:
+                break
+            print(f"[{device}] Trying free AP restore (attempt {free_attempt + 1}/2)...")
+            adb_tap(device, *_AP_FREE_OPEN)  # "OPEN" button
+            time.sleep(1.5)
+
+            new_ap = _read_ap_from_menu(device)
+            if new_ap is None:
+                print(f"[{device}] Could not re-read AP after free restore")
+                break
+            if new_ap[0] > current:
+                print(f"[{device}] Free restore worked: {current} -> {new_ap[0]}")
+                current = new_ap[0]
+            else:
+                print(f"[{device}] Free restore had no effect (exhausted)")
+                break
+
+    # Step 2: Try AP potions (smallest first)
+    if config.AP_USE_POTIONS and current < needed:
+        potions = list(_AP_POTIONS_SMALL)
+        potion_labels = ["10", "20", "50"]
+        if config.AP_ALLOW_LARGE_POTIONS:
+            potions += _AP_POTIONS_LARGE
+            potion_labels += ["100", "200"]
+        for i, (px, py) in enumerate(potions):
+            if current >= needed:
+                break
+            for use in range(20):  # safety limit
+                if current >= needed:
+                    break
+                print(f"[{device}] Trying {potion_labels[i]} AP potion (use {use + 1})...")
+                adb_tap(device, px, py)
+                time.sleep(1.5)
+
+                new_ap = _read_ap_from_menu(device)
+                if new_ap is None:
+                    print(f"[{device}] Could not re-read AP after potion")
+                    break
+                if new_ap[0] > current:
+                    print(f"[{device}] Potion worked: {current} -> {new_ap[0]}")
+                    current = new_ap[0]
+                else:
+                    print(f"[{device}] {potion_labels[i]} AP potion had no effect (out of stock)")
+                    break
+
+    # Step 3: Try gem restore (50 AP per use, escalating gem cost, confirmation required)
+    # When exhausted, button still shows 3500 but confirmation won't open.
+    if config.AP_USE_GEMS and config.AP_GEM_LIMIT > 0 and current < needed:
+        gems_spent = 0
+        while current < needed:
+            # Tap gem button — opens confirmation dialog (unless exhausted)
+            adb_tap(device, *_AP_GEM_BUTTON)
+            time.sleep(1.5)
+
+            # Read the gem cost from "Spend X Gem(s)?" dialog
+            gem_cost = _read_gem_cost(device)
+            if gem_cost is None:
+                print(f"[{device}] Gem confirmation did not appear (exhausted or unreadable)")
+                break
+
+            if gems_spent + gem_cost > config.AP_GEM_LIMIT:
+                print(f"[{device}] Gem cost {gem_cost} would exceed limit "
+                      f"({gems_spent}+{gem_cost} > {config.AP_GEM_LIMIT}), cancelling")
+                tap_image("close_x.png", device)  # Close confirmation
+                time.sleep(0.5)
+                break
+
+            # Confirm the purchase
+            print(f"[{device}] Confirming gem restore ({gem_cost} gems)...")
+            adb_tap(device, *_AP_GEM_CONFIRM)
+            time.sleep(1.5)
+            gems_spent += gem_cost
+
+            new_ap = _read_ap_from_menu(device)
+            if new_ap is None:
+                print(f"[{device}] Could not re-read AP after gem restore")
+                break
+            if new_ap[0] > current:
+                print(f"[{device}] Gem restore worked: {current} -> {new_ap[0]} "
+                      f"({gems_spent} total gems spent)")
+                current = new_ap[0]
+            else:
+                print(f"[{device}] Gem restore had no effect (out of gems?)")
+                break
+
+    # Close AP Recovery menu and search menu
+    _close_ap_menu(device)
+
+    if current >= needed:
+        print(f"[{device}] AP restored successfully ({current} >= {needed})")
+        return True
+    else:
+        print(f"[{device}] Could not restore enough AP ({current} < {needed})")
+        return False
+
 def rally_titan(device):
     """Start a titan rally from map screen"""
     if config.AUTO_HEAL_ENABLED:
@@ -445,6 +680,18 @@ def rally_titan(device):
     if troops <= config.MIN_TROOPS_AVAILABLE:
         print(f"[{device}] Not enough troops available (have {troops}, need more than {config.MIN_TROOPS_AVAILABLE})")
         return False
+
+    # AP check
+    ap = read_ap(device)
+    if ap is None or ap[0] < config.AP_COST_RALLY_TITAN:
+        if config.AUTO_RESTORE_AP_ENABLED:
+            if not restore_ap(device, config.AP_COST_RALLY_TITAN):
+                print(f"[{device}] Could not restore enough AP for titan rally")
+                return False
+        else:
+            current = ap[0] if ap else 0
+            print(f"[{device}] Not enough AP for titan rally (have {current}, need {config.AP_COST_RALLY_TITAN})")
+            return False
 
     if not navigate("map_screen", device):
         print(f"[{device}] Failed to navigate to map screen")
@@ -490,6 +737,18 @@ def rally_eg(device):
     if troops <= config.MIN_TROOPS_AVAILABLE:
         print(f"[{device}] Not enough troops available (have {troops}, need more than {config.MIN_TROOPS_AVAILABLE})")
         return False
+
+    # AP check
+    ap = read_ap(device)
+    if ap is None or ap[0] < config.AP_COST_EVIL_GUARD:
+        if config.AUTO_RESTORE_AP_ENABLED:
+            if not restore_ap(device, config.AP_COST_EVIL_GUARD):
+                print(f"[{device}] Could not restore enough AP for evil guard rally")
+                return False
+        else:
+            current = ap[0] if ap else 0
+            print(f"[{device}] Not enough AP for evil guard rally (have {current}, need {config.AP_COST_EVIL_GUARD})")
+            return False
 
     if not navigate("map_screen", device):
         print(f"[{device}] Failed to navigate to map screen")

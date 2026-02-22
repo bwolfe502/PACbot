@@ -97,6 +97,18 @@ MANUAL_ATTACK_SQUARES = set()  # Squares user manually selected to attack: {(row
 MANUAL_IGNORE_SQUARES = set()  # Squares user manually selected to ignore: {(row, col), ...}
 MIN_TROOPS_AVAILABLE = 0
 AUTO_HEAL_ENABLED = False
+AUTO_RESTORE_AP_ENABLED = False
+
+# AP restore source options
+AP_USE_FREE = True           # Use free AP restores (25 AP each, 2x daily)
+AP_USE_POTIONS = True        # Use AP potions
+AP_ALLOW_LARGE_POTIONS = True  # Allow 100 & 200 AP potions (vs only 10/20/50)
+AP_USE_GEMS = False          # Use gems to restore AP (50 AP per use)
+AP_GEM_LIMIT = 0             # Max gems to spend per restore session (0 = disabled, max 3500)
+
+# AP costs for PvE actions
+AP_COST_RALLY_TITAN = 20
+AP_COST_EVIL_GUARD = 70
 CLICK_TRAIL_ENABLED = True
 MY_TEAM_COLOR = "yellow"
 ENEMY_TEAMS = ["green"]
@@ -139,6 +151,22 @@ def set_auto_heal(enabled):
     global AUTO_HEAL_ENABLED
     AUTO_HEAL_ENABLED = enabled
     print(f"Auto heal: {'enabled' if enabled else 'disabled'}")
+
+def set_auto_restore_ap(enabled):
+    """Set the auto restore AP enabled state"""
+    global AUTO_RESTORE_AP_ENABLED
+    AUTO_RESTORE_AP_ENABLED = enabled
+    print(f"Auto restore AP: {'enabled' if enabled else 'disabled'}")
+
+def set_ap_restore_options(use_free, use_potions, allow_large, use_gems, gem_limit):
+    """Set AP restore source preferences"""
+    global AP_USE_FREE, AP_USE_POTIONS, AP_ALLOW_LARGE_POTIONS, AP_USE_GEMS, AP_GEM_LIMIT
+    AP_USE_FREE = use_free
+    AP_USE_POTIONS = use_potions
+    AP_ALLOW_LARGE_POTIONS = allow_large
+    AP_USE_GEMS = use_gems
+    AP_GEM_LIMIT = max(0, min(gem_limit, 3500))
+    print(f"AP restore: free={use_free}, potions={use_potions}, large={allow_large}, gems={use_gems}, gem_limit={AP_GEM_LIMIT}")
 
 def set_territory_config(my_team, enemy_teams):
     """Set which team you are and which teams to attack"""

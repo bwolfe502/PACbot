@@ -3,11 +3,33 @@ import cv2
 import time
 import random
 import os
+import re
 import numpy as np
 from datetime import datetime
 
+import warnings
+import logging
+
+# Suppress noisy warnings from torch/easyocr before importing
+warnings.filterwarnings("ignore", message=".*pin_memory.*")
+warnings.filterwarnings("ignore", message=".*GPU.*")
+logging.getLogger("easyocr").setLevel(logging.ERROR)
+
+import easyocr
+
 import config
 from config import adb_path, BUTTONS
+
+# Initialize EasyOCR reader once (downloads models on first run)
+_ocr_reader = None
+
+def _get_ocr_reader():
+    global _ocr_reader
+    if _ocr_reader is None:
+        print("[OCR] Initializing EasyOCR (first run may download models)...")
+        _ocr_reader = easyocr.Reader(['en'], gpu=False, verbose=False)
+        print("[OCR] Ready.")
+    return _ocr_reader
 
 # ============================================================
 # CLICK TRAIL (debug tap logging)
@@ -92,6 +114,92 @@ def load_screenshot(device):
     if image is None:
         print(f"[{device}] Failed to decode screenshot")
     return image
+
+# ============================================================
+# OCR (Optical Character Recognition)
+# ============================================================
+
+def read_text(screen, region=None, allowlist=None):
+    """Read text from a screenshot using OCR.
+    screen: CV2 image (BGR).
+    region: optional (x1, y1, x2, y2) to read only a portion of the screen.
+    allowlist: optional string of allowed characters (e.g. '0123456789' for numbers only).
+    Returns the recognized text string (stripped of leading/trailing whitespace).
+    """
+    if screen is None:
+        return ""
+
+    img = screen
+    if region:
+        x1, y1, x2, y2 = region
+        img = screen[y1:y2, x1:x2]
+
+    # Convert to grayscale and upscale for better OCR accuracy
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+
+    reader = _get_ocr_reader()
+    results = reader.readtext(gray, allowlist=allowlist, detail=0)
+    return " ".join(results).strip()
+
+
+def read_number(screen, region=None):
+    """Read a number from the screen. Returns the integer value, or None if no number found."""
+    raw = read_text(screen, region=region, allowlist="0123456789,.")
+    # Strip commas, periods, and spaces used as thousands separators
+    cleaned = raw.replace(",", "").replace(".", "").replace(" ", "")
+    if cleaned.isdigit():
+        return int(cleaned)
+    return None
+
+
+def read_text_from_device(device, region=None, allowlist=None):
+    """Convenience: take a screenshot from a device and read text from it."""
+    screen = load_screenshot(device)
+    return read_text(screen, region=region, allowlist=allowlist)
+
+
+def read_number_from_device(device, region=None):
+    """Convenience: take a screenshot from a device and read a number from it."""
+    screen = load_screenshot(device)
+    return read_number(screen, region=region)
+
+
+# Region where AP is displayed (bottom-right, under SEARCH button)
+_AP_REGION = (600, 1850, 1080, 1920)
+
+def read_ap(device, retries=5):
+    """Read current AP from the bottom-right of the screen.
+    The display cycles between AP (e.g. '101/400') and a timer every few seconds,
+    so this retries up to `retries` times with a short delay between attempts.
+    Returns (current, max) tuple, or None if AP couldn't be read.
+    """
+    for attempt in range(retries):
+        screen = load_screenshot(device)
+        if screen is None:
+            time.sleep(1)
+            continue
+
+        raw = read_text(screen, region=_AP_REGION, allowlist="0123456789/")
+        # Look for the "current/max" pattern
+        match = re.search(r"(\d+)/(\d+)", raw)
+        if match:
+            current = int(match.group(1))
+            maximum = int(match.group(2))
+            print(f"[{device}] AP: {current}/{maximum}")
+            return current, maximum
+
+        # Probably showing the timer right now, wait and retry
+        if attempt < retries - 1:
+            time.sleep(2)
+
+    print(f"[{device}] Could not read AP after {retries} attempts")
+    return None
+
+
+# ============================================================
+# TEMPLATE MATCHING
+# ============================================================
 
 def find_image(screen, image_name, threshold=0.8, region=None):
     """Find an image template on screen. Returns (max_val, max_loc, h, w) or None.
