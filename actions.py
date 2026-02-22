@@ -681,16 +681,15 @@ def rally_titan(device):
         print(f"[{device}] Not enough troops available (have {troops}, need more than {config.MIN_TROOPS_AVAILABLE})")
         return False
 
-    # AP check
+    # AP check (if unreadable, proceed anyway — game handles low AP with its own prompt)
     ap = read_ap(device)
-    if ap is None or ap[0] < config.AP_COST_RALLY_TITAN:
+    if ap is not None and ap[0] < config.AP_COST_RALLY_TITAN:
         if config.AUTO_RESTORE_AP_ENABLED:
             if not restore_ap(device, config.AP_COST_RALLY_TITAN):
                 print(f"[{device}] Could not restore enough AP for titan rally")
                 return False
         else:
-            current = ap[0] if ap else 0
-            print(f"[{device}] Not enough AP for titan rally (have {current}, need {config.AP_COST_RALLY_TITAN})")
+            print(f"[{device}] Not enough AP for titan rally (have {ap[0]}, need {config.AP_COST_RALLY_TITAN})")
             return False
 
     if not navigate("map_screen", device):
@@ -738,16 +737,15 @@ def rally_eg(device):
         print(f"[{device}] Not enough troops available (have {troops}, need more than {config.MIN_TROOPS_AVAILABLE})")
         return False
 
-    # AP check
+    # AP check (if unreadable, proceed anyway — game handles low AP with its own prompt)
     ap = read_ap(device)
-    if ap is None or ap[0] < config.AP_COST_EVIL_GUARD:
+    if ap is not None and ap[0] < config.AP_COST_EVIL_GUARD:
         if config.AUTO_RESTORE_AP_ENABLED:
             if not restore_ap(device, config.AP_COST_EVIL_GUARD):
                 print(f"[{device}] Could not restore enough AP for evil guard rally")
                 return False
         else:
-            current = ap[0] if ap else 0
-            print(f"[{device}] Not enough AP for evil guard rally (have {current}, need {config.AP_COST_EVIL_GUARD})")
+            print(f"[{device}] Not enough AP for evil guard rally (have {ap[0]}, need {config.AP_COST_EVIL_GUARD})")
             return False
 
     if not navigate("map_screen", device):

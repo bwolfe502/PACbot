@@ -172,6 +172,7 @@ def read_ap(device, retries=5):
     """Read current AP from the bottom-right of the screen.
     The display cycles between AP (e.g. '101/400') and a timer every few seconds,
     so this retries up to `retries` times with a short delay between attempts.
+    Uses thresholding to isolate white text from the green background.
     Returns (current, max) tuple, or None if AP couldn't be read.
     """
     for attempt in range(retries):
@@ -180,8 +181,17 @@ def read_ap(device, retries=5):
             time.sleep(1)
             continue
 
-        raw = read_text(screen, region=_AP_REGION, allowlist="0123456789/")
-        # Look for the "current/max" pattern
+        # Crop, grayscale, upscale, then threshold to isolate white text
+        x1, y1, x2, y2 = _AP_REGION
+        img = screen[y1:y2, x1:x2]
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+        _, thresh = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
+
+        reader = _get_ocr_reader()
+        results = reader.readtext(thresh, allowlist="0123456789/", detail=0)
+        raw = " ".join(results).strip()
+
         match = re.search(r"(\d+)/(\d+)", raw)
         if match:
             current = int(match.group(1))
