@@ -227,6 +227,24 @@ def run_auto_pass(device, stop_event, pass_mode, pass_interval):
         traceback.print_exc()
     print(f"[{device}] Auto Pass Battle stopped")
 
+def run_auto_reinforce(device, stop_event, interval):
+    """Loop reinforce_throne on a configurable interval."""
+    print(f"[{device}] Auto Reinforce Throne started (interval: {interval}s)")
+    stop_check = stop_event.is_set
+    try:
+        while not stop_check():
+            reinforce_throne(device)
+            if stop_check():
+                break
+            for _ in range(interval):
+                if stop_check():
+                    break
+                time.sleep(1)
+    except Exception as e:
+        print(f"[{device}] ERROR in Auto Reinforce Throne: {e}")
+        traceback.print_exc()
+    print(f"[{device}] Auto Reinforce Throne stopped")
+
 def run_repeat(device, task_name, function, interval, stop_event):
     stop_check = stop_event.is_set
     print(f"[{device}] Starting repeating task: {task_name}")
@@ -396,7 +414,7 @@ def create_gui():
     mode_frame = tk.Frame(window, bg=COLOR_BG)
     mode_frame.pack(fill=tk.X, padx=PAD_X, pady=(6, 4))
 
-    rw_mode_btn = tk.Button(mode_frame, text="Rest Week", font=("Segoe UI", 10, "bold"),
+    rw_mode_btn = tk.Button(mode_frame, text="Home Server", font=("Segoe UI", 10, "bold"),
                              bg=COLOR_MODE_INACTIVE, fg="#555", relief=tk.FLAT,
                              activebackground=COLOR_MODE_INACTIVE, cursor="hand2")
     rw_mode_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 2))
@@ -419,9 +437,11 @@ def create_gui():
     auto_groot_var = tk.BooleanVar(value=False)
     auto_pass_var = tk.BooleanVar(value=False)
     auto_occupy_var = tk.BooleanVar(value=False)
+    auto_reinforce_var = tk.BooleanVar(value=False)
 
     titan_interval_var = tk.StringVar(value="30")
     groot_interval_var = tk.StringVar(value="30")
+    reinforce_interval_var = tk.StringVar(value="30")
     pass_mode_var = tk.StringVar(value="Rally Joiner")
     pass_interval_var = tk.StringVar(value="30")
 
@@ -470,6 +490,14 @@ def create_gui():
             config.auto_occupy_running = False
             stop_all_tasks_matching("_auto_occupy")
             print("Stopping Auto Occupy on all devices")
+
+    def _stop_reinforce_throne():
+        if auto_reinforce_var.get():
+            auto_reinforce_var.set(False)
+            reinforce_frame.config(bg=COLOR_OFF)
+            reinforce_label.config(text="Auto Reinforce Throne: OFF", bg=COLOR_OFF)
+            stop_all_tasks_matching("_auto_reinforce")
+            print("Stopping Auto Reinforce Throne on all devices")
 
     # ── Broken Lands toggles ──
 
@@ -585,7 +613,28 @@ def create_gui():
 
     groot_frame, groot_label = make_toggle_bar(
         rw_toggles_frame, "Auto Join Groot Rallies: OFF", ("Segoe UI", 12, "bold"), toggle_auto_groot)
-    groot_frame.pack(fill=tk.X)
+    groot_frame.pack(fill=tk.X, pady=(0, 3))
+
+    def toggle_auto_reinforce():
+        active_devices = get_active_devices()
+        if not auto_reinforce_var.get():
+            auto_reinforce_var.set(True)
+            reinforce_frame.config(bg=COLOR_ON)
+            reinforce_label.config(text="Auto Reinforce Throne: ON", bg=COLOR_ON)
+            for device in active_devices:
+                task_key = f"{device}_auto_reinforce"
+                if task_key not in running_tasks:
+                    stop_event = threading.Event()
+                    interval = int(reinforce_interval_var.get())
+                    launch_task(device, "auto_reinforce",
+                                run_auto_reinforce, stop_event, args=(device, stop_event, interval))
+                    print(f"Started Auto Reinforce Throne on {device}")
+        else:
+            _stop_reinforce_throne()
+
+    reinforce_frame, reinforce_label = make_toggle_bar(
+        rw_toggles_frame, "Auto Reinforce Throne: OFF", ("Segoe UI", 12, "bold"), toggle_auto_reinforce)
+    reinforce_frame.pack(fill=tk.X)
 
     # ── Mode switching ──
 
@@ -599,6 +648,7 @@ def create_gui():
         _stop_groot()
         _stop_pass_battle()
         _stop_occupy()
+        _stop_reinforce_throne()
 
         mode_var.set(new_mode)
 
@@ -698,6 +748,15 @@ def create_gui():
     tk.Label(rw_settings_row, text="Groot every", font=("Segoe UI", 9),
              bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
     tk.Entry(rw_settings_row, textvariable=groot_interval_var, width=4, justify="center",
+             font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(4, 1))
+    tk.Label(rw_settings_row, text="s", font=("Segoe UI", 9),
+             bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
+
+    tk.Frame(rw_settings_row, width=16, bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
+
+    tk.Label(rw_settings_row, text="Reinforce every", font=("Segoe UI", 9),
+             bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
+    tk.Entry(rw_settings_row, textvariable=reinforce_interval_var, width=4, justify="center",
              font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(4, 1))
     tk.Label(rw_settings_row, text="s", font=("Segoe UI", 9),
              bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
@@ -932,6 +991,7 @@ def create_gui():
         _stop_groot()
         _stop_pass_battle()
         _stop_occupy()
+        _stop_reinforce_throne()
         for var in task_row_enabled_vars:
             var.set(False)
         for key in list(running_tasks.keys()):
@@ -987,6 +1047,11 @@ def create_gui():
             auto_occupy_var.set(False)
             occupy_frame.config(bg=COLOR_OFF)
             occupy_label.config(text="Auto Occupy: OFF", bg=COLOR_OFF)
+
+        if auto_reinforce_var.get() and not any(k.endswith("_auto_reinforce") for k in running_tasks):
+            auto_reinforce_var.set(False)
+            reinforce_frame.config(bg=COLOR_OFF)
+            reinforce_label.config(text="Auto Reinforce Throne: OFF", bg=COLOR_OFF)
 
         try:
             while True:
