@@ -13,7 +13,7 @@ from devices import get_devices, get_emulator_instances, auto_connect_emulators
 from navigation import check_screen
 from vision import adb_tap, tap_image, load_screenshot, find_image, wait_for_image_and_tap
 from troops import troops_avail, heal_all
-from actions import (attack, target, check_quests, teleport,
+from actions import (attack, reinforce_throne, target, check_quests, teleport,
                      rally_titan, rally_eg, join_rally, join_war_rallies)
 from territory import (attack_territory, auto_occupy_loop,
                        open_territory_manager, sample_specific_squares)
@@ -31,6 +31,7 @@ TASK_FUNCTIONS = {
     "Heal All": heal_all,
     "Target": target,
     "Attack": attack,
+    "Reinforce Throne": reinforce_throne,
     "UP UP UP!": join_war_rallies,
     "Teleport": teleport,
     "Attack Territory": attack_territory,
@@ -872,6 +873,7 @@ def create_gui():
     # War tab
     add_task_row(war_tab, "Target", 30)
     add_task_row(war_tab, "Attack", 30)
+    add_task_row(war_tab, "Reinforce Throne", 30)
     add_task_row(war_tab, "UP UP UP!", 30)
     add_task_row(war_tab, "Teleport", 30)
     add_task_row(war_tab, "Attack Territory", 30)

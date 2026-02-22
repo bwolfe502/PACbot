@@ -95,6 +95,21 @@ def attack(device):
     else:
         print(f"[{device}] Not enough troops available (have {troops}, need more than {config.MIN_TROOPS_AVAILABLE})")
 
+def reinforce_throne(device):
+    """Heal all troops first (if auto heal enabled), then check troops and reinforce throne"""
+    if config.AUTO_HEAL_ENABLED:
+        heal_all(device)
+
+    troops = troops_avail(device)
+
+    if troops > config.MIN_TROOPS_AVAILABLE:
+        adb_tap(device, 560, 675)
+        wait_for_image_and_tap("throne_reinforce.png", device, timeout=5)
+        time.sleep(1)
+        tap_image("depart.png", device)
+    else:
+        print(f"[{device}] Not enough troops available (have {troops}, need more than {config.MIN_TROOPS_AVAILABLE})")
+
 def target(device):
     """Open target menu, tap enemy tab, verify marker exists, then tap target.
     Returns True on success, False on general failure, 'no_marker' if target marker not found.
