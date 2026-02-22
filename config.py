@@ -97,6 +97,7 @@ MANUAL_ATTACK_SQUARES = set()  # Squares user manually selected to attack: {(row
 MANUAL_IGNORE_SQUARES = set()  # Squares user manually selected to ignore: {(row, col), ...}
 MIN_TROOPS_AVAILABLE = 0
 AUTO_HEAL_ENABLED = False
+CLICK_TRAIL_ENABLED = True
 MY_TEAM_COLOR = "yellow"
 ENEMY_TEAMS = ["green"]
 running_tasks = {}

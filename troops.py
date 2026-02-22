@@ -1,7 +1,7 @@
 import numpy as np
 import time
 
-from vision import load_screenshot, tap_image, adb_tap
+from vision import load_screenshot, tap_image, adb_tap, logged_tap
 from navigation import navigate
 
 
@@ -63,11 +63,11 @@ def heal_all(device):
         healed_any = True
         print(f"[{device}] Starting heal sequence...")
         time.sleep(1)
-        adb_tap(device, 700, 1460)
+        logged_tap(device, 700, 1460, "heal_all_btn")
         time.sleep(1)
-        adb_tap(device, 542, 1425)
+        logged_tap(device, 542, 1425, "heal_confirm")
         time.sleep(1)
-        adb_tap(device, 1000, 200)
+        logged_tap(device, 1000, 200, "heal_close")
         time.sleep(2)
 
     if healed_any:

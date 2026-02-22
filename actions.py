@@ -6,7 +6,7 @@ import random
 import config
 from vision import (tap_image, wait_for_image_and_tap, load_screenshot,
                     find_image, find_all_matches, get_template,
-                    adb_tap, adb_swipe)
+                    adb_tap, adb_swipe, logged_tap, clear_click_trail)
 from navigation import navigate, check_screen
 from troops import troops_avail, all_troops_home, heal_all
 
@@ -82,13 +82,20 @@ def check_quests(device, stop_check=None):
 
 def attack(device):
     """Heal all troops first (if auto heal enabled), then check troops and attack"""
+    clear_click_trail()
     if config.AUTO_HEAL_ENABLED:
         heal_all(device)
+
+    if check_screen(device) != "map_screen":
+        print(f"[{device}] Not on map_screen, navigating...")
+        if not navigate("map_screen", device):
+            print(f"[{device}] Failed to navigate to map screen")
+            return
 
     troops = troops_avail(device)
 
     if troops > config.MIN_TROOPS_AVAILABLE:
-        adb_tap(device, 560, 675)
+        logged_tap(device, 560, 675, "attack_selection")
         wait_for_image_and_tap("attack_button.png", device, timeout=5)
         time.sleep(1)
         tap_image("depart.png", device)
@@ -97,13 +104,20 @@ def attack(device):
 
 def reinforce_throne(device):
     """Heal all troops first (if auto heal enabled), then check troops and reinforce throne"""
+    clear_click_trail()
     if config.AUTO_HEAL_ENABLED:
         heal_all(device)
+
+    if check_screen(device) != "map_screen":
+        print(f"[{device}] Not on map_screen, navigating...")
+        if not navigate("map_screen", device):
+            print(f"[{device}] Failed to navigate to map screen")
+            return
 
     troops = troops_avail(device)
 
     if troops > config.MIN_TROOPS_AVAILABLE:
-        adb_tap(device, 560, 675)
+        logged_tap(device, 560, 675, "throne_selection")
         wait_for_image_and_tap("throne_reinforce.png", device, timeout=5)
         time.sleep(1)
         tap_image("depart.png", device)

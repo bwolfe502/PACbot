@@ -794,7 +794,10 @@ def create_gui():
     actions_toggle_btn.pack(fill=tk.X)
 
     # Tabs inside collapsible section
-    tabs = ttk.Notebook(actions_inner)
+    tab_style = ttk.Style()
+    tab_style.configure("Bold.TNotebook.Tab", font=("Segoe UI", 10, "bold"), padding=[12, 6])
+
+    tabs = ttk.Notebook(actions_inner, style="Bold.TNotebook")
     tabs.pack(fill=tk.BOTH, expand=True, pady=(4, 4), padx=4)
 
     farm_tab = tk.Frame(tabs, padx=4, pady=4)

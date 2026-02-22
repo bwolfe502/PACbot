@@ -2,9 +2,64 @@ import subprocess
 import cv2
 import time
 import random
+import os
 import numpy as np
+from datetime import datetime
 
+import config
 from config import adb_path, BUTTONS
+
+# ============================================================
+# CLICK TRAIL (debug tap logging)
+# ============================================================
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+CLICKS_DIR = os.path.join(SCRIPT_DIR, "debug", "clicks")
+os.makedirs(CLICKS_DIR, exist_ok=True)
+
+_click_seq = 0
+
+def _cleanup_clicks_dir(max_files=100):
+    try:
+        files = sorted(
+            [os.path.join(CLICKS_DIR, f) for f in os.listdir(CLICKS_DIR) if f.endswith(".png")],
+            key=os.path.getmtime
+        )
+        while len(files) > max_files:
+            os.remove(files.pop(0))
+    except Exception:
+        pass
+
+def _save_click_trail(screen, device, x, y, label="tap"):
+    """Save a screenshot with a marker at the tap point for debugging."""
+    global _click_seq
+    if not config.CLICK_TRAIL_ENABLED:
+        return
+    try:
+        _click_seq += 1
+        annotated = screen.copy()
+        cv2.circle(annotated, (int(x), int(y)), 30, (0, 0, 255), 3)
+        cv2.circle(annotated, (int(x), int(y)), 5, (0, 0, 255), -1)
+        cv2.putText(annotated, label, (int(x) + 35, int(y) - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+        timestamp = datetime.now().strftime("%H%M%S")
+        safe_device = device.replace(":", "_")
+        filename = f"{_click_seq:03d}_{timestamp}_{safe_device}_{label}.png"
+        cv2.imwrite(os.path.join(CLICKS_DIR, filename), annotated)
+        _cleanup_clicks_dir()
+    except Exception:
+        pass
+
+def clear_click_trail():
+    """Clear all click trail images. Call at the start of an action run."""
+    global _click_seq
+    _click_seq = 0
+    try:
+        for f in os.listdir(CLICKS_DIR):
+            if f.endswith(".png"):
+                os.remove(os.path.join(CLICKS_DIR, f))
+    except Exception:
+        pass
 
 # ============================================================
 # TEMPLATE CACHE
@@ -107,12 +162,22 @@ def tap_image(image_name, device, threshold=0.8):
         max_val, max_loc, h, w = match
         center_x = max_loc[0] + w // 2
         center_y = max_loc[1] + h // 2
+        if screen is not None:
+            _save_click_trail(screen, device, center_x, center_y, image_name.replace(".png", ""))
         adb_tap(device, center_x, center_y)
         print(f"[{device}] Found and tapped {image_name} at ({center_x}, {center_y})")
         return True
     else:
         print(f"[{device}] Couldn't find {image_name}")
         return False
+
+def logged_tap(device, x, y, label="coord_tap"):
+    """Tap a coordinate and save a click trail screenshot for debugging."""
+    if config.CLICK_TRAIL_ENABLED:
+        screen = load_screenshot(device)
+        if screen is not None:
+            _save_click_trail(screen, device, x, y, label)
+    adb_tap(device, x, y)
 
 def wait_for_image_and_tap(image_name, device, timeout=5, threshold=0.8):
     """Wait for an image to appear on screen and tap it, with a timeout"""
