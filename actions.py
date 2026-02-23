@@ -4,6 +4,7 @@ import time
 import random
 import os
 import re
+import subprocess
 
 import config
 from vision import (tap_image, wait_for_image_and_tap, load_screenshot,
@@ -649,6 +650,26 @@ def join_rally(rally_types, device):
         print(f"[{device}] Not on war screen anymore")
         return False
 
+    def _backout_to_war_screen():
+        """Aggressively back out of a rally detail / popup to the war screen list.
+        Tries multiple strategies: close_x, (75,75) tap, Android back key.
+        Returns True if successfully back on war screen, False otherwise."""
+        for attempt in range(3):
+            # Try close button first
+            tap_image("close_x.png", device)
+            time.sleep(0.5)
+            # Tap top-left corner
+            adb_tap(device, 75, 75)
+            time.sleep(0.5)
+            # Also press Android back key
+            subprocess.run([config.adb_path, "-s", device, "shell", "input", "keyevent", "4"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(0.5)
+            if _on_war_screen():
+                return True
+            print(f"[{device}] Back-out attempt {attempt + 1} — not on war screen yet")
+        return False
+
     def _exit_war_screen():
         """Navigate back from war screen to map."""
         navigate("map_screen", device)
@@ -663,39 +684,34 @@ def join_rally(rally_types, device):
         "tower": ["tower"],
     }
 
-    def _verify_rally_row(screen, rally_y, icon_h, expected_type):
-        """OCR the war screen row near a matched icon to verify the rally type.
-        Returns True if the text contains expected keywords for this rally type."""
+    def _ocr_label_at(screen, y_pos, debug_name="rally_label_ocr"):
+        """OCR the monster name label on the left side of the screen at a given Y position.
+        The label is on a dark banner on the monster card. Returns lowercase text."""
         h, w = screen.shape[:2]
-        # Rally name text appears as a footer BELOW the icon row
-        y_start = max(0, rally_y - 20)
-        y_end = min(h, rally_y + icon_h + 150)
-        row_crop = screen[y_start:y_end, :]
-        gray = cv2.cvtColor(row_crop, cv2.COLOR_BGR2GRAY)
+        # The label is on the left-side monster card (~first 300px wide).
+        # It sits below the icon match area — extend generously downward.
+        y_start = max(0, y_pos - 10)
+        y_end = min(h, y_pos + 80)
+        x_start = 0
+        x_end = min(w, 300)
+        label_crop = screen[y_start:y_end, x_start:x_end]
+        gray = cv2.cvtColor(label_crop, cv2.COLOR_BGR2GRAY)
         gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
 
         # Save debug crop
         debug_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug")
         os.makedirs(debug_dir, exist_ok=True)
-        cv2.imwrite(os.path.join(debug_dir, "rally_row_ocr.png"), gray)
+        cv2.imwrite(os.path.join(debug_dir, f"{debug_name}.png"), gray)
 
         from vision import _get_ocr_reader
         reader = _get_ocr_reader()
         results = reader.readtext(gray, detail=0)
-        text = " ".join(results).lower()
-        print(f"[{device}] Rally row OCR: {text}")
+        return " ".join(results).lower()
 
-        # Skip rallies that are already full
-        if "full" in text:
-            print(f"[{device}] Rally is full (OCR text) — skipping")
-            return False
-
+    def _text_matches_type(text, expected_type):
+        """Check if OCR text contains keywords for the expected rally type."""
         keywords = _rally_verify_keywords.get(expected_type, [])
-        for kw in keywords:
-            if kw in text:
-                return True
-        print(f"[{device}] Rally text mismatch — expected '{expected_type}', got: {text}")
-        return False
+        return any(kw in text for kw in keywords)
 
     def check_for_joinable_rally():
         """Check current screen for a joinable rally of any requested type.
@@ -711,74 +727,92 @@ def join_rally(rally_types, device):
         for rally_type in rally_types:
             if rally_type not in rally_icons:
                 continue
-            icon_h = rally_icons[rally_type].shape[0]
+            icon_h, icon_w = rally_icons[rally_type].shape[:2]
             rally_locs = find_all_matches(screen, f"rally/{rally_type}.png", threshold=0.9)
 
             for rally_x, rally_y in rally_locs:
+                # The monster name label is at the bottom of the card,
+                # approximately at rally_y + icon_h (just below the matched icon).
+                label_y = rally_y + icon_h
+
+                # Find the closest join button to this icon
+                best_join = None
+                best_dist = float('inf')
                 for join_x, join_y in join_locs:
-                    if abs(join_y - rally_y) < 200:
-                        # Verify rally type via OCR before clicking join
-                        if not _verify_rally_row(screen, rally_y, icon_h, rally_type):
-                            continue  # Skip this match, try next
+                    dist = abs(join_y - label_y)
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_join = (join_x, join_y)
 
-                        print(f"[{device}] Found joinable {rally_type} rally")
+                if best_join is None or best_dist > 120:
+                    continue
 
-                        h, w = join_btn.shape[:2]
-                        print(f"[{device}] Clicking join at ({join_x + w // 2}, {join_y + h // 2})")
-                        adb_tap(device, join_x + w // 2, join_y + h // 2)
-                        time.sleep(1)
+                join_x, join_y = best_join
 
-                        # Wait for slot or full rally
-                        slot_found = False
-                        rally_full = False
-                        start_time = time.time()
-                        while time.time() - start_time < 5:
-                            s = load_screenshot(device)
-                            if s is not None and find_image(s, "full_rally.png", threshold=0.8):
-                                rally_full = True
-                                break
-                            if tap_image("slot.png", device):
-                                slot_found = True
-                                break
-                            time.sleep(0.5)
+                # Verify the icon's label says the expected type
+                icon_label = _ocr_label_at(screen, label_y, "rally_icon_label")
+                print(f"[{device}] Icon label OCR (y={label_y}): {icon_label}")
+                if not _text_matches_type(icon_label, rally_type):
+                    print(f"[{device}] Icon label mismatch — expected '{rally_type}', got: {icon_label}")
+                    continue
 
-                        if rally_full:
-                            print(f"[{device}] Rally is full — backing out")
-                            tap_image("close_x.png", device)
-                            time.sleep(1)
-                            adb_tap(device, 75, 75)
-                            time.sleep(1)
-                            if not _on_war_screen():
-                                return "lost"
-                            return False  # Force fresh screenshot on next call
+                # Verify what the join button is actually on (label at join button's Y)
+                join_label = _ocr_label_at(screen, join_y, "rally_join_target")
+                print(f"[{device}] Join target OCR (y={join_y}): {join_label}")
+                if not _text_matches_type(join_label, rally_type):
+                    print(f"[{device}] Join button is on '{join_label}', not '{rally_type}' — skipping")
+                    continue
 
-                        if not slot_found:
-                            print(f"[{device}] No slot found — backing out")
-                            adb_tap(device, 75, 75)
-                            time.sleep(1)
-                            if not _on_war_screen():
-                                return "lost"
-                            return False  # Force fresh screenshot on next call
+                print(f"[{device}] Found joinable {rally_type} rally (icon_y={label_y}, join_y={join_y}, dist={best_dist})")
 
-                        time.sleep(1)
-                        if tap_image("depart.png", device):
-                            # Verify join succeeded — already on map screen after depart
-                            time.sleep(2)
-                            new_troops = troops_avail(device)
-                            if new_troops < troops:
-                                print(f"[{device}] {rally_type} rally joined! (troops {troops} → {new_troops})")
-                                return rally_type
-                            else:
-                                print(f"[{device}] Depart clicked but troops unchanged ({troops}) — join likely failed (rally full?)")
-                                navigate("war_screen", device)
-                                continue  # Try next match
-                        else:
-                            print(f"[{device}] Depart button not found — backing out")
-                            adb_tap(device, 75, 75)
-                            time.sleep(1)
-                            if not _on_war_screen():
-                                return "lost"
-                            return False
+                h, w = join_btn.shape[:2]
+                print(f"[{device}] Clicking join at ({join_x + w // 2}, {join_y + h // 2})")
+                adb_tap(device, join_x + w // 2, join_y + h // 2)
+                time.sleep(1)
+
+                # Wait for slot or full rally
+                slot_found = False
+                rally_full = False
+                start_time = time.time()
+                while time.time() - start_time < 5:
+                    s = load_screenshot(device)
+                    if s is not None and find_image(s, "full_rally.png", threshold=0.8):
+                        rally_full = True
+                        break
+                    if tap_image("slot.png", device):
+                        slot_found = True
+                        break
+                    time.sleep(0.5)
+
+                if rally_full:
+                    print(f"[{device}] Rally is full — backing out")
+                    if not _backout_to_war_screen():
+                        return "lost"
+                    return False  # Force fresh screenshot on next call
+
+                if not slot_found:
+                    print(f"[{device}] No slot found (rally may be full) — backing out")
+                    if not _backout_to_war_screen():
+                        return "lost"
+                    return False  # Force fresh screenshot on next call
+
+                time.sleep(1)
+                if tap_image("depart.png", device):
+                    # Verify join succeeded — already on map screen after depart
+                    time.sleep(2)
+                    new_troops = troops_avail(device)
+                    if new_troops < troops:
+                        print(f"[{device}] {rally_type} rally joined! (troops {troops} → {new_troops})")
+                        return rally_type
+                    else:
+                        print(f"[{device}] Depart clicked but troops unchanged ({troops}) — join likely failed (rally full?)")
+                        navigate("war_screen", device)
+                        continue  # Try next match
+                else:
+                    print(f"[{device}] Depart button not found — backing out")
+                    if not _backout_to_war_screen():
+                        return "lost"
+                    return False
 
         return False
 
