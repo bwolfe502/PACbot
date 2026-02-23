@@ -1281,6 +1281,32 @@ def create_gui():
 # ============================================================
 
 if __name__ == "__main__":
+    # Set up logging to file (clears each run)
+    _log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pacbot.log")
+    _log_file = open(_log_path, "w", encoding="utf-8")
+
+    class _Tee:
+        """Write to both the original stream and the log file."""
+        def __init__(self, stream, log):
+            self._stream = stream
+            self._log = log
+        def write(self, data):
+            self._stream.write(data)
+            try:
+                self._log.write(data)
+                self._log.flush()
+            except Exception:
+                pass
+        def flush(self):
+            self._stream.flush()
+            try:
+                self._log.flush()
+            except Exception:
+                pass
+
+    sys.stdout = _Tee(sys.stdout, _log_file)
+    sys.stderr = _Tee(sys.stderr, _log_file)
+
     from license import validate_license
     validate_license()
     print("Running PACbot...")
