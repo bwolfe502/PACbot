@@ -177,7 +177,7 @@ def _check_quests_legacy(device, stop_check):
         if quest_img in ("eg.png", "titans.png"):
             if has_eg and has_titan:
                 print(f"[{device}] Both EG and Titan quests active — joining any available rally...")
-                joined = join_rally("eg", device) or join_rally("titan", device)
+                joined = join_rally(["eg", "titan"], device)
             elif quest_img == "eg.png":
                 print(f"[{device}] Attempting to join an Evil Guard rally...")
                 joined = join_rally("eg", device)
@@ -305,26 +305,20 @@ def check_quests(device, stop_check=None):
                     print(f"[{device}] All rally quests covered (pending completion)")
                     break
 
-                joined = False
-                joined_type = None
-
+                # Build list of types to look for and join any in a single war screen pass
+                types_to_join = []
                 if eg_needed > 0:
-                    print(f"[{device}] Trying to join EG rally ({eg_needed} still needed)...")
-                    if join_rally("eg", device):
-                        joined = True
-                        joined_type = "eg"
-                    if stop_check and stop_check():
-                        return
+                    types_to_join.append("eg")
+                if titan_needed > 0:
+                    types_to_join.append("titan")
 
-                if not joined and titan_needed > 0:
-                    print(f"[{device}] Trying to join Titan rally ({titan_needed} still needed)...")
-                    if join_rally("titan", device):
-                        joined = True
-                        joined_type = "titan"
-                    if stop_check and stop_check():
-                        return
+                needed_str = ", ".join(f"{t} ({_effective_remaining(t, *quest_info[t])})" for t in types_to_join)
+                print(f"[{device}] Looking for {'/'.join(types_to_join)} rally ({needed_str} needed)...")
+                joined_type = join_rally(types_to_join, device)
+                if stop_check and stop_check():
+                    return
 
-                if joined:
+                if joined_type:
                     _record_rally_started(joined_type)
                     any_joined = True
                     continue  # Try to join another
@@ -589,8 +583,15 @@ def teleport(device):
 # RALLY FUNCTIONS
 # ============================================================
 
-def join_rally(rally_type, device):
-    """Join a specific type of rally by looking for its icon"""
+def join_rally(rally_types, device):
+    """Join a rally of any given type(s) by looking for icons on the war screen.
+    rally_types: string or list of strings (e.g. "eg" or ["eg", "titan"]).
+    Checks all types simultaneously on each scroll position.
+    Returns the type joined as a string, or False if none found.
+    """
+    if isinstance(rally_types, str):
+        rally_types = [rally_types]
+
     if config.AUTO_HEAL_ENABLED:
         heal_all(device)
 
@@ -603,12 +604,19 @@ def join_rally(rally_type, device):
         print(f"[{device}] Failed to navigate to war screen")
         return False
 
-    rally_icon = get_template(f"elements/rally/{rally_type}.png")
+    # Load templates for all requested types
+    rally_icons = {}
+    for rt in rally_types:
+        icon = get_template(f"elements/rally/{rt}.png")
+        if icon is not None:
+            rally_icons[rt] = icon
     join_btn = get_template("elements/rally/join.png")
 
-    if rally_icon is None or join_btn is None:
+    if not rally_icons or join_btn is None:
         print(f"[{device}] Missing rally images")
         return False
+
+    types_str = "/".join(rally_types)
 
     def _on_war_screen():
         """Check if we're still on the war screen."""
@@ -632,68 +640,72 @@ def join_rally(rally_type, device):
         time.sleep(1)
 
     def check_for_joinable_rally():
-        """Check current screen for a joinable rally.
-        Returns True if joined, False if none found, 'lost' if off war screen."""
+        """Check current screen for a joinable rally of any requested type.
+        Returns type string if joined, False if none found, 'lost' if off war screen."""
         screen = load_screenshot(device)
         if screen is None:
             return False
 
-        rally_locs = find_all_matches(screen, f"rally/{rally_type}.png")
         join_locs = find_all_matches(screen, "rally/join.png")
+        if not join_locs:
+            return False
 
-        # Match rallies with JOIN buttons by Y proximity
-        for rally_x, rally_y in rally_locs:
-            for join_x, join_y in join_locs:
-                if abs(join_y - rally_y) < 200:
-                    print(f"[{device}] Found joinable {rally_type} rally")
+        for rally_type in rally_types:
+            if rally_type not in rally_icons:
+                continue
+            rally_locs = find_all_matches(screen, f"rally/{rally_type}.png")
 
-                    h, w = join_btn.shape[:2]
-                    adb_tap(device, join_x + w // 2, join_y + h // 2)
+            for rally_x, rally_y in rally_locs:
+                for join_x, join_y in join_locs:
+                    if abs(join_y - rally_y) < 200:
+                        print(f"[{device}] Found joinable {rally_type} rally")
 
-                    # Wait for slot or full rally
-                    slot_found = False
-                    rally_full = False
-                    start_time = time.time()
-                    while time.time() - start_time < 5:
-                        s = load_screenshot(device)
-                        if s is not None and find_image(s, "full_rally.png", threshold=0.8):
-                            rally_full = True
-                            break
-                        if tap_image("slot.png", device):
-                            slot_found = True
-                            break
-                        time.sleep(0.5)
+                        h, w = join_btn.shape[:2]
+                        adb_tap(device, join_x + w // 2, join_y + h // 2)
 
-                    if rally_full:
-                        print(f"[{device}] Rally is full — backing out")
-                        tap_image("close_x.png", device)
+                        # Wait for slot or full rally
+                        slot_found = False
+                        rally_full = False
+                        start_time = time.time()
+                        while time.time() - start_time < 5:
+                            s = load_screenshot(device)
+                            if s is not None and find_image(s, "full_rally.png", threshold=0.8):
+                                rally_full = True
+                                break
+                            if tap_image("slot.png", device):
+                                slot_found = True
+                                break
+                            time.sleep(0.5)
+
+                        if rally_full:
+                            print(f"[{device}] Rally is full — backing out")
+                            tap_image("close_x.png", device)
+                            time.sleep(1)
+                            adb_tap(device, 75, 75)
+                            time.sleep(1)
+                            if not _on_war_screen():
+                                return "lost"
+                            return False
+
+                        if not slot_found:
+                            print(f"[{device}] No slot found — backing out")
+                            adb_tap(device, 75, 75)
+                            time.sleep(1)
+                            if not _on_war_screen():
+                                return "lost"
+                            return False
+
                         time.sleep(1)
-                        adb_tap(device, 75, 75)
-                        time.sleep(1)
-                        # Verify we're still on war screen
-                        if not _on_war_screen():
-                            return "lost"
-                        return False
-
-                    if not slot_found:
-                        print(f"[{device}] No slot found — backing out")
-                        adb_tap(device, 75, 75)
-                        time.sleep(1)
-                        if not _on_war_screen():
-                            return "lost"
-                        return False
-
-                    time.sleep(1)
-                    tap_image("depart.png", device)
-                    print(f"[{device}] Rally joined!")
-                    return True
+                        tap_image("depart.png", device)
+                        print(f"[{device}] {rally_type} rally joined!")
+                        return rally_type
 
         return False
 
     # Check current view first
     result = check_for_joinable_rally()
-    if result is True:
-        return True
+    if result not in (False, "lost"):
+        return result
     if result == "lost":
         print(f"[{device}] Lost war screen after failed join, aborting")
         return False
@@ -717,8 +729,8 @@ def join_rally(rally_type, device):
     time.sleep(1)
 
     result = check_for_joinable_rally()
-    if result is True:
-        return True
+    if result not in (False, "lost"):
+        return result
     if result == "lost":
         print(f"[{device}] Lost war screen after failed join, aborting")
         return False
@@ -731,14 +743,14 @@ def join_rally(rally_type, device):
         adb_swipe(device, 560, 948, 560, 245, 500)
         time.sleep(1)
         result = check_for_joinable_rally()
-        if result is True:
-            return True
+        if result not in (False, "lost"):
+            return result
         if result == "lost":
             print(f"[{device}] Lost war screen after failed join, aborting")
             return False
 
     # No rally found - exit war screen cleanly
-    print(f"[{device}] No {rally_type} rally found after scrolling")
+    print(f"[{device}] No {types_str} rally found after scrolling")
     _exit_war_screen()
     return False
 
