@@ -755,8 +755,17 @@ def join_rally(rally_types, device):
 
                         time.sleep(1)
                         if tap_image("depart.png", device):
-                            print(f"[{device}] {rally_type} rally joined!")
-                            return rally_type
+                            # Verify join succeeded by checking troop count
+                            time.sleep(2)
+                            navigate("map_screen", device)
+                            new_troops = troops_avail(device)
+                            if new_troops < troops:
+                                print(f"[{device}] {rally_type} rally joined! (troops {troops} → {new_troops})")
+                                return rally_type
+                            else:
+                                print(f"[{device}] Depart clicked but troops unchanged ({troops}) — join likely failed (rally full?)")
+                                navigate("war_screen", device)
+                                continue  # Try next match
                         else:
                             print(f"[{device}] Depart button not found — backing out")
                             adb_tap(device, 75, 75)
