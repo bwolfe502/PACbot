@@ -1186,6 +1186,7 @@ def search_eg_reset(device):
 
 def rally_eg(device):
     """Start an evil guard rally from map screen"""
+    print(f"[{device}] rally_eg() called")
     if config.AUTO_HEAL_ENABLED:
         heal_all(device)
 
@@ -1196,6 +1197,7 @@ def rally_eg(device):
 
     # AP check (if unreadable, proceed anyway — game handles low AP with its own prompt)
     ap = read_ap(device)
+    print(f"[{device}] EG rally: AP = {ap}")
     if ap is not None and ap[0] < config.AP_COST_EVIL_GUARD:
         if config.AUTO_RESTORE_AP_ENABLED:
             if not restore_ap(device, config.AP_COST_EVIL_GUARD):
