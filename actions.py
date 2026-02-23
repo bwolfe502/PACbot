@@ -233,6 +233,18 @@ def check_quests(device, stop_check=None):
     quests = _ocr_quest_rows(device)
 
     if quests is not None:
+        # Deduplicate quest types — each rally counts toward ALL quests of the
+        # same type (alliance + side), so we only need max(remaining) rallies.
+        # e.g. titan 14/15 (alliance) + titan 0/5 (side) → keep 0/5, need 5 not 6.
+        best_by_type = {}
+        for q in quests:
+            qt = q["quest_type"]
+            remaining = q["target"] - q["current"]
+            prev = best_by_type.get(qt)
+            if prev is None or remaining > (prev["target"] - prev["current"]):
+                best_by_type[qt] = q
+        quests = list(best_by_type.values())
+
         # Update tracking with latest counter values
         for q in quests:
             if q["quest_type"] in ("titan", "eg", "pvp"):
