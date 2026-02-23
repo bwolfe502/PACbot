@@ -116,18 +116,30 @@ def _fetch_valid_keys():
     """
     import requests
 
+    import time as _time
+
     url = _get_sheet_url()
 
-    try:
-        resp = requests.get(url, timeout=10)
-        resp.raise_for_status()
-    except requests.ConnectionError:
-        print("ERROR: Cannot connect to the internet to validate license.")
-        print("Please check your internet connection and try again.")
-        sys.exit(1)
-    except requests.RequestException as e:
-        print(f"ERROR: Failed to validate license: {e}")
-        sys.exit(1)
+    for attempt in range(3):
+        try:
+            resp = requests.get(url, timeout=15)
+            resp.raise_for_status()
+            break
+        except requests.ConnectionError:
+            if attempt < 2:
+                print(f"Connection failed, retrying ({attempt + 1}/3)...")
+                _time.sleep(3)
+                continue
+            print("ERROR: Cannot connect to the internet to validate license.")
+            print("Please check your internet connection and try again.")
+            sys.exit(1)
+        except requests.RequestException as e:
+            if attempt < 2:
+                print(f"Request failed ({e}), retrying ({attempt + 1}/3)...")
+                _time.sleep(3)
+                continue
+            print(f"ERROR: Failed to validate license after 3 attempts: {e}")
+            sys.exit(1)
 
     valid_keys = {}
     reader = csv.reader(io.StringIO(resp.text))
