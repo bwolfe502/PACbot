@@ -41,7 +41,7 @@ os.makedirs(CLICKS_DIR, exist_ok=True)
 
 _click_seq = 0
 
-def _cleanup_clicks_dir(max_files=100):
+def _cleanup_clicks_dir(max_files=20):
     try:
         files = sorted(
             [os.path.join(CLICKS_DIR, f) for f in os.listdir(CLICKS_DIR) if f.endswith(".png")],
