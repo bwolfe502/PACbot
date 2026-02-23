@@ -305,7 +305,18 @@ def tap_image(image_name, device, threshold=0.8):
         print(f"[{device}] Found and tapped {image_name} at ({center_x}, {center_y})")
         return True
     else:
-        print(f"[{device}] Couldn't find {image_name}")
+        # Log best match score for debugging template match failures
+        button = get_template(f"elements/{image_name}")
+        if screen is not None and button is not None:
+            search_area = screen
+            if region:
+                x1, y1, x2, y2 = region
+                search_area = screen[y1:y2, x1:x2]
+            result = cv2.matchTemplate(search_area, button, cv2.TM_CCOEFF_NORMED)
+            _, best_val, _, _ = cv2.minMaxLoc(result)
+            print(f"[{device}] Couldn't find {image_name} (best: {best_val*100:.0f}%, need: {threshold*100:.0f}%)")
+        else:
+            print(f"[{device}] Couldn't find {image_name} (template or screenshot missing)")
         return False
 
 def logged_tap(device, x, y, label="coord_tap"):

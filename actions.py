@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 import time
 import random
+import os
 
 import config
 from vision import (tap_image, wait_for_image_and_tap, load_screenshot,
@@ -357,8 +358,30 @@ def join_rally(rally_type, device):
         print(f"[{device}] Missing rally images")
         return False
 
+    def _on_war_screen():
+        """Check if we're still on the war screen."""
+        screen = load_screenshot(device)
+        if screen is None:
+            return False
+        if find_image(screen, "war_screen.png", threshold=0.8):
+            return True
+        print(f"[{device}] Not on war screen anymore")
+        return False
+
+    def _exit_war_screen():
+        """Navigate back from war screen to map, checking screen between taps."""
+        for _ in range(4):
+            adb_tap(device, 75, 75)
+            time.sleep(1)
+            if check_screen(device) == "map_screen":
+                return
+        # Last resort — try bottom nav
+        adb_tap(device, 965, 1865)
+        time.sleep(1)
+
     def check_for_joinable_rally():
-        """Check current screen for a joinable rally"""
+        """Check current screen for a joinable rally.
+        Returns True if joined, False if none found, 'lost' if off war screen."""
         screen = load_screenshot(device)
         if screen is None:
             return False
@@ -390,17 +413,22 @@ def join_rally(rally_type, device):
                         time.sleep(0.5)
 
                     if rally_full:
-                        print(f"[{device}] Rally is full — closing back to rally list")
+                        print(f"[{device}] Rally is full — backing out")
                         tap_image("full_rally.png", device)
                         time.sleep(1)
-                        adb_tap(device, 75, 75)  # Back to rally list
+                        adb_tap(device, 75, 75)
                         time.sleep(1)
+                        # Verify we're still on war screen
+                        if not _on_war_screen():
+                            return "lost"
                         return False
 
                     if not slot_found:
-                        print(f"[{device}] No slot found — closing back to rally list")
-                        adb_tap(device, 75, 75)  # Back to rally list
+                        print(f"[{device}] No slot found — backing out")
+                        adb_tap(device, 75, 75)
                         time.sleep(1)
+                        if not _on_war_screen():
+                            return "lost"
                         return False
 
                     time.sleep(1)
@@ -411,8 +439,12 @@ def join_rally(rally_type, device):
         return False
 
     # Check current view first
-    if check_for_joinable_rally():
+    result = check_for_joinable_rally()
+    if result is True:
         return True
+    if result == "lost":
+        print(f"[{device}] Lost war screen after failed join, aborting")
+        return False
 
     # Check if we should scroll or not
     screen = load_screenshot(device)
@@ -420,40 +452,42 @@ def join_rally(rally_type, device):
 
     should_skip_scroll = False
     if screen is not None and scroll_check is not None:
-        result = cv2.matchTemplate(screen, scroll_check, cv2.TM_CCOEFF_NORMED)
-        _, max_val, _, _ = cv2.minMaxLoc(result)
+        res = cv2.matchTemplate(screen, scroll_check, cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, _ = cv2.minMaxLoc(res)
         should_skip_scroll = max_val > 0.8
 
     if should_skip_scroll:
-        adb_tap(device, 75, 75)
-        time.sleep(1)
-        adb_tap(device, 75, 75)
-        time.sleep(1)
-        adb_tap(device, 965, 1865)
-        time.sleep(1)
+        _exit_war_screen()
         return False
 
     # Scroll up to top
     adb_swipe(device, 560, 300, 560, 1400, 500)
     time.sleep(1)
 
-    if check_for_joinable_rally():
+    result = check_for_joinable_rally()
+    if result is True:
         return True
+    if result == "lost":
+        print(f"[{device}] Lost war screen after failed join, aborting")
+        return False
 
     # Scroll down and check 5 times
     for attempt in range(5):
+        if not _on_war_screen():
+            print(f"[{device}] No longer on war screen — aborting scroll loop")
+            return False
         adb_swipe(device, 560, 948, 560, 245, 500)
         time.sleep(1)
-        if check_for_joinable_rally():
+        result = check_for_joinable_rally()
+        if result is True:
             return True
+        if result == "lost":
+            print(f"[{device}] Lost war screen after failed join, aborting")
+            return False
 
-    # Timed out - go back
-    adb_tap(device, 75, 75)
-    time.sleep(1)
-    adb_tap(device, 75, 75)
-    time.sleep(1)
-    adb_tap(device, 965, 1865)
-    time.sleep(1)
+    # No rally found - exit war screen cleanly
+    print(f"[{device}] No {rally_type} rally found after scrolling")
+    _exit_war_screen()
     return False
 
 # ============================================================
@@ -498,6 +532,7 @@ def _read_ap_from_menu(device):
     import re
     screen = load_screenshot(device)
     if screen is None:
+        print(f"[{device}] AP menu OCR: screenshot failed")
         return None
 
     x1, y1, x2, y2 = _AP_MENU_REGION
@@ -506,14 +541,22 @@ def _read_ap_from_menu(device):
     gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
     inverted = cv2.bitwise_not(gray)
 
+    # Save debug crop so we can inspect what OCR sees
+    debug_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug")
+    os.makedirs(debug_dir, exist_ok=True)
+    cv2.imwrite(os.path.join(debug_dir, "ap_menu_crop.png"), inverted)
+    print(f"[{device}] AP menu OCR: saved debug/ap_menu_crop.png (region {_AP_MENU_REGION})")
+
     from vision import _get_ocr_reader
     reader = _get_ocr_reader()
     results = reader.readtext(inverted, allowlist="0123456789/", detail=0)
     raw = " ".join(results).strip()
+    print(f"[{device}] AP menu OCR raw: '{raw}'")
 
     match = re.search(r"(\d+)/(\d+)", raw)
     if match:
         return int(match.group(1)), int(match.group(2))
+    print(f"[{device}] AP menu OCR: no 'X/Y' pattern found in '{raw}'")
     return None
 
 def _read_gem_cost(device):
@@ -566,13 +609,24 @@ def restore_ap(device, needed):
     menu_opened = False
     for attempt in range(5):
         screen = load_screenshot(device)
-        if screen is not None and find_image(screen, "apwindow.png", threshold=0.8):
-            menu_opened = True
-            break
+        if screen is not None:
+            match = find_image(screen, "apwindow.png", threshold=0.8)
+            if match:
+                print(f"[{device}] AP Recovery menu detected (attempt {attempt + 1})")
+                menu_opened = True
+                break
+            else:
+                print(f"[{device}] Waiting for AP Recovery menu... (attempt {attempt + 1}/5)")
         time.sleep(1)
 
     if not menu_opened:
-        print(f"[{device}] AP Recovery menu did not open")
+        print(f"[{device}] AP Recovery menu did not open after 5 attempts")
+        # Save screenshot for debugging
+        debug_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug")
+        os.makedirs(debug_dir, exist_ok=True)
+        if screen is not None:
+            cv2.imwrite(os.path.join(debug_dir, "ap_menu_failed.png"), screen)
+            print(f"[{device}] Saved debug/ap_menu_failed.png")
         # Try to close whatever is open
         _close_ap_menu(device)
         return False
@@ -1065,10 +1119,11 @@ def join_war_rallies(device):
         should_skip_scroll = max_val > 0.8
 
     if should_skip_scroll:
-        adb_tap(device, 75, 75)
-        time.sleep(1)
-        adb_tap(device, 75, 75)
-        time.sleep(1)
+        for _ in range(4):
+            adb_tap(device, 75, 75)
+            time.sleep(1)
+            if check_screen(device) == "map_screen":
+                return
         adb_tap(device, 965, 1865)
         time.sleep(1)
         return
@@ -1090,11 +1145,12 @@ def join_war_rallies(device):
         if check_all_rallies_on_screen():
             return
 
-    # Timed out - go back
-    adb_tap(device, 75, 75)
-    time.sleep(1)
-    adb_tap(device, 75, 75)
-    time.sleep(1)
+    # Timed out - go back (check screen between taps to avoid overshooting)
+    print(f"[{device}] No war rallies available")
+    for _ in range(4):
+        adb_tap(device, 75, 75)
+        time.sleep(1)
+        if check_screen(device) == "map_screen":
+            return
     adb_tap(device, 965, 1865)
     time.sleep(1)
-    print(f"[{device}] No war rallies available")

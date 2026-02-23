@@ -49,7 +49,7 @@ def _save_debug_screenshot(device, label, screen=None):
 # SCREEN DETECTION
 # ============================================================
 
-SCREEN_TEMPLATES = ["map_screen", "bl_screen", "aq_screen", "td_screen", "territory_screen", "war_screen"]
+SCREEN_TEMPLATES = ["map_screen", "bl_screen", "aq_screen", "td_screen", "territory_screen", "war_screen", "profile_screen"]
 
 def check_screen(device):
     """Takes a screenshot and figures out what screen we're on.
@@ -201,7 +201,7 @@ def navigate(target_screen, device, _depth=0):
         if current == "td_screen":
             adb_tap(device, 990, 1850)
             time.sleep(1)
-        elif current in ["bl_screen", "aq_screen", "war_screen", "territory_screen"]:
+        elif current in ["bl_screen", "aq_screen", "war_screen", "territory_screen", "profile_screen"]:
             adb_tap(device, 75, 75)
             time.sleep(1)
             current = check_screen(device)
@@ -222,13 +222,15 @@ def navigate(target_screen, device, _depth=0):
     # To bl_screen
     if target_screen == "bl_screen":
         if current == "map_screen":
-            tap_image("bl_button.png", device)
+            if not tap_image("bl_button.png", device):
+                _save_debug_screenshot(device, "bl_button_not_found")
         elif current in ["aq_screen", "territory_screen"]:
             adb_tap(device, 75, 75)
         else:
             if not navigate("map_screen", device, _depth=_depth + 1):
                 return False
-            tap_image("bl_button.png", device)
+            if not tap_image("bl_button.png", device):
+                _save_debug_screenshot(device, "bl_button_not_found")
         return _verify_screen("bl_screen", device)
 
     # To aq_screen
