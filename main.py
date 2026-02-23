@@ -19,7 +19,7 @@ from vision import adb_tap, tap_image, load_screenshot, find_image, wait_for_ima
 from troops import troops_avail, heal_all
 from actions import (attack, reinforce_throne, target, check_quests, teleport,
                      rally_titan, rally_eg, search_eg_reset, join_rally,
-                     join_war_rallies)
+                     join_war_rallies, reset_quest_tracking)
 from territory import (attack_territory, auto_occupy_loop,
                        open_territory_manager, sample_specific_squares)
 
@@ -107,6 +107,7 @@ def sleep_interval(base, variation, stop_check):
 
 def run_auto_quest(device, stop_event):
     print(f"[{device}] Auto Quest started")
+    reset_quest_tracking()
     stop_check = stop_event.is_set
     try:
         while not stop_check():

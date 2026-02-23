@@ -3,6 +3,7 @@ import numpy as np
 import time
 import random
 import os
+import re
 
 import config
 from vision import (tap_image, wait_for_image_and_tap, load_screenshot,
@@ -16,8 +17,197 @@ from troops import troops_avail, all_troops_home, heal_all
 # BASIC GAME ACTIONS
 # ============================================================
 
+# ---- Quest rally tracking ----
+# Tracks rallies started but not yet reflected in the quest counter,
+# so we don't over-rally while waiting for completion (1-5+ minutes each).
+
+_quest_rallies_pending = {}   # e.g. {"titan": 2, "eg": 1}
+_quest_last_seen = {}         # e.g. {"titan": 10, "eg": 0} — last OCR counter values
+
+
+def _track_quest_progress(quest_type, current):
+    """Update pending rally count based on OCR counter progress.
+    When the counter advances, we know some pending rallies completed."""
+    last = _quest_last_seen.get(quest_type)
+    if last is not None and current > last:
+        completed = current - last
+        pending = _quest_rallies_pending.get(quest_type, 0)
+        _quest_rallies_pending[quest_type] = max(0, pending - completed)
+        if completed > 0 and pending > 0:
+            print(f"  [{quest_type}] {completed} rally(s) completed, {_quest_rallies_pending[quest_type]} still pending")
+    elif last is not None and current < last:
+        # Counter went backwards (quest reset / new day) — clear tracking
+        _quest_rallies_pending[quest_type] = 0
+    _quest_last_seen[quest_type] = current
+
+
+def _record_rally_started(quest_type):
+    """Record that we started/joined a rally for this quest type."""
+    _quest_rallies_pending[quest_type] = _quest_rallies_pending.get(quest_type, 0) + 1
+    print(f"  [{quest_type}] Rally started — {_quest_rallies_pending[quest_type]} pending")
+
+
+def _effective_remaining(quest_type, current, target):
+    """How many more rallies we actually need, accounting for in-progress ones."""
+    base_remaining = target - current
+    pending = _quest_rallies_pending.get(quest_type, 0)
+    return max(0, base_remaining - pending)
+
+
+def reset_quest_tracking():
+    """Clear all rally tracking state. Call when auto quest starts or stops."""
+    _quest_rallies_pending.clear()
+    _quest_last_seen.clear()
+
+
+# ---- Quest OCR helpers ----
+
+def _classify_quest_text(text):
+    """Classify quest type from OCR text."""
+    t = text.lower()
+    if "titan" in t:
+        return "titan"
+    if "evil" in t or "guard" in t:
+        return "eg"
+    if "pvp" in t or "attack" in t:
+        return "pvp"
+    if "gather" in t:
+        return "gather"
+    if "occupy" in t or "fortress" in t:
+        return "fortress"
+    if "tower" in t:
+        return "tower"
+    return None
+
+
+def _ocr_quest_rows(device):
+    """Read quest counters from the AQ screen using OCR.
+    Crops the quest list region, runs OCR, and parses counter patterns like 'Defeat Titans(0/5)'.
+    Returns a list of quest dicts, or None if OCR fails.
+    """
+    screen = load_screenshot(device)
+    if screen is None:
+        return None
+
+    # Crop quest list region (y=590 to y=1150, full width)
+    quest_region = screen[590:1150, :]
+    gray = cv2.cvtColor(quest_region, cv2.COLOR_BGR2GRAY)
+    gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+
+    # Save debug crop
+    debug_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug")
+    os.makedirs(debug_dir, exist_ok=True)
+    cv2.imwrite(os.path.join(debug_dir, "aq_ocr_crop.png"), gray)
+
+    from vision import _get_ocr_reader
+    reader = _get_ocr_reader()
+    results = reader.readtext(gray, detail=0)
+    raw_text = " ".join(results)
+    print(f"[{device}] === Quest OCR raw: {raw_text}")
+
+    if not raw_text.strip():
+        print(f"[{device}] Quest OCR: no text detected")
+        return None
+
+    # Parse quest entries matching "Quest Name(X/Y)" pattern
+    quests = []
+    for match in re.finditer(r"(.+?)\((\d[\d,]*)/(\d[\d,]*)\)", raw_text):
+        name = match.group(1).strip()
+        current = int(match.group(2).replace(",", ""))
+        target = int(match.group(3).replace(",", ""))
+        quest_type = _classify_quest_text(name)
+        completed = current >= target
+
+        quest = {
+            "quest_type": quest_type,
+            "current": current,
+            "target": target,
+            "completed": completed,
+            "text": match.group(0).strip(),
+        }
+        quests.append(quest)
+
+        remaining = target - current
+        status = "DONE" if completed else f"{remaining} remaining"
+        skip = " (skip)" if quest_type in ("gather", "fortress", "tower", None) else ""
+        print(f"[{device}]   {quest_type or 'unknown'}: {current}/{target} — {status}{skip}")
+
+    if not quests:
+        print(f"[{device}] Quest OCR: no quest patterns found in text")
+        return None
+
+    return quests
+
+
+def _check_quests_legacy(device, stop_check):
+    """Legacy PNG-based quest detection. Used as fallback when OCR fails."""
+    screen = load_screenshot(device)
+    if screen is None:
+        print(f"[{device}] Failed to load screenshot for quest check")
+        return
+
+    # Check for quest types in lower segment of screen (below y=1280)
+    lower_screen = screen[1280:, :]
+    quest_images = ["eg.png", "titans.png", "pvp.png", "tower.png", "gold.png"]
+
+    quest_scores = {}
+    for quest_img in quest_images:
+        button = get_template(f"elements/quests/{quest_img}")
+        if button is None:
+            continue
+        result = cv2.matchTemplate(lower_screen, button, cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, _ = cv2.minMaxLoc(result)
+        quest_scores[quest_img] = max_val
+
+    score_str = " | ".join(f"{name}: {val*100:.0f}%" for name, val in
+                           sorted(quest_scores.items(), key=lambda x: x[1], reverse=True))
+    print(f"[{device}] Quest scores (legacy): {score_str}")
+
+    active_quests = [q for q, score in quest_scores.items() if score > 0.85]
+    if active_quests:
+        print(f"[{device}] Active quests (legacy): {', '.join(active_quests)}")
+
+    has_eg = "eg.png" in active_quests
+    has_titan = "titans.png" in active_quests
+
+    for quest_img in active_quests:
+        if stop_check and stop_check():
+            return
+
+        if quest_img in ("eg.png", "titans.png"):
+            if has_eg and has_titan:
+                print(f"[{device}] Both EG and Titan quests active — joining any available rally...")
+                joined = join_rally("eg", device) or join_rally("titan", device)
+            elif quest_img == "eg.png":
+                print(f"[{device}] Attempting to join an Evil Guard rally...")
+                joined = join_rally("eg", device)
+            else:
+                print(f"[{device}] Attempting to join a Titan rally...")
+                joined = join_rally("titan", device)
+
+            if not joined:
+                if quest_img == "eg.png":
+                    print(f"[{device}] No rally to join, starting own EG rally")
+                    if navigate("map_screen", device):
+                        rally_eg(device)
+                else:
+                    print(f"[{device}] No rally to join, starting own Titan rally")
+                    if navigate("map_screen", device):
+                        rally_titan(device)
+            break
+        elif quest_img == "pvp.png":
+            if navigate("map_screen", device):
+                target(device)
+                if stop_check and stop_check():
+                    return
+                attack(device)
+            break
+
+
 def check_quests(device, stop_check=None):
-    """Checks if we're on map screen and clicks the quests button.
+    """Check alliance/side quests using OCR counter reading, with PNG fallback.
+    Reads quest counters (e.g. 'Defeat Titans(0/5)') to determine what needs work.
+    Priority: Join EG > Join Titan > Start own Titan > Start own EG > PvP.
     stop_check: optional callable that returns True if we should abort immediately.
     """
     if stop_check and stop_check():
@@ -39,75 +229,86 @@ def check_quests(device, stop_check=None):
     if stop_check and stop_check():
         return
 
-    # Take screenshot for quest detection
-    screen = load_screenshot(device)
-    if screen is None:
-        print(f"[{device}] Failed to load screenshot for quest check")
-        return
+    # Try OCR-based quest detection
+    quests = _ocr_quest_rows(device)
 
-    # Check for quest types in lower segment of screen (below y=1280)
-    lower_screen = screen[1280:, :]
-    quest_images = ["eg.png", "titans.png", "pvp.png", "tower.png", "gold.png"]
+    if quests is not None:
+        # Update tracking with latest counter values
+        for q in quests:
+            if q["quest_type"] in ("titan", "eg", "pvp"):
+                _track_quest_progress(q["quest_type"], q["current"])
 
-    # Scan all quests first to know what's active
-    quest_scores = {}
-    for quest_img in quest_images:
-        button = get_template(f"elements/quests/{quest_img}")
-        if button is None:
-            continue
-        result = cv2.matchTemplate(lower_screen, button, cv2.TM_CCOEFF_NORMED)
-        _, max_val, _, _ = cv2.minMaxLoc(result)
-        quest_scores[quest_img] = max_val
+        # Filter to quests that still need work (accounting for pending rallies)
+        actionable = []
+        for q in quests:
+            if q["completed"] or q["quest_type"] not in ("titan", "eg", "pvp"):
+                continue
+            eff = _effective_remaining(q["quest_type"], q["current"], q["target"])
+            if eff > 0:
+                actionable.append(q)
 
-    # Log all scores for debugging
-    score_str = " | ".join(f"{name}: {val*100:.0f}%" for name, val in
-                           sorted(quest_scores.items(), key=lambda x: x[1], reverse=True))
-    print(f"[{device}] Quest scores: {score_str}")
-
-    active_quests = [q for q, score in quest_scores.items() if score > 0.85]
-    if active_quests:
-        print(f"[{device}] Active quests: {', '.join(active_quests)}")
-
-    has_eg = "eg.png" in active_quests
-    has_titan = "titans.png" in active_quests
-
-    for quest_img in active_quests:
-        if stop_check and stop_check():
-            return
-
-        if stop_check and stop_check():
-            return
-
-        if quest_img in ("eg.png", "titans.png"):
-            # If both EG and Titan quests are active, try joining either
-            if has_eg and has_titan:
-                print(f"[{device}] Both EG and Titan quests active — joining any available rally...")
-                joined = join_rally("eg", device) or join_rally("titan", device)
-            elif quest_img == "eg.png":
-                print(f"[{device}] Attempting to join an Evil Guard rally...")
-                joined = join_rally("eg", device)
+        if not actionable:
+            # Check if we're truly done or just waiting for pending rallies
+            pending_types = [qt for qt, cnt in _quest_rallies_pending.items() if cnt > 0]
+            if pending_types:
+                pending_str = ", ".join(f"{qt} ({_quest_rallies_pending[qt]})" for qt in pending_types)
+                print(f"[{device}] Waiting for pending rallies to complete: {pending_str}")
             else:
-                print(f"[{device}] Attempting to join a Titan rally...")
-                joined = join_rally("titan", device)
+                print(f"[{device}] No actionable quests remaining (all complete or skip-only)")
+            return
 
-            if not joined:
-                # Fall back to starting own rally for the detected quest type
-                if quest_img == "eg.png":
-                    print(f"[{device}] No rally to join, starting own EG rally")
-                    if navigate("map_screen", device):
-                        rally_eg(device)
-                else:
+        remaining_str = ", ".join(
+            f"{q['quest_type']} ({_effective_remaining(q['quest_type'], q['current'], q['target'])} needed)" for q in actionable
+        )
+        print(f"[{device}] Actionable: {remaining_str}")
+
+        types_active = {q["quest_type"] for q in actionable}
+        has_eg = "eg" in types_active
+        has_titan = "titan" in types_active
+        has_pvp = "pvp" in types_active
+
+        # Priority: Join EG first > Join Titan > Start own Titan > Start own EG
+        if has_eg or has_titan:
+            joined = False
+            joined_type = None
+
+            if has_eg:
+                print(f"[{device}] Trying to join EG rally...")
+                if join_rally("eg", device):
+                    joined = True
+                    joined_type = "eg"
+
+            if not joined and has_titan:
+                print(f"[{device}] Trying to join Titan rally...")
+                if join_rally("titan", device):
+                    joined = True
+                    joined_type = "titan"
+
+            if joined:
+                _record_rally_started(joined_type)
+            else:
+                # Start own rally: prefer titan (faster/simpler) over eg
+                if has_titan:
                     print(f"[{device}] No rally to join, starting own Titan rally")
                     if navigate("map_screen", device):
-                        rally_titan(device)
-            break
-        elif quest_img == "pvp.png":
+                        if rally_titan(device):
+                            _record_rally_started("titan")
+                elif has_eg:
+                    print(f"[{device}] No rally to join, starting own EG rally")
+                    if navigate("map_screen", device):
+                        if rally_eg(device):
+                            _record_rally_started("eg")
+
+        elif has_pvp:
             if navigate("map_screen", device):
                 target(device)
                 if stop_check and stop_check():
                     return
                 attack(device)
-            break
+    else:
+        # OCR failed — fall back to PNG matching
+        print(f"[{device}] OCR failed, falling back to PNG quest detection")
+        _check_quests_legacy(device, stop_check)
 
 def attack(device):
     """Heal all troops first (if auto heal enabled), then check troops and attack"""
