@@ -301,30 +301,42 @@ def check_quests(device, stop_check=None):
                     if join_rally("eg", device):
                         joined = True
                         joined_type = "eg"
+                    if stop_check and stop_check():
+                        return
 
                 if not joined and titan_needed > 0:
                     print(f"[{device}] Trying to join Titan rally ({titan_needed} still needed)...")
                     if join_rally("titan", device):
                         joined = True
                         joined_type = "titan"
+                    if stop_check and stop_check():
+                        return
 
                 if joined:
                     _record_rally_started(joined_type)
                     any_joined = True
                     continue  # Try to join another
 
-                # No rally to join — start own rally (once only, then break)
+                # No rally to join — start own rally, then loop to start more if needed
+                started = False
                 if titan_needed > 0:
                     print(f"[{device}] No rally to join, starting own Titan rally")
                     if navigate("map_screen", device):
                         if rally_titan(device):
                             _record_rally_started("titan")
+                            started = True
+                    if stop_check and stop_check():
+                        return
                 elif eg_needed > 0:
                     print(f"[{device}] No rally to join, starting own EG rally")
                     if navigate("map_screen", device):
                         if rally_eg(device):
                             _record_rally_started("eg")
-                break  # Only start one own rally per check
+                            started = True
+                    if stop_check and stop_check():
+                        return
+                if not started:
+                    break  # Rally failed, stop trying
 
         elif has_pvp:
             if navigate("map_screen", device):
