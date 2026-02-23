@@ -685,6 +685,11 @@ def join_rally(rally_types, device):
         text = " ".join(results).lower()
         print(f"[{device}] Rally row OCR: {text}")
 
+        # Skip rallies that are already full
+        if "full" in text:
+            print(f"[{device}] Rally is full (OCR text) — skipping")
+            return False
+
         keywords = _rally_verify_keywords.get(expected_type, [])
         for kw in keywords:
             if kw in text:
@@ -718,20 +723,9 @@ def join_rally(rally_types, device):
 
                         print(f"[{device}] Found joinable {rally_type} rally")
 
-                        # Fresh-find the join button closest to this rally's y position
-                        fresh = load_screenshot(device)
-                        if fresh is None:
-                            continue
-                        fresh_joins = find_all_matches(fresh, "rally/join.png")
-                        if not fresh_joins:
-                            print(f"[{device}] Join button not found on fresh screenshot — skipping")
-                            continue
-                        # Pick the join button closest to the rally icon's y
-                        best_join = min(fresh_joins, key=lambda j: abs(j[1] - rally_y))
-                        jx, jy = best_join
-                        jh, jw = join_btn.shape[:2]
-                        print(f"[{device}] Clicking join at ({jx + jw // 2}, {jy + jh // 2})")
-                        adb_tap(device, jx + jw // 2, jy + jh // 2)
+                        h, w = join_btn.shape[:2]
+                        print(f"[{device}] Clicking join at ({join_x + w // 2}, {join_y + h // 2})")
+                        adb_tap(device, join_x + w // 2, join_y + h // 2)
                         time.sleep(1)
 
                         # Wait for slot or full rally
