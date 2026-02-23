@@ -653,6 +653,44 @@ def join_rally(rally_types, device):
         """Navigate back from war screen to map."""
         navigate("map_screen", device)
 
+    # Keywords to verify rally type from OCR text on the war screen row
+    _rally_verify_keywords = {
+        "titan": ["titan"],
+        "eg": ["evil", "guard"],
+        "pvp": ["pvp", "attack"],
+        "castle": ["castle"],
+        "pass": ["pass"],
+        "tower": ["tower"],
+    }
+
+    def _verify_rally_row(screen, rally_y, icon_h, expected_type):
+        """OCR the war screen row near a matched icon to verify the rally type.
+        Returns True if the text contains expected keywords for this rally type."""
+        h, w = screen.shape[:2]
+        y_start = max(0, rally_y - 20)
+        y_end = min(h, rally_y + icon_h + 20)
+        row_crop = screen[y_start:y_end, :]
+        gray = cv2.cvtColor(row_crop, cv2.COLOR_BGR2GRAY)
+        gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+
+        # Save debug crop
+        debug_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug")
+        os.makedirs(debug_dir, exist_ok=True)
+        cv2.imwrite(os.path.join(debug_dir, "rally_row_ocr.png"), gray)
+
+        from vision import _get_ocr_reader
+        reader = _get_ocr_reader()
+        results = reader.readtext(gray, detail=0)
+        text = " ".join(results).lower()
+        print(f"[{device}] Rally row OCR: {text}")
+
+        keywords = _rally_verify_keywords.get(expected_type, [])
+        for kw in keywords:
+            if kw in text:
+                return True
+        print(f"[{device}] Rally text mismatch — expected '{expected_type}', got: {text}")
+        return False
+
     def check_for_joinable_rally():
         """Check current screen for a joinable rally of any requested type.
         Returns type string if joined, False if none found, 'lost' if off war screen."""
@@ -667,11 +705,16 @@ def join_rally(rally_types, device):
         for rally_type in rally_types:
             if rally_type not in rally_icons:
                 continue
-            rally_locs = find_all_matches(screen, f"rally/{rally_type}.png", threshold=0.9)
+            icon_h = rally_icons[rally_type].shape[0]
+            rally_locs = find_all_matches(screen, f"rally/{rally_type}.png")
 
             for rally_x, rally_y in rally_locs:
                 for join_x, join_y in join_locs:
                     if abs(join_y - rally_y) < 200:
+                        # Verify rally type via OCR before clicking join
+                        if not _verify_rally_row(screen, rally_y, icon_h, rally_type):
+                            continue  # Skip this match, try next
+
                         print(f"[{device}] Found joinable {rally_type} rally")
 
                         h, w = join_btn.shape[:2]
