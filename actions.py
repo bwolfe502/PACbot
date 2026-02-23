@@ -629,15 +629,8 @@ def join_rally(rally_types, device):
         return False
 
     def _exit_war_screen():
-        """Navigate back from war screen to map, checking screen between taps."""
-        for _ in range(4):
-            adb_tap(device, 75, 75)
-            time.sleep(1)
-            if check_screen(device) == "map_screen":
-                return
-        # Last resort — try bottom nav
-        adb_tap(device, 965, 1865)
-        time.sleep(1)
+        """Navigate back from war screen to map."""
+        navigate("map_screen", device)
 
     def check_for_joinable_rally():
         """Check current screen for a joinable rally of any requested type.
@@ -696,9 +689,16 @@ def join_rally(rally_types, device):
                             return False
 
                         time.sleep(1)
-                        tap_image("depart.png", device)
-                        print(f"[{device}] {rally_type} rally joined!")
-                        return rally_type
+                        if tap_image("depart.png", device):
+                            print(f"[{device}] {rally_type} rally joined!")
+                            return rally_type
+                        else:
+                            print(f"[{device}] Depart button not found — backing out")
+                            adb_tap(device, 75, 75)
+                            time.sleep(1)
+                            if not _on_war_screen():
+                                return "lost"
+                            return False
 
         return False
 
@@ -1383,12 +1383,7 @@ def join_war_rallies(device):
         should_skip_scroll = max_val > 0.8
 
     if should_skip_scroll:
-        for _ in range(4):
-            adb_tap(device, 75, 75)
-            time.sleep(1)
-            if check_screen(device) == "map_screen":
-                return
-        adb_tap(device, 965, 1865)
+        navigate("map_screen", device)
         time.sleep(1)
         return
 
@@ -1409,12 +1404,6 @@ def join_war_rallies(device):
         if check_all_rallies_on_screen():
             return
 
-    # Timed out - go back (check screen between taps to avoid overshooting)
+    # Timed out - navigate back to map properly
     print(f"[{device}] No war rallies available")
-    for _ in range(4):
-        adb_tap(device, 75, 75)
-        time.sleep(1)
-        if check_screen(device) == "map_screen":
-            return
-    adb_tap(device, 965, 1865)
-    time.sleep(1)
+    navigate("map_screen", device)
