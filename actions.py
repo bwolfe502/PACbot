@@ -755,9 +755,8 @@ def join_rally(rally_types, device):
 
                         time.sleep(1)
                         if tap_image("depart.png", device):
-                            # Verify join succeeded by checking troop count
+                            # Verify join succeeded — already on map screen after depart
                             time.sleep(2)
-                            navigate("map_screen", device)
                             new_troops = troops_avail(device)
                             if new_troops < troops:
                                 print(f"[{device}] {rally_type} rally joined! (troops {troops} → {new_troops})")
