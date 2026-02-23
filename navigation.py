@@ -4,6 +4,7 @@ import time
 from datetime import datetime
 
 from vision import tap_image, tap, load_screenshot, adb_tap, get_template
+import config
 
 # ============================================================
 # DEBUG DIRECTORY
@@ -60,6 +61,20 @@ def check_screen(device):
         if screen is None:
             print(f"[{device}] Failed to load screenshot")
             return "unknown"
+
+        # Check for logout/disconnection popup first
+        attention_template = get_template("elements/attention.png")
+        if attention_template is not None:
+            result = cv2.matchTemplate(screen, attention_template, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, _ = cv2.minMaxLoc(result)
+            if max_val > 0.8:
+                print(f"[{device}] *** LOGGED OUT — 'ATTENTION' popup detected ***")
+                print(f"[{device}] Stopping all tasks...")
+                # Stop all running tasks by setting their stop events
+                for key, info in list(config.running_tasks.items()):
+                    if isinstance(info, dict) and "stop_event" in info:
+                        info["stop_event"].set()
+                return "logged_out"
 
         scores = {}
         best_name = None

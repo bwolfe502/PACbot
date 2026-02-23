@@ -18,7 +18,8 @@ from navigation import check_screen
 from vision import adb_tap, tap_image, load_screenshot, find_image, wait_for_image_and_tap, read_ap
 from troops import troops_avail, heal_all
 from actions import (attack, reinforce_throne, target, check_quests, teleport,
-                     rally_titan, rally_eg, join_rally, join_war_rallies)
+                     rally_titan, rally_eg, search_eg_reset, join_rally,
+                     join_war_rallies)
 from territory import (attack_territory, auto_occupy_loop,
                        open_territory_manager, sample_specific_squares)
 
@@ -126,16 +127,24 @@ def run_auto_quest(device, stop_event):
     print(f"[{device}] Auto Quest stopped")
 
 def run_auto_titan(device, stop_event, interval, variation):
-    """Loop rally_titan on a configurable interval."""
+    """Loop rally_titan on a configurable interval.
+    Every 5 rallies, searches for an Evil Guard to reset titan distances."""
     print(f"[{device}] Rally Titan started (interval: {interval}s ±{variation}s)")
     stop_check = stop_event.is_set
+    rally_count = 0
     try:
         while not stop_check():
             if config.AUTO_HEAL_ENABLED:
                 heal_all(device)
             troops = troops_avail(device)
             if troops > config.MIN_TROOPS_AVAILABLE:
+                # Reset titan distance every 5 rallies by searching for EG
+                if rally_count > 0 and rally_count % 5 == 0:
+                    search_eg_reset(device)
+                    if stop_check():
+                        break
                 rally_titan(device)
+                rally_count += 1
             else:
                 print(f"[{device}] Not enough troops for Rally Titan")
             if stop_check():

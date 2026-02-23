@@ -727,6 +727,46 @@ def rally_titan(device):
         print(f"[{device}] Failed to find depart button")
         return False
 
+def search_eg_reset(device):
+    """Search for an Evil Guard without departing to reset titan distances.
+    This brings nearby monsters closer again after repeated titan rallies."""
+    print(f"[{device}] Searching EG to reset titan distance...")
+
+    if not navigate("map_screen", device):
+        print(f"[{device}] Failed to navigate to map screen for EG reset")
+        return False
+
+    # Tap SEARCH button
+    adb_tap(device, 900, 1800)
+    time.sleep(1)
+
+    # Tap RALLY tab
+    adb_tap(device, 850, 560)
+    time.sleep(1)
+
+    # Select Evil Guard
+    if not wait_for_image_and_tap("rally_eg_select.png", device, timeout=5, threshold=0.65):
+        print(f"[{device}] Failed to find Evil Guard select for reset")
+        tap_image("close_x.png", device)
+        return False
+    time.sleep(1)
+
+    # Tap Search to trigger the distance reset
+    if not wait_for_image_and_tap("search.png", device, timeout=5, threshold=0.65):
+        print(f"[{device}] Failed to find Search button for EG reset")
+        tap_image("close_x.png", device)
+        return False
+    time.sleep(1)
+
+    # Close out — tap X twice (EG view + search menu)
+    tap_image("close_x.png", device)
+    time.sleep(0.5)
+    tap_image("close_x.png", device)
+    time.sleep(0.5)
+
+    print(f"[{device}] EG search complete — titan distances reset")
+    return True
+
 def rally_eg(device):
     """Start an evil guard rally from map screen"""
     if config.AUTO_HEAL_ENABLED:
