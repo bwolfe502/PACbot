@@ -667,8 +667,9 @@ def join_rally(rally_types, device):
         """OCR the war screen row near a matched icon to verify the rally type.
         Returns True if the text contains expected keywords for this rally type."""
         h, w = screen.shape[:2]
+        # Rally name text appears as a footer BELOW the icon row
         y_start = max(0, rally_y - 20)
-        y_end = min(h, rally_y + icon_h + 20)
+        y_end = min(h, rally_y + icon_h + 150)
         row_crop = screen[y_start:y_end, :]
         gray = cv2.cvtColor(row_crop, cv2.COLOR_BGR2GRAY)
         gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
