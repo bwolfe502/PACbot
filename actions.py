@@ -654,7 +654,7 @@ def join_rally(rally_type, device):
 
                     if rally_full:
                         print(f"[{device}] Rally is full — backing out")
-                        tap_image("full_rally.png", device)
+                        tap_image("close_x.png", device)
                         time.sleep(1)
                         adb_tap(device, 75, 75)
                         time.sleep(1)
