@@ -707,7 +707,7 @@ def join_rally(rally_types, device):
             if rally_type not in rally_icons:
                 continue
             icon_h = rally_icons[rally_type].shape[0]
-            rally_locs = find_all_matches(screen, f"rally/{rally_type}.png")
+            rally_locs = find_all_matches(screen, f"rally/{rally_type}.png", threshold=0.9)
 
             for rally_x, rally_y in rally_locs:
                 for join_x, join_y in join_locs:
@@ -1203,24 +1203,31 @@ def rally_eg(device):
         return False
 
     # Tap SEARCH button to open rally menu
+    print(f"[{device}] EG rally: tapping search button")
     adb_tap(device, 900, 1800)
     time.sleep(1)
 
     # Tap RALLY tab (rightmost tab in the search menu)
+    print(f"[{device}] EG rally: tapping rally tab")
     adb_tap(device, 850, 560)
     time.sleep(1)
 
     if not wait_for_image_and_tap("rally_eg_select.png", device, timeout=5, threshold=0.65):
-        print(f"[{device}] Failed to find Evil Guard select")
+        print(f"[{device}] EG rally: failed to find Evil Guard select")
+        adb_tap(device, 75, 75)  # Close any open menu
+        time.sleep(1)
         return False
     time.sleep(1)
 
     if not wait_for_image_and_tap("search.png", device, timeout=5, threshold=0.65):
-        print(f"[{device}] Failed to find Search button")
+        print(f"[{device}] EG rally: failed to find Search button")
+        adb_tap(device, 75, 75)
+        time.sleep(1)
         return False
     time.sleep(1)
 
-    # Select EG boss on map (no template yet - on-map position)
+    # Select EG boss on map
+    print(f"[{device}] EG rally: tapping EG on map")
     adb_tap(device, 540, 665)
     time.sleep(1)
 
