@@ -66,12 +66,20 @@ def check_quests(device, stop_check=None):
                 return
 
             if quest_img == "eg.png":
-                if navigate("map_screen", device):
-                    rally_eg(device)
+                # Try joining an existing EG rally first
+                print(f"[{device}] Attempting to join an Evil Guard rally...")
+                if not join_rally("eg", device):
+                    print(f"[{device}] No EG rally to join, starting own rally")
+                    if navigate("map_screen", device):
+                        rally_eg(device)
                 break
             elif quest_img == "titans.png":
-                if navigate("map_screen", device):
-                    rally_titan(device)
+                # Try joining an existing Titan rally first
+                print(f"[{device}] Attempting to join a Titan rally...")
+                if not join_rally("titan", device):
+                    print(f"[{device}] No Titan rally to join, starting own rally")
+                    if navigate("map_screen", device):
+                        rally_titan(device)
                 break
             elif quest_img == "pvp.png":
                 if navigate("map_screen", device):
