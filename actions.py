@@ -110,8 +110,8 @@ def _ocr_quest_rows(device):
     if screen is None:
         return None
 
-    # Crop quest list region — must reach Side Quest section below Alliance Quest
-    quest_region = screen[590:1500, :]
+    # Crop quest list region — must reach all Side Quest entries below Alliance Quest
+    quest_region = screen[590:1820, :]
     gray = cv2.cvtColor(quest_region, cv2.COLOR_BGR2GRAY)
     gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
 
