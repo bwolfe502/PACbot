@@ -750,7 +750,7 @@ def join_rally(rally_types, device):
                             time.sleep(1)
                             if not _on_war_screen():
                                 return "lost"
-                            continue  # Try next match instead of giving up
+                            return False  # Force fresh screenshot on next call
 
                         if not slot_found:
                             print(f"[{device}] No slot found — backing out")
@@ -758,7 +758,7 @@ def join_rally(rally_types, device):
                             time.sleep(1)
                             if not _on_war_screen():
                                 return "lost"
-                            continue  # Try next match
+                            return False  # Force fresh screenshot on next call
 
                         time.sleep(1)
                         if tap_image("depart.png", device):
