@@ -48,46 +48,62 @@ def check_quests(device, stop_check=None):
     lower_screen = screen[1280:, :]
     quest_images = ["eg.png", "titans.png", "pvp.png", "tower.png", "gold.png"]
 
+    # Scan all quests first to know what's active
+    active_quests = []
     for quest_img in quest_images:
-        if stop_check and stop_check():
-            return
-
         button = get_template(f"elements/quests/{quest_img}")
         if button is None:
             continue
-
         result = cv2.matchTemplate(lower_screen, button, cv2.TM_CCOEFF_NORMED)
         _, max_val, _, _ = cv2.minMaxLoc(result)
-
         if max_val > 0.8:
-            print(f"[{device}] Found quest: {quest_img}")
+            active_quests.append(quest_img)
 
-            if stop_check and stop_check():
-                return
+    if active_quests:
+        print(f"[{device}] Active quests: {', '.join(active_quests)}")
 
-            if quest_img == "eg.png":
-                # Try joining an existing EG rally first
+    has_eg = "eg.png" in active_quests
+    has_titan = "titans.png" in active_quests
+
+    for quest_img in active_quests:
+        if stop_check and stop_check():
+            return
+
+        print(f"[{device}] Working on quest: {quest_img}")
+
+        if stop_check and stop_check():
+            return
+
+        if quest_img in ("eg.png", "titans.png"):
+            # If both EG and Titan quests are active, try joining either
+            if has_eg and has_titan:
+                print(f"[{device}] Both EG and Titan quests active — joining any available rally...")
+                joined = join_rally("eg", device) or join_rally("titan", device)
+            elif quest_img == "eg.png":
                 print(f"[{device}] Attempting to join an Evil Guard rally...")
-                if not join_rally("eg", device):
-                    print(f"[{device}] No EG rally to join, starting own rally")
+                joined = join_rally("eg", device)
+            else:
+                print(f"[{device}] Attempting to join a Titan rally...")
+                joined = join_rally("titan", device)
+
+            if not joined:
+                # Fall back to starting own rally for the detected quest type
+                if quest_img == "eg.png":
+                    print(f"[{device}] No rally to join, starting own EG rally")
                     if navigate("map_screen", device):
                         rally_eg(device)
-                break
-            elif quest_img == "titans.png":
-                # Try joining an existing Titan rally first
-                print(f"[{device}] Attempting to join a Titan rally...")
-                if not join_rally("titan", device):
-                    print(f"[{device}] No Titan rally to join, starting own rally")
+                else:
+                    print(f"[{device}] No rally to join, starting own Titan rally")
                     if navigate("map_screen", device):
                         rally_titan(device)
-                break
-            elif quest_img == "pvp.png":
-                if navigate("map_screen", device):
-                    target(device)
-                    if stop_check and stop_check():
-                        return
-                    attack(device)
-                break
+            break
+        elif quest_img == "pvp.png":
+            if navigate("map_screen", device):
+                target(device)
+                if stop_check and stop_check():
+                    return
+                attack(device)
+            break
 
 def attack(device):
     """Heal all troops first (if auto heal enabled), then check troops and attack"""
