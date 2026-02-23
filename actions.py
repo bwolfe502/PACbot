@@ -48,38 +48,59 @@ def check_quests(device, stop_check=None):
     lower_screen = screen[1280:, :]
     quest_images = ["eg.png", "titans.png", "pvp.png", "tower.png", "gold.png"]
 
+    # Scan all quests first to know what's active
+    quest_scores = {}
     for quest_img in quest_images:
-        if stop_check and stop_check():
-            return
-
         button = get_template(f"elements/quests/{quest_img}")
         if button is None:
             continue
-
         result = cv2.matchTemplate(lower_screen, button, cv2.TM_CCOEFF_NORMED)
         _, max_val, _, _ = cv2.minMaxLoc(result)
+        quest_scores[quest_img] = max_val
 
-        if max_val > 0.8:
-            print(f"[{device}] Found quest: {quest_img} ({max_val*100:.0f}% confidence)")
+    # Log all scores for debugging
+    score_str = " | ".join(f"{name}: {val*100:.0f}%" for name, val in
+                           sorted(quest_scores.items(), key=lambda x: x[1], reverse=True))
+    print(f"[{device}] Quest scores: {score_str}")
 
-            if stop_check and stop_check():
-                return
+    active_quests = [q for q, score in quest_scores.items() if score > 0.85]
+    if active_quests:
+        print(f"[{device}] Active quests: {', '.join(active_quests)}")
 
-            if quest_img == "eg.png":
+    has_eg = "eg.png" in active_quests
+    has_titan = "titans.png" in active_quests
+
+    for quest_img in active_quests:
+        if stop_check and stop_check():
+            return
+
+        if stop_check and stop_check():
+            return
+
+        if quest_img in ("eg.png", "titans.png"):
+            # If both EG and Titan quests are active, try joining either
+            if has_eg and has_titan:
+                print(f"[{device}] Both EG and Titan quests active — joining any available rally...")
+                joined = join_rally("eg", device) or join_rally("titan", device)
+            elif quest_img == "eg.png":
                 print(f"[{device}] Attempting to join an Evil Guard rally...")
-                if not join_rally("eg", device):
-                    print(f"[{device}] No EG rally to join, starting own rally")
+                joined = join_rally("eg", device)
+            else:
+                print(f"[{device}] Attempting to join a Titan rally...")
+                joined = join_rally("titan", device)
+
+            if not joined:
+                # Fall back to starting own rally for the detected quest type
+                if quest_img == "eg.png":
+                    print(f"[{device}] No rally to join, starting own EG rally")
                     if navigate("map_screen", device):
                         rally_eg(device)
-                break
-            elif quest_img == "titans.png":
-                print(f"[{device}] Attempting to join a Titan rally...")
-                if not join_rally("titan", device):
-                    print(f"[{device}] No Titan rally to join, starting own rally")
+                else:
+                    print(f"[{device}] No rally to join, starting own Titan rally")
                     if navigate("map_screen", device):
                         rally_titan(device)
-                break
-            elif quest_img == "pvp.png":
+            break
+        elif quest_img == "pvp.png":
             if navigate("map_screen", device):
                 target(device)
                 if stop_check and stop_check():
