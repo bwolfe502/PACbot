@@ -20,9 +20,13 @@ from troops import troops_avail, all_troops_home, heal_all
 # ---- Quest rally tracking ----
 # Tracks rallies started but not yet reflected in the quest counter,
 # so we don't over-rally while waiting for completion (1-5+ minutes each).
+# Pending rallies auto-expire after PENDING_TIMEOUT_S to prevent getting stuck.
 
 _quest_rallies_pending = {}   # e.g. {"titan": 2, "eg": 1}
 _quest_last_seen = {}         # e.g. {"titan": 10, "eg": 0} — last OCR counter values
+_quest_pending_since = {}     # e.g. {"titan": 1708123456.0} — when pending was last increased
+
+PENDING_TIMEOUT_S = 360       # 6 minutes — if counter hasn't advanced, assume rallies done/failed
 
 
 def _track_quest_progress(quest_type, current):
@@ -35,15 +39,31 @@ def _track_quest_progress(quest_type, current):
         _quest_rallies_pending[quest_type] = max(0, pending - completed)
         if completed > 0 and pending > 0:
             print(f"  [{quest_type}] {completed} rally(s) completed, {_quest_rallies_pending[quest_type]} still pending")
+        if _quest_rallies_pending.get(quest_type, 0) == 0:
+            _quest_pending_since.pop(quest_type, None)
+        else:
+            _quest_pending_since[quest_type] = time.time()  # Reset timer for remaining
     elif last is not None and current < last:
         # Counter went backwards (quest reset / new day) — clear tracking
         _quest_rallies_pending[quest_type] = 0
+        _quest_pending_since.pop(quest_type, None)
     _quest_last_seen[quest_type] = current
+
+    # Timeout: if pending rallies haven't completed within PENDING_TIMEOUT_S, clear them
+    if quest_type in _quest_pending_since:
+        elapsed = time.time() - _quest_pending_since[quest_type]
+        if elapsed > PENDING_TIMEOUT_S and _quest_rallies_pending.get(quest_type, 0) > 0:
+            print(f"  [{quest_type}] Pending rallies timed out after {elapsed:.0f}s — resetting")
+            _quest_rallies_pending[quest_type] = 0
+            _quest_pending_since.pop(quest_type, None)
 
 
 def _record_rally_started(quest_type):
     """Record that we started/joined a rally for this quest type."""
     _quest_rallies_pending[quest_type] = _quest_rallies_pending.get(quest_type, 0) + 1
+    # Only set timestamp on first pending (don't reset on subsequent)
+    if quest_type not in _quest_pending_since:
+        _quest_pending_since[quest_type] = time.time()
     print(f"  [{quest_type}] Rally started — {_quest_rallies_pending[quest_type]} pending")
 
 
@@ -58,6 +78,7 @@ def reset_quest_tracking():
     """Clear all rally tracking state. Call when auto quest starts or stops."""
     _quest_rallies_pending.clear()
     _quest_last_seen.clear()
+    _quest_pending_since.clear()
 
 
 # ---- Quest OCR helpers ----
