@@ -371,24 +371,16 @@ def join_rally(rally_type, device):
                         time.sleep(0.5)
 
                     if rally_full:
-                        print(f"[{device}] Rally is full — closing")
+                        print(f"[{device}] Rally is full — closing back to rally list")
                         tap_image("full_rally.png", device)
                         time.sleep(1)
-                        adb_tap(device, 75, 75)
-                        time.sleep(1)
-                        adb_tap(device, 75, 75)
-                        time.sleep(1)
-                        adb_tap(device, 965, 1865)
+                        adb_tap(device, 75, 75)  # Back to rally list
                         time.sleep(1)
                         return False
 
                     if not slot_found:
-                        print(f"[{device}] No slot found — closing")
-                        adb_tap(device, 75, 75)
-                        time.sleep(1)
-                        adb_tap(device, 75, 75)
-                        time.sleep(1)
-                        adb_tap(device, 965, 1865)
+                        print(f"[{device}] No slot found — closing back to rally list")
+                        adb_tap(device, 75, 75)  # Back to rally list
                         time.sleep(1)
                         return False
 
