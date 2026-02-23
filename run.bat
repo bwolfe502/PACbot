@@ -42,10 +42,10 @@ if %FIRST_RUN%==1 (
   echo First-time setup: downloading OCR engine.
   echo This only happens once and may take a few minutes.
   echo.
-  py -m pip install -r requirements.txt 2>nul
+  py -m pip install -r requirements.txt
 ) else (
   echo Installing requirements...
-  py -m pip install -r requirements.txt -qq 2>nul
+  py -m pip install -r requirements.txt -qq
 )
 if errorlevel 1 (
   echo.
@@ -60,5 +60,14 @@ py updater.py
 
 echo.
 py main.py
+if errorlevel 1 (
+  echo.
+  echo ==========================================
+  echo PACbot crashed! See error message above.
+  echo ==========================================
+  pause
+  exit /b 1
+)
 echo.
 echo PACbot exited.
+pause
