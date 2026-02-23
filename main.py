@@ -6,6 +6,7 @@ import time
 import traceback
 import os
 import sys
+import subprocess
 import random
 import json
 
@@ -1191,9 +1192,10 @@ def create_gui():
         stop_all()
         from updater import check_and_update
         check_and_update()
-        # Re-launch the same script and exit current process
+        # Launch new process and exit current one (closes old CMD window)
         window.destroy()
-        os.execv(sys.executable, [sys.executable] + sys.argv)
+        subprocess.Popen([sys.executable] + sys.argv)
+        sys.exit(0)
 
     tk.Button(quit_row, text="Restart", command=restart,
               font=("Segoe UI", 9), bg=COLOR_BG).pack(side=tk.LEFT, padx=(0, 8))
