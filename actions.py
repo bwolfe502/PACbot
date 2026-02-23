@@ -268,36 +268,63 @@ def check_quests(device, stop_check=None):
         has_pvp = "pvp" in types_active
 
         # Priority: Join EG first > Join Titan > Start own Titan > Start own EG
+        # Loop to join multiple rallies without re-checking the AQ screen each time.
+        # Own rallies only run once per call (they're slower/more expensive).
         if has_eg or has_titan:
-            joined = False
-            joined_type = None
+            # Build a quick lookup: quest_type -> (current, target) with most remaining
+            quest_info = {}
+            for q in actionable:
+                qt = q["quest_type"]
+                if qt in ("eg", "titan"):
+                    existing = quest_info.get(qt)
+                    if existing is None or (q["target"] - q["current"]) > (existing[1] - existing[0]):
+                        quest_info[qt] = (q["current"], q["target"])
 
-            if has_eg:
-                print(f"[{device}] Trying to join EG rally...")
-                if join_rally("eg", device):
-                    joined = True
-                    joined_type = "eg"
+            any_joined = False
+            for attempt in range(15):  # safety limit
+                if stop_check and stop_check():
+                    return
 
-            if not joined and has_titan:
-                print(f"[{device}] Trying to join Titan rally...")
-                if join_rally("titan", device):
-                    joined = True
-                    joined_type = "titan"
+                # Check effective remaining for each type
+                eg_needed = _effective_remaining("eg", *quest_info["eg"]) if "eg" in quest_info else 0
+                titan_needed = _effective_remaining("titan", *quest_info["titan"]) if "titan" in quest_info else 0
 
-            if joined:
-                _record_rally_started(joined_type)
-            else:
-                # Start own rally: prefer titan (faster/simpler) over eg
-                if has_titan:
+                if eg_needed <= 0 and titan_needed <= 0:
+                    print(f"[{device}] All rally quests covered (pending completion)")
+                    break
+
+                joined = False
+                joined_type = None
+
+                if eg_needed > 0:
+                    print(f"[{device}] Trying to join EG rally ({eg_needed} still needed)...")
+                    if join_rally("eg", device):
+                        joined = True
+                        joined_type = "eg"
+
+                if not joined and titan_needed > 0:
+                    print(f"[{device}] Trying to join Titan rally ({titan_needed} still needed)...")
+                    if join_rally("titan", device):
+                        joined = True
+                        joined_type = "titan"
+
+                if joined:
+                    _record_rally_started(joined_type)
+                    any_joined = True
+                    continue  # Try to join another
+
+                # No rally to join — start own rally (once only, then break)
+                if titan_needed > 0:
                     print(f"[{device}] No rally to join, starting own Titan rally")
                     if navigate("map_screen", device):
                         if rally_titan(device):
                             _record_rally_started("titan")
-                elif has_eg:
+                elif eg_needed > 0:
                     print(f"[{device}] No rally to join, starting own EG rally")
                     if navigate("map_screen", device):
                         if rally_eg(device):
                             _record_rally_started("eg")
+                break  # Only start one own rally per check
 
         elif has_pvp:
             if navigate("map_screen", device):
