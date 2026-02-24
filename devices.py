@@ -2,6 +2,9 @@ import subprocess
 import platform
 
 from config import adb_path, EMULATOR_PORTS
+from botlog import get_logger
+
+_log = get_logger("devices")
 
 # ============================================================
 # DEVICE DETECTION (cross-platform, multi-emulator)
@@ -29,14 +32,14 @@ def auto_connect_emulators():
             # "connected to" or "already connected" means success
             if "connected" in output.lower():
                 connected.append(addr)
-                print(f"  Connected: {addr}")
+                _log.debug("Connected: %s", addr)
         except (subprocess.TimeoutExpired, Exception):
             pass  # Port not listening, skip silently
 
     if connected:
-        print(f"Auto-connect found {len(connected)} emulator(s)")
+        _log.info("Auto-connect found %d emulator(s)", len(connected))
     else:
-        print("Auto-connect: no emulators found on known ports")
+        _log.info("Auto-connect: no emulators found on known ports")
     return connected
 
 def get_devices():
@@ -63,7 +66,7 @@ def get_devices():
 
         return deduped
     except Exception as e:
-        print(f"Failed to get devices: {e}")
+        _log.error("Failed to get devices: %s", e)
         return []
 
 def get_emulator_instances():
@@ -79,7 +82,7 @@ def get_emulator_instances():
         return _get_emulator_instances_windows(devices)
 
     # macOS / Linux — no window mapping, just use device IDs
-    print(f"Found devices: {devices}")
+    _log.debug("Found devices: %s", devices)
     return {device: device for device in devices}
 
 # ============================================================
@@ -96,7 +99,7 @@ def _get_emulator_instances_windows(devices):
         import win32process
         import psutil
     except ImportError:
-        print("pywin32/psutil not installed — using device IDs")
+        _log.warning("pywin32/psutil not installed — using device IDs")
         return {d: d for d in devices}
 
     try:
@@ -126,17 +129,18 @@ def _get_emulator_instances_windows(devices):
                                     "name": window_text,
                                     "process": process_name
                                 }
-                                print(f"Found emulator window: '{window_text}' (PID: {pid}, Process: {process_name})")
+                                _log.debug("Found emulator window: '%s' (PID: %d, Process: %s)",
+                                          window_text, pid, process_name)
                     except (psutil.NoSuchProcess, psutil.AccessDenied):
                         pass
                 except:
                     pass
 
         win32gui.EnumWindows(enum_callback, emulator_windows)
-        print(f"Total emulator windows found: {len(emulator_windows)}")
+        _log.debug("Total emulator windows found: %d", len(emulator_windows))
 
         device_map = {}
-        print(f"Found devices: {devices}")
+        _log.debug("Found devices: %s", devices)
 
         for device in devices:
             try:
@@ -151,26 +155,26 @@ def _get_emulator_instances_windows(devices):
                             # BlueStacks: port in command line args
                             if f"-adb-port {port}" in cmdline or f"--adb-port {port}" in cmdline:
                                 device_map[device] = info["name"]
-                                print(f"Mapped {device} -> {info['name']} (via port {port})")
+                                _log.debug("Mapped %s -> %s (via port %s)", device, info['name'], port)
                                 break
 
                             # MuMu: port in command line args
                             if f"--adb_port {port}" in cmdline or f"-adb_port {port}" in cmdline:
                                 device_map[device] = info["name"]
-                                print(f"Mapped {device} -> {info['name']} (via port {port})")
+                                _log.debug("Mapped %s -> %s (via port %s)", device, info['name'], port)
                                 break
                         except:
                             continue
 
                 if device not in device_map:
                     device_map[device] = device
-                    print(f"No window found for {device}, using device ID")
+                    _log.debug("No window found for %s, using device ID", device)
             except Exception as e:
-                print(f"Error mapping {device}: {e}")
+                _log.warning("Error mapping %s: %s", device, e)
                 device_map[device] = device
 
         return device_map
 
     except Exception as e:
-        print(f"Failed to get emulator instances: {e}")
+        _log.error("Failed to get emulator instances: %s", e)
         return {d: d for d in devices}

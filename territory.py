@@ -12,6 +12,9 @@ from vision import load_screenshot, tap_image, adb_tap, tap_tower_until_attack_m
 from navigation import navigate
 from troops import troops_avail, all_troops_home, heal_all
 from actions import teleport
+from botlog import get_logger, timed_action
+
+_log = get_logger("territory")
 
 # ============================================================
 # TERRITORY SQUARE MANAGER GUI
@@ -19,17 +22,18 @@ from actions import teleport
 
 def open_territory_manager(device):
     """Open a visual interface to manually select squares to attack or ignore"""
+    log = get_logger("territory", device)
 
     # Take a screenshot of territory screen
     if not navigate("territory_screen", device):
-        print(f"[{device}] Failed to navigate to territory screen")
+        log.warning("Failed to navigate to territory screen")
         return
 
     time.sleep(1)
     full_image = load_screenshot(device)
 
     if full_image is None:
-        print(f"[{device}] Failed to load screenshot")
+        log.error("Failed to load screenshot")
         return
 
     # Crop to just the grid area with small padding
@@ -150,20 +154,20 @@ def open_territory_manager(device):
             return
 
         if (row, col) in THRONE_SQUARES:
-            print(f"Cannot select throne square ({row}, {col})")
+            _log.debug("Cannot select throne square (%d, %d)", row, col)
             return
 
         # Toggle state: None -> Attack -> Ignore -> None
         if (row, col) in config.MANUAL_ATTACK_SQUARES:
             config.MANUAL_ATTACK_SQUARES.remove((row, col))
             config.MANUAL_IGNORE_SQUARES.add((row, col))
-            print(f"Square ({row}, {col}) set to IGNORE")
+            _log.debug("Square (%d, %d) set to IGNORE", row, col)
         elif (row, col) in config.MANUAL_IGNORE_SQUARES:
             config.MANUAL_IGNORE_SQUARES.remove((row, col))
-            print(f"Square ({row}, {col}) set to AUTO-DETECT")
+            _log.debug("Square (%d, %d) set to AUTO-DETECT", row, col)
         else:
             config.MANUAL_ATTACK_SQUARES.add((row, col))
-            print(f"Square ({row}, {col}) set to FORCE ATTACK")
+            _log.debug("Square (%d, %d) set to FORCE ATTACK", row, col)
 
         # Update display
         draw_overlay()
@@ -180,19 +184,19 @@ def open_territory_manager(device):
         config.MANUAL_IGNORE_SQUARES.clear()
         draw_overlay()
         stats_var.set(f"Attack: {len(config.MANUAL_ATTACK_SQUARES)} | Ignore: {len(config.MANUAL_IGNORE_SQUARES)}")
-        print("Cleared all manual selections")
+        _log.debug("Cleared all manual selections")
 
     def clear_attack():
         config.MANUAL_ATTACK_SQUARES.clear()
         draw_overlay()
         stats_var.set(f"Attack: {len(config.MANUAL_ATTACK_SQUARES)} | Ignore: {len(config.MANUAL_IGNORE_SQUARES)}")
-        print("Cleared manual attack selections")
+        _log.debug("Cleared manual attack selections")
 
     def clear_ignore():
         config.MANUAL_IGNORE_SQUARES.clear()
         draw_overlay()
         stats_var.set(f"Attack: {len(config.MANUAL_ATTACK_SQUARES)} | Ignore: {len(config.MANUAL_IGNORE_SQUARES)}")
-        print("Cleared manual ignore selections")
+        _log.debug("Cleared manual ignore selections")
 
     tk.Button(button_frame, text="Clear All", command=clear_all, width=10, bg="orange", font=("Arial", 8)).pack(side=tk.LEFT, padx=2)
     tk.Button(button_frame, text="Clear Attack", command=clear_attack, width=10, font=("Arial", 8)).pack(side=tk.LEFT, padx=2)
@@ -209,31 +213,33 @@ def open_territory_manager(device):
 # TERRITORY ATTACK SYSTEM
 # ============================================================
 
+@timed_action("attack_territory")
 def attack_territory(device, debug=False):
     """Full territory attack workflow: heal, verify troops home, navigate, attack"""
-    print(f"[{device}] Starting territory attack workflow...")
+    log = get_logger("territory", device)
+    log.info("Starting territory attack workflow...")
 
     # Step 1: Navigate to map screen
     if not navigate("map_screen", device):
-        print(f"[{device}] Failed to navigate to map screen")
+        log.warning("Failed to navigate to map screen")
         return False
 
     # Step 2: Heal all troops
-    print(f"[{device}] Healing troops...")
+    log.info("Healing troops...")
     heal_all(device)
     time.sleep(2)
 
     # Step 3: Verify all troops are home
-    print(f"[{device}] Checking if all troops are home...")
+    log.info("Checking if all troops are home...")
     if not all_troops_home(device):
-        print(f"[{device}] Not all troops are home! Aborting territory attack.")
+        log.warning("Not all troops are home! Aborting territory attack.")
         return False
 
-    print(f"[{device}] All troops confirmed home. Proceeding...")
+    log.info("All troops confirmed home. Proceeding...")
 
     # Step 4: Navigate to territory screen
     if not navigate("territory_screen", device):
-        print(f"[{device}] Failed to navigate to territory screen")
+        log.warning("Failed to navigate to territory screen")
         return False
 
     time.sleep(1)
@@ -242,7 +248,7 @@ def attack_territory(device, debug=False):
     image = load_screenshot(device)
 
     if image is None:
-        print(f"[{device}] Failed to load screenshot")
+        log.error("Failed to load screenshot")
         return False
 
     if debug:
@@ -363,8 +369,8 @@ def attack_territory(device, debug=False):
         return False
 
     # Build list of valid targets
-    print(f"[{device}] Scanning grid for targets...")
-    print(f"[{device}] My team: {config.MY_TEAM_COLOR}, Attacking: {config.ENEMY_TEAMS}")
+    log.info("Scanning grid for targets...")
+    log.debug("My team: %s, Attacking: %s", config.MY_TEAM_COLOR, config.ENEMY_TEAMS)
 
     targets = []
     enemy_squares = []
@@ -390,23 +396,23 @@ def attack_territory(device, debug=False):
                     else:
                         flagged_squares.append((row, col))
 
-    print(f"[{device}] Enemy squares detected: {len(enemy_squares)}")
-    print(f"[{device}] Enemy squares adjacent to my territory: {len(adjacent_enemies)}")
-    print(f"[{device}] Flagged squares: {len(flagged_squares)}")
-    print(f"[{device}] Valid targets (no flag): {len(targets)}")
+    log.debug("Enemy squares detected: %d", len(enemy_squares))
+    log.debug("Enemy squares adjacent to my territory: %d", len(adjacent_enemies))
+    log.debug("Flagged squares: %d", len(flagged_squares))
+    log.debug("Valid targets (no flag): %d", len(targets))
 
     # Apply manual overrides
-    print(f"[{device}] Applying manual overrides...")
-    print(f"[{device}] Manual attack squares: {len(config.MANUAL_ATTACK_SQUARES)}")
-    print(f"[{device}] Manual ignore squares: {len(config.MANUAL_IGNORE_SQUARES)}")
+    log.debug("Applying manual overrides...")
+    log.debug("Manual attack squares: %d", len(config.MANUAL_ATTACK_SQUARES))
+    log.debug("Manual ignore squares: %d", len(config.MANUAL_IGNORE_SQUARES))
 
     if config.MANUAL_ATTACK_SQUARES:
         targets = list(config.MANUAL_ATTACK_SQUARES)
-        print(f"[{device}] Using ONLY manual attack squares (ignoring auto-detect)")
+        log.info("Using ONLY manual attack squares (ignoring auto-detect)")
     else:
         targets = [t for t in targets if t not in config.MANUAL_IGNORE_SQUARES]
 
-    print(f"[{device}] Final targets after manual overrides: {len(targets)}")
+    log.debug("Final targets after manual overrides: %d", len(targets))
 
     # Create debug visualization
     if debug:
@@ -426,13 +432,13 @@ def attack_territory(device, debug=False):
                     cv2.circle(debug_img, (x, y), 6, (0, 255, 255), 2)
 
         cv2.imwrite(f"territory_debug_{device}.png", debug_img)
-        print(f"Saved debug image")
+        log.debug("Saved debug image")
 
     if targets:
         target_row, target_col = random.choice(targets)
         click_x, click_y = get_square_center(target_row, target_col)
 
-        print(f"[{device}] Attacking square ({target_row}, {target_col})")
+        log.info("Attacking square (%d, %d)", target_row, target_col)
 
         # Remember this square PER DEVICE
         config.LAST_ATTACKED_SQUARE[device] = (target_row, target_col)
@@ -441,7 +447,7 @@ def attack_territory(device, debug=False):
 
         return True
     else:
-        print(f"[{device}] No valid targets found")
+        log.warning("No valid targets found")
         return False
 
 # ============================================================
@@ -451,7 +457,8 @@ def attack_territory(device, debug=False):
 def _occupy_stopped(device):
     """Check if auto occupy was stopped. Prints a message on first detection."""
     if not config.auto_occupy_running:
-        print(f"[{device}] Auto occupy stop requested, aborting...")
+        log = get_logger("territory", device)
+        log.info("Auto occupy stop requested, aborting...")
         return True
     return False
 
@@ -463,16 +470,18 @@ def _occupy_sleep(seconds):
         time.sleep(1)
     return False
 
+@timed_action("auto_occupy")
 def auto_occupy_loop(device):
     """Auto occupy loop: attack territory -> teleport -> click square -> attack -> wait"""
-    print(f"[{device}] Auto occupy started")
+    log = get_logger("territory", device)
+    log.info("Auto occupy started")
 
     while config.auto_occupy_running:
         try:
             # Check for dead.png and tap it if it exists
-            print(f"[{device}] Checking for dead.png...")
+            log.debug("Checking for dead.png...")
             if tap_image("dead.png", device):
-                print(f"[{device}] Found and clicked dead.png")
+                log.info("Found and clicked dead.png")
                 time.sleep(2)
 
             if _occupy_stopped(device):
@@ -480,17 +489,17 @@ def auto_occupy_loop(device):
 
             # Check if all troops are home
             if not all_troops_home(device):
-                print(f"[{device}] Troops not home, waiting...")
+                log.info("Troops not home, waiting...")
                 if _occupy_sleep(10):
                     break
                 continue
 
-            print(f"[{device}] === Starting auto occupy cycle ===")
+            log.info("=== Starting auto occupy cycle ===")
 
             # Step 1: Attack territory
-            print(f"[{device}] Step 1: Attacking territory...")
+            log.info("Step 1: Attacking territory...")
             if not attack_territory(device, debug=False):
-                print(f"[{device}] Failed to attack territory, skipping cycle")
+                log.warning("Failed to attack territory, skipping cycle")
                 if _occupy_sleep(10):
                     break
                 continue
@@ -500,9 +509,9 @@ def auto_occupy_loop(device):
             time.sleep(2)
 
             # Double-check troops are home before teleporting
-            print(f"[{device}] Double-checking troops are home before teleport...")
+            log.info("Double-checking troops are home before teleport...")
             if not all_troops_home(device):
-                print(f"[{device}] Troops not home! Skipping teleport.")
+                log.warning("Troops not home! Skipping teleport.")
                 if _occupy_sleep(10):
                     break
                 continue
@@ -511,9 +520,9 @@ def auto_occupy_loop(device):
                 break
 
             # Step 2: Teleport
-            print(f"[{device}] Step 2: Teleporting...")
+            log.info("Step 2: Teleporting...")
             if not teleport(device):
-                print(f"[{device}] Teleport failed, skipping cycle")
+                log.warning("Teleport failed, skipping cycle")
                 if _occupy_sleep(10):
                     break
                 continue
@@ -525,10 +534,10 @@ def auto_occupy_loop(device):
             # Step 3: Navigate back to territory screen and click the square we attacked
             if device in config.LAST_ATTACKED_SQUARE:
                 target_row, target_col = config.LAST_ATTACKED_SQUARE[device]
-                print(f"[{device}] Step 3: Navigating to territory screen to click square ({target_row}, {target_col})...")
+                log.info("Step 3: Navigating to territory screen to click square (%d, %d)...", target_row, target_col)
 
                 if not navigate("territory_screen", device):
-                    print(f"[{device}] Failed to navigate to territory screen")
+                    log.warning("Failed to navigate to territory screen")
                     if _occupy_sleep(10):
                         break
                     continue
@@ -541,19 +550,19 @@ def auto_occupy_loop(device):
                 click_x = int(GRID_OFFSET_X + target_col * SQUARE_SIZE + SQUARE_SIZE / 2)
                 click_y = int(GRID_OFFSET_Y + target_row * SQUARE_SIZE + SQUARE_SIZE / 2)
 
-                print(f"[{device}] Clicking square ({target_row}, {target_col}) at ({click_x}, {click_y})")
+                log.debug("Clicking square (%d, %d) at (%d, %d)", target_row, target_col, click_x, click_y)
                 adb_tap(device, click_x, click_y)
 
                 tap_tower_until_attack_menu(device, timeout=10)
             else:
-                print(f"[{device}] No last attacked square remembered, skipping territory click")
+                log.warning("No last attacked square remembered, skipping territory click")
 
             if _occupy_stopped(device):
                 break
 
             # Step 4: Attack
             time.sleep(1)
-            print(f"[{device}] Step 4: Attacking...")
+            log.info("Step 4: Attacking...")
 
             if config.AUTO_HEAL_ENABLED:
                 heal_all(device)
@@ -565,24 +574,22 @@ def auto_occupy_loop(device):
                 time.sleep(1)
                 tap_image("depart.png", device)
             else:
-                print(f"[{device}] Not enough troops available (have {troops}, need more than {config.MIN_TROOPS_AVAILABLE})")
+                log.warning("Not enough troops available (have %d, need more than %d)", troops, config.MIN_TROOPS_AVAILABLE)
 
             time.sleep(2)
 
-            print(f"[{device}] Cycle complete, waiting 10 seconds...")
+            log.info("Cycle complete, waiting 10 seconds...")
 
             # Wait 10 seconds before next cycle
             if _occupy_sleep(10):
                 break
 
         except Exception as e:
-            print(f"[{device}] Error in auto occupy loop: {e}")
-            import traceback
-            traceback.print_exc()
+            log.error("Error in auto occupy loop: %s", e, exc_info=True)
             if _occupy_sleep(5):
                 break
 
-    print(f"[{device}] Auto occupy stopped")
+    log.info("Auto occupy stopped")
 
 # ============================================================
 # DEBUG FUNCTIONS
@@ -590,6 +597,7 @@ def auto_occupy_loop(device):
 
 def sample_specific_squares(device):
     """Sample specific squares to understand current colors"""
+    log = get_logger("territory", device)
     image = load_screenshot(device)
 
     def get_square_color(row, col):
@@ -603,32 +611,32 @@ def sample_specific_squares(device):
 
         return avg_color
 
-    print("\n=== SAMPLING KNOWN SQUARES ===")
+    log.debug("=== SAMPLING KNOWN SQUARES ===")
 
-    print("\nKnown YELLOW squares:")
+    log.debug("Known YELLOW squares:")
     yellow_samples = [(0,0), (0,5), (5,5), (10,10)]
     for r, c in yellow_samples:
         color = get_square_color(r, c)
         b, g, red = [int(x) for x in color]
-        print(f"  ({r},{c}): B={b} G={g} R={red}")
+        log.debug("  (%d,%d): B=%d G=%d R=%d", r, c, b, g, red)
 
-    print("\nKnown GREEN squares:")
+    log.debug("Known GREEN squares:")
     green_samples = [(0,12), (0,18), (5,20), (10,23)]
     for r, c in green_samples:
         color = get_square_color(r, c)
         b, g, red = [int(x) for x in color]
-        print(f"  ({r},{c}): B={b} G={g} R={red}")
+        log.debug("  (%d,%d): B=%d G=%d R=%d", r, c, b, g, red)
 
-    print("\nKnown RED squares:")
+    log.debug("Known RED squares:")
     red_samples = [(12,0), (15,5), (20,10), (23,5)]
     for r, c in red_samples:
         color = get_square_color(r, c)
         b, g, red = [int(x) for x in color]
-        print(f"  ({r},{c}): B={b} G={g} R={red}")
+        log.debug("  (%d,%d): B=%d G=%d R=%d", r, c, b, g, red)
 
-    print("\nKnown BLUE squares:")
+    log.debug("Known BLUE squares:")
     blue_samples = [(12,13), (18,18), (20,20), (23,20)]
     for r, c in blue_samples:
         color = get_square_color(r, c)
         b, g, red = [int(x) for x in color]
-        print(f"  ({r},{c}): B={b} G={g} R={red}")
+        log.debug("  (%d,%d): B=%d G=%d R=%d", r, c, b, g, red)

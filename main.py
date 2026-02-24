@@ -9,13 +9,14 @@ import sys
 import subprocess
 import random
 import json
+import logging
 
 import config
 from updater import get_current_version
 from config import (set_min_troops, set_auto_heal, set_auto_restore_ap,
                      set_ap_restore_options, set_territory_config, running_tasks)
 from devices import get_devices, get_emulator_instances, auto_connect_emulators
-from navigation import check_screen
+from navigation import check_screen, navigate
 from vision import adb_tap, tap_image, load_screenshot, find_image, wait_for_image_and_tap, read_ap
 from troops import troops_avail, heal_all
 from actions import (attack, reinforce_throne, target, check_quests, teleport,
@@ -23,6 +24,7 @@ from actions import (attack, reinforce_throne, target, check_quests, teleport,
                      join_war_rallies, reset_quest_tracking)
 from territory import (attack_territory, auto_occupy_loop,
                        open_territory_manager, sample_specific_squares)
+from botlog import get_logger
 
 # ============================================================
 # PERSISTENT SETTINGS
@@ -48,6 +50,7 @@ DEFAULTS = {
     "my_team": "yellow",
     "enemy_team": "green",
     "mode": "bl",
+    "verbose_logging": False,
 }
 
 def load_settings():
@@ -63,7 +66,7 @@ def save_settings(settings):
         with open(SETTINGS_FILE, "w") as f:
             json.dump(settings, f, indent=2)
     except Exception as e:
-        print(f"Failed to save settings: {e}")
+        get_logger("main").error("Failed to save settings: %s", e)
 
 # ============================================================
 # FUNCTION LOOKUP
@@ -100,23 +103,30 @@ def sleep_interval(base, variation, stop_check):
     actual = base + random.randint(-variation, variation) if variation > 0 else base
     actual = max(1, actual)
     if variation > 0:
-        print(f"    Waiting {actual}s (base {base} ±{variation})")
+        get_logger("main").debug("Waiting %ss (base %s +/-%s)", actual, base, variation)
     for _ in range(actual):
         if stop_check():
             break
         time.sleep(1)
 
 def run_auto_quest(device, stop_event):
-    print(f"[{device}] Auto Quest started")
+    dlog = get_logger("main", device)
+    dlog.info("Auto Quest started")
     reset_quest_tracking()
     stop_check = stop_event.is_set
     try:
         while not stop_check():
+            # Ensure we're on map_screen before checking troops
+            # (troop pixel detection only works on map_screen)
+            if not navigate("map_screen", device):
+                dlog.warning("Cannot reach map screen — retrying in 10s")
+                time.sleep(10)
+                continue
             troops = troops_avail(device)
             if troops > config.MIN_TROOPS_AVAILABLE:
                 check_quests(device, stop_check=stop_check)
             else:
-                print(f"[{device}] Not enough troops for quests")
+                dlog.warning("Not enough troops for quests")
             if stop_check():
                 break
             for _ in range(10):
@@ -124,20 +134,24 @@ def run_auto_quest(device, stop_event):
                     break
                 time.sleep(1)
     except Exception as e:
-        print(f"[{device}] ERROR in Auto Quest: {e}")
-        traceback.print_exc()
-    print(f"[{device}] Auto Quest stopped")
+        dlog.error("ERROR in Auto Quest: %s", e, exc_info=True)
+    dlog.info("Auto Quest stopped")
 
 def run_auto_titan(device, stop_event, interval, variation):
     """Loop rally_titan on a configurable interval.
     Every 5 rallies, searches for an Evil Guard to reset titan distances."""
-    print(f"[{device}] Rally Titan started (interval: {interval}s ±{variation}s)")
+    dlog = get_logger("main", device)
+    dlog.info("Rally Titan started (interval: %ss +/-%ss)", interval, variation)
     stop_check = stop_event.is_set
     rally_count = 0
     try:
         while not stop_check():
             if config.AUTO_HEAL_ENABLED:
                 heal_all(device)
+            if not navigate("map_screen", device):
+                dlog.warning("Cannot reach map screen — retrying")
+                time.sleep(10)
+                continue
             troops = troops_avail(device)
             if troops > config.MIN_TROOPS_AVAILABLE:
                 # Reset titan distance every 5 rallies by searching for EG
@@ -148,35 +162,38 @@ def run_auto_titan(device, stop_event, interval, variation):
                 rally_titan(device)
                 rally_count += 1
             else:
-                print(f"[{device}] Not enough troops for Rally Titan")
+                dlog.warning("Not enough troops for Rally Titan")
             if stop_check():
                 break
             sleep_interval(interval, variation, stop_check)
     except Exception as e:
-        print(f"[{device}] ERROR in Rally Titan: {e}")
-        traceback.print_exc()
-    print(f"[{device}] Rally Titan stopped")
+        dlog.error("ERROR in Rally Titan: %s", e, exc_info=True)
+    dlog.info("Rally Titan stopped")
 
 def run_auto_groot(device, stop_event, interval, variation):
     """Loop join_rally('groot') on a configurable interval."""
-    print(f"[{device}] Rally Groot started (interval: {interval}s ±{variation}s)")
+    dlog = get_logger("main", device)
+    dlog.info("Rally Groot started (interval: %ss +/-%ss)", interval, variation)
     stop_check = stop_event.is_set
     try:
         while not stop_check():
             if config.AUTO_HEAL_ENABLED:
                 heal_all(device)
+            if not navigate("map_screen", device):
+                dlog.warning("Cannot reach map screen — retrying")
+                time.sleep(10)
+                continue
             troops = troops_avail(device)
             if troops > config.MIN_TROOPS_AVAILABLE:
                 join_rally("groot", device)
             else:
-                print(f"[{device}] Not enough troops for Rally Groot")
+                dlog.warning("Not enough troops for Rally Groot")
             if stop_check():
                 break
             sleep_interval(interval, variation, stop_check)
     except Exception as e:
-        print(f"[{device}] ERROR in Rally Groot: {e}")
-        traceback.print_exc()
-    print(f"[{device}] Rally Groot stopped")
+        dlog.error("ERROR in Rally Groot: %s", e, exc_info=True)
+    dlog.info("Rally Groot stopped")
 
 def run_auto_occupy(device, stop_event):
     config.auto_occupy_running = True
@@ -188,9 +205,10 @@ def run_auto_occupy(device, stop_event):
 
     threading.Thread(target=monitor, daemon=True).start()
     auto_occupy_loop(device)
-    print(f"[{device}] Auto Occupy stopped")
+    get_logger("main", device).info("Auto Occupy stopped")
 
 def run_auto_pass(device, stop_event, pass_mode, pass_interval, variation):
+    dlog = get_logger("main", device)
     stop_check = stop_event.is_set
 
     def _pass_attack(device):
@@ -198,7 +216,7 @@ def run_auto_pass(device, stop_event, pass_mode, pass_interval, variation):
             heal_all(device)
         troops = troops_avail(device)
         if troops <= config.MIN_TROOPS_AVAILABLE:
-            print(f"[{device}] Not enough troops for pass battle")
+            dlog.warning("Not enough troops for pass battle")
             return False
 
         adb_tap(device, 560, 675)
@@ -212,7 +230,7 @@ def run_auto_pass(device, stop_event, pass_mode, pass_interval, variation):
                 continue
 
             if find_image(screen, "reinforce_button.png", threshold=0.5):
-                print(f"[{device}] Found reinforce button - reinforcing")
+                dlog.info("Found reinforce button - reinforcing")
                 tap_image("reinforce_button.png", device, threshold=0.5)
                 time.sleep(1)
                 tap_image("depart.png", device)
@@ -220,33 +238,33 @@ def run_auto_pass(device, stop_event, pass_mode, pass_interval, variation):
 
             if find_image(screen, "attack_button.png", threshold=0.7):
                 if pass_mode == "Rally Starter":
-                    print(f"[{device}] Found attack button - starting rally")
+                    dlog.info("Found attack button - starting rally")
                     tap_image("rally_button.png", device, threshold=0.7)
                     time.sleep(1)
                     if not tap_image("depart.png", device):
                         wait_for_image_and_tap("depart.png", device, timeout=5)
                     return "rally_started"
                 else:
-                    print(f"[{device}] Found attack button - enemy owns it, closing menu")
+                    dlog.info("Found attack button - enemy owns it, closing menu")
                     adb_tap(device, 560, 675)
                     time.sleep(0.5)
                     return "attack"
 
             time.sleep(0.5)
 
-        print(f"[{device}] Neither reinforce nor attack button found, closing menu")
+        dlog.warning("Neither reinforce nor attack button found, closing menu")
         adb_tap(device, 560, 675)
         time.sleep(0.5)
         return False
 
-    print(f"[{device}] Auto Pass Battle started (mode: {pass_mode})")
+    dlog.info("Auto Pass Battle started (mode: %s)", pass_mode)
     try:
         while not stop_check():
             result = target(device)
             if result == "no_marker":
-                print(f"[{device}] *** TARGET NOT SET! ***")
-                print(f"[{device}] Please mark the pass or tower with a Personal 'Enemy' marker.")
-                print(f"[{device}] Auto Pass Battle stopping.")
+                dlog.warning("*** TARGET NOT SET! ***")
+                dlog.warning("Please mark the pass or tower with a Personal 'Enemy' marker.")
+                dlog.warning("Auto Pass Battle stopping.")
                 alert_queue.put("no_marker")
                 break
             if stop_check():
@@ -259,14 +277,14 @@ def run_auto_pass(device, stop_event, pass_mode, pass_interval, variation):
                 break
 
             if action == "rally_started":
-                print(f"[{device}] Rally started - looping back")
+                dlog.info("Rally started - looping back")
                 time.sleep(2)
             elif action == "attack":
-                print(f"[{device}] Enemy owns pass - joining war rallies continuously")
+                dlog.info("Enemy owns pass - joining war rallies continuously")
                 while not stop_check():
                     troops = troops_avail(device)
                     if troops <= config.MIN_TROOPS_AVAILABLE:
-                        print(f"[{device}] Not enough troops, waiting...")
+                        dlog.warning("Not enough troops, waiting...")
                         time.sleep(5)
                         continue
                     join_war_rallies(device)
@@ -278,13 +296,13 @@ def run_auto_pass(device, stop_event, pass_mode, pass_interval, variation):
             else:
                 sleep_interval(10, variation, stop_check)
     except Exception as e:
-        print(f"[{device}] ERROR in Auto Pass Battle: {e}")
-        traceback.print_exc()
-    print(f"[{device}] Auto Pass Battle stopped")
+        dlog.error("ERROR in Auto Pass Battle: %s", e, exc_info=True)
+    dlog.info("Auto Pass Battle stopped")
 
 def run_auto_reinforce(device, stop_event, interval, variation):
     """Loop reinforce_throne on a configurable interval."""
-    print(f"[{device}] Auto Reinforce Throne started (interval: {interval}s ±{variation}s)")
+    dlog = get_logger("main", device)
+    dlog.info("Auto Reinforce Throne started (interval: %ss +/-%ss)", interval, variation)
     stop_check = stop_event.is_set
     try:
         while not stop_check():
@@ -293,32 +311,31 @@ def run_auto_reinforce(device, stop_event, interval, variation):
                 break
             sleep_interval(interval, variation, stop_check)
     except Exception as e:
-        print(f"[{device}] ERROR in Auto Reinforce Throne: {e}")
-        traceback.print_exc()
-    print(f"[{device}] Auto Reinforce Throne stopped")
+        dlog.error("ERROR in Auto Reinforce Throne: %s", e, exc_info=True)
+    dlog.info("Auto Reinforce Throne stopped")
 
 def run_repeat(device, task_name, function, interval, variation, stop_event):
+    dlog = get_logger("main", device)
     stop_check = stop_event.is_set
-    print(f"[{device}] Starting repeating task: {task_name}")
+    dlog.info("Starting repeating task: %s", task_name)
     try:
         while not stop_check():
-            print(f"[{device}] Running {task_name}...")
+            dlog.info("Running %s...", task_name)
             function(device)
-            print(f"[{device}] {task_name} completed, waiting {interval}s...")
+            dlog.debug("%s completed, waiting %ss...", task_name, interval)
             sleep_interval(interval, variation, stop_check)
     except Exception as e:
-        print(f"[{device}] ERROR in {task_name}: {e}")
-        traceback.print_exc()
-    print(f"[{device}] {task_name} stopped")
+        dlog.error("ERROR in %s: %s", task_name, e, exc_info=True)
+    dlog.info("%s stopped", task_name)
 
 def run_once(device, task_name, function):
-    print(f"[{device}] Running {task_name}...")
+    dlog = get_logger("main", device)
+    dlog.info("Running %s...", task_name)
     try:
         function(device)
-        print(f"[{device}] {task_name} completed")
+        dlog.info("%s completed", task_name)
     except Exception as e:
-        print(f"[{device}] ERROR in {task_name}: {e}")
-        traceback.print_exc()
+        dlog.error("ERROR in %s: %s", task_name, e, exc_info=True)
 
 # ============================================================
 # TASK LAUNCHER (threads instead of subprocesses)
@@ -333,7 +350,7 @@ def launch_task(device, task_name, target_func, stop_event, args=()):
 
     task_key = f"{device}_{task_name}"
     running_tasks[task_key] = {"thread": thread, "stop_event": stop_event}
-    print(f"[{device}] Started {task_name}")
+    get_logger("main", device).info("Started %s", task_name)
 
 def stop_task(task_key):
     """Signal a task to stop via its threading.Event."""
@@ -341,7 +358,7 @@ def stop_task(task_key):
         info = running_tasks[task_key]
         if isinstance(info, dict) and "stop_event" in info:
             info["stop_event"].set()
-            print(f"Stop signal sent for {task_key}")
+            get_logger("main").debug("Stop signal sent for %s", task_key)
 
 def stop_all_tasks_matching(suffix):
     """Stop all tasks whose task_key ends with the given suffix."""
@@ -371,6 +388,7 @@ def make_toggle_bar(parent, text, font_spec, on_click):
 
 def create_gui():
     global devices
+    log = get_logger("main")
 
     version = get_current_version()
     settings = load_settings()
@@ -425,6 +443,18 @@ def create_gui():
 
     device_checkboxes = {}
     device_checkbox_widgets = []
+    device_troops_vars = {}  # {device_id: StringVar} for per-device total troops
+
+    # Load saved per-device troops from settings
+    saved_device_troops = settings.get("device_troops", {})
+
+    def _apply_device_troops():
+        """Push all device_troops_vars into config.DEVICE_TOTAL_TROOPS."""
+        for dev_id, var in device_troops_vars.items():
+            try:
+                config.DEVICE_TOTAL_TROOPS[dev_id] = int(var.get())
+            except ValueError:
+                config.DEVICE_TOTAL_TROOPS[dev_id] = 5
 
     def refresh_device_list():
         global devices
@@ -438,12 +468,34 @@ def create_gui():
         for device in devices:
             if device not in device_checkboxes:
                 device_checkboxes[device] = tk.BooleanVar(value=True)
+
+            # Per-device total troops (default 5, restore from saved settings)
+            if device not in device_troops_vars:
+                saved_val = saved_device_troops.get(device, 5)
+                device_troops_vars[device] = tk.StringVar(value=str(saved_val))
+                config.DEVICE_TOTAL_TROOPS[device] = saved_val
+
             display_name = instance_map.get(device, device)
-            cb = tk.Checkbutton(device_list_frame, text=display_name,
+
+            row = tk.Frame(device_list_frame, bg=COLOR_BG)
+            row.pack(fill=tk.X, padx=4)
+            device_checkbox_widgets.append(row)
+
+            cb = tk.Checkbutton(row, text=display_name,
                                 variable=device_checkboxes[device], font=("Segoe UI", 9),
                                 bg=COLOR_BG, activebackground=COLOR_BG)
-            cb.pack(anchor='w', padx=4)
-            device_checkbox_widgets.append(cb)
+            cb.pack(side=tk.LEFT)
+
+            # Troops spinbox (right-aligned)
+            tk.Label(row, text="troops:", font=("Segoe UI", 8), fg="#888",
+                     bg=COLOR_BG).pack(side=tk.RIGHT, padx=(4, 0))
+            troops_spin = tk.Spinbox(row, from_=1, to=5,
+                                     textvariable=device_troops_vars[device],
+                                     width=2, font=("Segoe UI", 8), justify="center",
+                                     command=lambda: (_apply_device_troops(), save_current_settings()))
+            troops_spin.pack(side=tk.RIGHT)
+
+        _apply_device_troops()
 
         if not devices:
             lbl = tk.Label(device_list_frame, text="No devices found. Try Auto-Connect.",
@@ -519,7 +571,7 @@ def create_gui():
             quest_frame.config(bg=COLOR_OFF)
             quest_label.config(text="Auto Quest: OFF", bg=COLOR_OFF)
             stop_all_tasks_matching("_auto_quest")
-            print("Stopping Auto Quest on all devices")
+            log.info("Stopping Auto Quest on all devices")
 
     def _stop_titan():
         if auto_titan_var.get():
@@ -527,7 +579,7 @@ def create_gui():
             titan_frame.config(bg=COLOR_OFF)
             titan_label.config(text="Auto Rally Titans: OFF", bg=COLOR_OFF)
             stop_all_tasks_matching("_auto_titan")
-            print("Stopping Auto Rally Titans on all devices")
+            log.info("Stopping Auto Rally Titans on all devices")
 
     def _stop_groot():
         if auto_groot_var.get():
@@ -535,7 +587,7 @@ def create_gui():
             groot_frame.config(bg=COLOR_OFF)
             groot_label.config(text="Auto Join Groot Rallies: OFF", bg=COLOR_OFF)
             stop_all_tasks_matching("_auto_groot")
-            print("Stopping Auto Join Groot Rallies on all devices")
+            log.info("Stopping Auto Join Groot Rallies on all devices")
 
     def _stop_pass_battle():
         if auto_pass_var.get():
@@ -543,7 +595,7 @@ def create_gui():
             pass_frame.config(bg=COLOR_OFF)
             pass_label.config(text="Auto Pass Battle: OFF", bg=COLOR_OFF)
             stop_all_tasks_matching("_auto_pass")
-            print("Stopping Auto Pass Battle on all devices")
+            log.info("Stopping Auto Pass Battle on all devices")
 
     def _stop_occupy():
         if auto_occupy_var.get():
@@ -552,7 +604,7 @@ def create_gui():
             occupy_label.config(text="Auto Occupy: OFF", bg=COLOR_OFF)
             config.auto_occupy_running = False
             stop_all_tasks_matching("_auto_occupy")
-            print("Stopping Auto Occupy on all devices")
+            log.info("Stopping Auto Occupy on all devices")
 
     def _stop_reinforce_throne():
         if auto_reinforce_var.get():
@@ -560,7 +612,7 @@ def create_gui():
             reinforce_frame.config(bg=COLOR_OFF)
             reinforce_label.config(text="Auto Reinforce Throne: OFF", bg=COLOR_OFF)
             stop_all_tasks_matching("_auto_reinforce")
-            print("Stopping Auto Reinforce Throne on all devices")
+            log.info("Stopping Auto Reinforce Throne on all devices")
 
     # ── Broken Lands toggles ──
 
@@ -578,7 +630,7 @@ def create_gui():
                     stop_event = threading.Event()
                     launch_task(device, "auto_quest",
                                 run_auto_quest, stop_event, args=(device, stop_event))
-                    print(f"Started Auto Quest on {device}")
+                    log.info("Started Auto Quest on %s", device)
         else:
             _stop_quest()
 
@@ -603,7 +655,7 @@ def create_gui():
                     variation = int(variation_var.get())
                     launch_task(device, "auto_pass",
                                 run_auto_pass, stop_event, args=(device, stop_event, mode, interval, variation))
-                    print(f"Started Auto Pass Battle on {device}")
+                    log.info("Started Auto Pass Battle on %s", device)
         else:
             _stop_pass_battle()
 
@@ -625,7 +677,7 @@ def create_gui():
                     stop_event = threading.Event()
                     launch_task(device, "auto_occupy",
                                 run_auto_occupy, stop_event, args=(device, stop_event))
-                    print(f"Started Auto Occupy on {device}")
+                    log.info("Started Auto Occupy on %s", device)
         else:
             _stop_occupy()
 
@@ -650,7 +702,7 @@ def create_gui():
                     variation = int(variation_var.get())
                     launch_task(device, "auto_titan",
                                 run_auto_titan, stop_event, args=(device, stop_event, interval, variation))
-                    print(f"Started Rally Titan on {device}")
+                    log.info("Started Rally Titan on %s", device)
         else:
             _stop_titan()
 
@@ -673,7 +725,7 @@ def create_gui():
                     variation = int(variation_var.get())
                     launch_task(device, "auto_groot",
                                 run_auto_groot, stop_event, args=(device, stop_event, interval, variation))
-                    print(f"Started Rally Groot on {device}")
+                    log.info("Started Rally Groot on %s", device)
         else:
             _stop_groot()
 
@@ -695,7 +747,7 @@ def create_gui():
                     variation = int(variation_var.get())
                     launch_task(device, "auto_reinforce",
                                 run_auto_reinforce, stop_event, args=(device, stop_event, interval, variation))
-                    print(f"Started Auto Reinforce Throne on {device}")
+                    log.info("Started Auto Reinforce Throne on %s", device)
         else:
             _stop_reinforce_throne()
 
@@ -772,6 +824,20 @@ def create_gui():
                    bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.LEFT)
 
     tk.Frame(row1, width=10, bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
+
+    # Verbose logging toggle
+    verbose_var = tk.BooleanVar(value=settings.get("verbose_logging", False))
+    from botlog import set_console_verbose
+    set_console_verbose(verbose_var.get())
+
+    def toggle_verbose():
+        set_console_verbose(verbose_var.get())
+        save_current_settings()
+
+    tk.Checkbutton(row1, text="Verbose Log", variable=verbose_var,
+                   command=toggle_verbose, font=("Segoe UI", 9),
+                   bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.RIGHT)
+
 
     auto_restore_ap_var = tk.BooleanVar(value=settings["auto_restore_ap"])
     set_auto_restore_ap(settings["auto_restore_ap"])
@@ -979,6 +1045,14 @@ def create_gui():
     # ============================================================
 
     def save_current_settings():
+        # Build per-device troops dict
+        dt = {}
+        for dev_id, var in device_troops_vars.items():
+            try:
+                dt[dev_id] = int(var.get())
+            except ValueError:
+                dt[dev_id] = 5
+
         save_settings({
             "auto_heal": auto_heal_var.get(),
             "auto_restore_ap": auto_restore_ap_var.get(),
@@ -997,6 +1071,8 @@ def create_gui():
             "my_team": my_team_var.get(),
             "enemy_team": enemy_var.get(),
             "mode": mode_var.get(),
+            "verbose_logging": verbose_var.get(),
+            "device_troops": dt,
         })
 
     # ============================================================
@@ -1057,7 +1133,7 @@ def create_gui():
             if enabled.get():
                 func = TASK_FUNCTIONS.get(name)
                 if not func:
-                    print(f"Unknown function: {name}")
+                    log.warning("Unknown function: %s", name)
                     return
                 for device in get_active_devices():
                     task_key = f"{device}_repeat:{name}"
@@ -1068,7 +1144,7 @@ def create_gui():
                         launch_task(device, f"repeat:{name}",
                                     run_repeat, stop_event, args=(device, name, func, iv, vr, stop_event))
             else:
-                print(f"Stopping {name}")
+                log.info("Stopping %s", name)
                 for device in get_active_devices():
                     task_key = f"{device}_repeat:{name}"
                     stop_task(task_key)
@@ -1082,7 +1158,7 @@ def create_gui():
             enabled.set(False)
             func = TASK_FUNCTIONS.get(name)
             if not func:
-                print(f"Unknown function: {name}")
+                log.warning("Unknown function: %s", name)
                 return
             for device in get_active_devices():
                 repeat_key = f"{device}_repeat:{name}"
@@ -1125,9 +1201,9 @@ def create_gui():
         if screen is not None:
             path = f"screenshot_{device.replace(':', '_')}.png"
             cv2.imwrite(path, screen)
-            print(f"[{device}] Screenshot saved to {path}")
+            get_logger("main", device).info("Screenshot saved to %s", path)
         else:
-            print(f"[{device}] Failed to take screenshot")
+            get_logger("main", device).warning("Failed to take screenshot")
 
     add_debug_button(debug_tab, "Save Screenshot", save_screenshot)
     add_debug_button(debug_tab, "Check Quests", check_quests)
@@ -1153,9 +1229,9 @@ def create_gui():
             x, y = int(x_var.get()), int(y_var.get())
             for device in get_active_devices():
                 adb_tap(device, x, y)
-                print(f"[{device}] Test tapped ({x}, {y})")
+                get_logger("main", device).debug("Test tapped (%s, %s)", x, y)
         except ValueError:
-            print("Invalid coordinates!")
+            log.warning("Invalid coordinates!")
 
     tk.Button(tap_row, text="Tap", command=test_tap, font=("Segoe UI", 8)).pack(side=tk.LEFT)
 
@@ -1174,7 +1250,7 @@ def create_gui():
             var.set(False)
         for key in list(running_tasks.keys()):
             stop_task(key)
-        print("=== ALL TASKS STOPPED ===")
+        log.info("=== ALL TASKS STOPPED ===")
 
     stop_frame = tk.Frame(window, bg="#333333", cursor="hand2")
     stop_label = tk.Label(stop_frame, text="STOP ALL", font=("Segoe UI", 11, "bold"),
@@ -1263,9 +1339,31 @@ def create_gui():
     def on_close():
         try:
             save_current_settings()
+        except Exception as e:
+            print(f"Failed to save settings: {e}")
+        try:
             stop_all()
+        except Exception as e:
+            print(f"Failed to stop tasks: {e}")
+        # Save session stats and print summary
+        try:
+            from botlog import stats, get_logger
+            _log = get_logger("main")
+            stats.save()
+            _log.info("Session stats saved")
+            summary = stats.summary()
+            if summary:
+                _log.info("Session stats:\n%s", summary)
+        except Exception as e:
+            print(f"Failed to save stats: {e}")
+        # Flush all log handlers before exiting
+        try:
+            logging.shutdown()
+        except Exception:
+            pass
+        try:
             window.destroy()
-        except:
+        except Exception:
             pass
         os._exit(0)
 
@@ -1281,7 +1379,11 @@ def create_gui():
 # ============================================================
 
 if __name__ == "__main__":
-    # Set up logging to file (clears each run)
+    # Set up structured logging (rotating file + console)
+    from botlog import setup_logging, stats, get_logger
+    setup_logging()
+
+    # Compatibility bridge: capture any remaining print() calls to legacy log file
     _log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pacbot.log")
     _log_file = open(_log_path, "w", encoding="utf-8")
 
@@ -1307,7 +1409,9 @@ if __name__ == "__main__":
     sys.stdout = _Tee(sys.stdout, _log_file)
     sys.stderr = _Tee(sys.stderr, _log_file)
 
+    _main_log = get_logger("main")
+
     from license import validate_license
     validate_license()
-    print("Running PACbot...")
+    _main_log.info("Running PACbot...")
     create_gui()

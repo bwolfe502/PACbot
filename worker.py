@@ -7,10 +7,10 @@ import os
 import sys
 import time
 import threading
-import traceback
 
 # Set up config before importing anything else
 import config
+from botlog import setup_logging, get_logger
 from config import set_min_troops, set_auto_heal, set_territory_config
 
 def parse_args():
@@ -50,17 +50,18 @@ def make_stop_check(stop_file):
 # ============================================================
 
 def run_auto_quest(device, stop_check):
+    log = get_logger("worker", device)
     from troops import troops_avail
     from actions import check_quests
 
-    print(f"[{device}] Auto Quest started")
+    log.info("Auto Quest started")
     try:
         while not stop_check():
             troops = troops_avail(device)
             if troops > config.MIN_TROOPS_AVAILABLE:
                 check_quests(device, stop_check=stop_check)
             else:
-                print(f"[{device}] Not enough troops for quests")
+                log.info("Not enough troops for quests")
             if stop_check():
                 break
             for _ in range(10):
@@ -68,11 +69,11 @@ def run_auto_quest(device, stop_check):
                     break
                 time.sleep(1)
     except Exception as e:
-        print(f"[{device}] ERROR in Auto Quest: {e}")
-        traceback.print_exc()
-    print(f"[{device}] Auto Quest stopped")
+        log.error("ERROR in Auto Quest: %s", e, exc_info=True)
+    log.info("Auto Quest stopped")
 
 def run_auto_occupy(device, stop_check):
+    log = get_logger("worker", device)
     from territory import auto_occupy_loop
 
     config.auto_occupy_running = True
@@ -85,9 +86,10 @@ def run_auto_occupy(device, stop_check):
 
     threading.Thread(target=monitor, daemon=True).start()
     auto_occupy_loop(device)
-    print(f"[{device}] Auto Occupy stopped")
+    log.info("Auto Occupy stopped")
 
 def run_auto_pass(device, stop_check, pass_mode, pass_interval):
+    log = get_logger("worker", device)
     from actions import target, join_war_rallies
     from troops import troops_avail, heal_all
     from vision import adb_tap, tap_image, load_screenshot, find_image, wait_for_image_and_tap
@@ -97,7 +99,7 @@ def run_auto_pass(device, stop_check, pass_mode, pass_interval):
             heal_all(device)
         troops = troops_avail(device)
         if troops <= config.MIN_TROOPS_AVAILABLE:
-            print(f"[{device}] Not enough troops for pass battle")
+            log.info("Not enough troops for pass battle")
             return False
 
         adb_tap(device, 560, 675)
@@ -111,7 +113,7 @@ def run_auto_pass(device, stop_check, pass_mode, pass_interval):
                 continue
 
             if find_image(screen, "reinforce_button.png", threshold=0.5):
-                print(f"[{device}] Found reinforce button - reinforcing")
+                log.info("Found reinforce button - reinforcing")
                 tap_image("reinforce_button.png", device, threshold=0.5)
                 time.sleep(1)
                 tap_image("depart.png", device)
@@ -119,33 +121,33 @@ def run_auto_pass(device, stop_check, pass_mode, pass_interval):
 
             if find_image(screen, "attack_button.png", threshold=0.7):
                 if pass_mode == "Rally Starter":
-                    print(f"[{device}] Found attack button - starting rally")
+                    log.info("Found attack button - starting rally")
                     tap_image("rally_button.png", device, threshold=0.7)
                     time.sleep(1)
                     if not tap_image("depart.png", device):
                         wait_for_image_and_tap("depart.png", device, timeout=5)
                     return "rally_started"
                 else:
-                    print(f"[{device}] Found attack button - enemy owns it, closing menu")
+                    log.info("Found attack button - enemy owns it, closing menu")
                     adb_tap(device, 560, 675)
                     time.sleep(0.5)
                     return "attack"
 
             time.sleep(0.5)
 
-        print(f"[{device}] Neither reinforce nor attack button found, closing menu")
+        log.info("Neither reinforce nor attack button found, closing menu")
         adb_tap(device, 560, 675)
         time.sleep(0.5)
         return False
 
-    print(f"[{device}] Auto Pass Battle started (mode: {pass_mode})")
+    log.info("Auto Pass Battle started (mode: %s)", pass_mode)
     try:
         while not stop_check():
             result = target(device)
             if result == "no_marker":
-                print(f"[{device}] *** TARGET NOT SET! ***")
-                print(f"[{device}] Please mark the pass or tower with a Personal 'Enemy' marker.")
-                print(f"[{device}] Auto Pass Battle stopping.")
+                log.error("*** TARGET NOT SET! ***")
+                log.error("Please mark the pass or tower with a Personal 'Enemy' marker.")
+                log.error("Auto Pass Battle stopping.")
                 # Write alert file so GUI can show messagebox
                 alert_dir = os.path.dirname(args.stop_file)
                 safe_dev = device.replace(":", "_")
@@ -163,14 +165,14 @@ def run_auto_pass(device, stop_check, pass_mode, pass_interval):
                 break
 
             if action == "rally_started":
-                print(f"[{device}] Rally started - looping back")
+                log.info("Rally started - looping back")
                 time.sleep(2)
             elif action == "attack":
-                print(f"[{device}] Enemy owns pass - joining war rallies continuously")
+                log.info("Enemy owns pass - joining war rallies continuously")
                 while not stop_check():
                     troops = troops_avail(device)
                     if troops <= config.MIN_TROOPS_AVAILABLE:
-                        print(f"[{device}] Not enough troops, waiting...")
+                        log.info("Not enough troops, waiting...")
                         time.sleep(5)
                         continue
                     join_war_rallies(device)
@@ -188,34 +190,33 @@ def run_auto_pass(device, stop_check, pass_mode, pass_interval):
                         break
                     time.sleep(1)
     except Exception as e:
-        print(f"[{device}] ERROR in Auto Pass Battle: {e}")
-        traceback.print_exc()
-    print(f"[{device}] Auto Pass Battle stopped")
+        log.error("ERROR in Auto Pass Battle: %s", e, exc_info=True)
+    log.info("Auto Pass Battle stopped")
 
 def run_repeat(device, task_name, function, interval, stop_check):
-    print(f"[{device}] Starting repeating task: {task_name}")
+    log = get_logger("worker", device)
+    log.info("Starting repeating task: %s", task_name)
     try:
         while not stop_check():
-            print(f"[{device}] Running {task_name}...")
+            log.info("Running %s...", task_name)
             function(device)
-            print(f"[{device}] {task_name} completed, waiting {interval}s...")
+            log.info("%s completed, waiting %ss...", task_name, interval)
             for _ in range(interval):
                 if stop_check():
                     break
                 time.sleep(1)
     except Exception as e:
-        print(f"[{device}] ERROR in {task_name}: {e}")
-        traceback.print_exc()
-    print(f"[{device}] {task_name} stopped")
+        log.error("ERROR in %s: %s", task_name, e, exc_info=True)
+    log.info("%s stopped", task_name)
 
 def run_once(device, task_name, function):
-    print(f"[{device}] Running {task_name}...")
+    log = get_logger("worker", device)
+    log.info("Running %s...", task_name)
     try:
         function(device)
-        print(f"[{device}] {task_name} completed")
+        log.info("%s completed", task_name)
     except Exception as e:
-        print(f"[{device}] ERROR in {task_name}: {e}")
-        traceback.print_exc()
+        log.error("ERROR in %s: %s", task_name, e, exc_info=True)
 
 # ============================================================
 # FUNCTION LOOKUP
@@ -252,23 +253,28 @@ def get_task_function(name):
 # ============================================================
 
 if __name__ == "__main__":
+    setup_logging()
+    log = get_logger("worker")
+
     args = parse_args()
 
     device = args.device
     task = args.task
     stop_file = args.stop_file
 
+    # Re-bind logger with device context
+    log = get_logger("worker", device)
+
     # Set console window title
     safe_title = f"PACbot - {device} - {task}"
     if sys.platform == "win32":
         os.system(f'title {safe_title}')
 
-    print(f"=" * 50)
-    print(f"  PACbot Worker")
-    print(f"  Device: {device}")
-    print(f"  Task:   {task}")
-    print(f"=" * 50)
-    print()
+    log.info("=" * 50)
+    log.info("  PACbot Worker")
+    log.info("  Device: %s", device)
+    log.info("  Task:   %s", task)
+    log.info("=" * 50)
 
     # Apply config from args
     set_min_troops(args.min_troops)
@@ -295,7 +301,7 @@ if __name__ == "__main__":
         if func:
             run_repeat(device, func_name, func, args.interval, stop_check)
         else:
-            print(f"Unknown function: {func_name}")
+            log.error("Unknown function: %s", func_name)
 
     elif task.startswith("once:"):
         func_name = task[5:]  # strip "once:"
@@ -303,10 +309,10 @@ if __name__ == "__main__":
         if func:
             run_once(device, func_name, func)
         else:
-            print(f"Unknown function: {func_name}")
+            log.error("Unknown function: %s", func_name)
 
     else:
-        print(f"Unknown task: {task}")
+        log.error("Unknown task: %s", task)
 
     # Cleanup
     if os.path.exists(stop_file):
@@ -315,8 +321,7 @@ if __name__ == "__main__":
         except:
             pass
 
-    print()
-    print(f"[{device}] Worker finished. Press Enter to close...")
+    log.info("Worker finished. Press Enter to close...")
     try:
         input()
     except:

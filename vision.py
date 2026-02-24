@@ -8,27 +8,32 @@ import numpy as np
 from datetime import datetime
 
 import warnings
-import logging
 
 # Suppress noisy warnings from torch/easyocr before importing
 warnings.filterwarnings("ignore", message=".*pin_memory.*")
 warnings.filterwarnings("ignore", message=".*GPU.*")
-logging.getLogger("easyocr").setLevel(logging.ERROR)
 
 import easyocr
 
+import threading
+
 import config
 from config import adb_path, BUTTONS
+from botlog import get_logger, stats
 
 # Initialize EasyOCR reader once (downloads models on first run)
 _ocr_reader = None
+_ocr_lock = threading.Lock()
 
 def _get_ocr_reader():
     global _ocr_reader
     if _ocr_reader is None:
-        print("[OCR] Initializing EasyOCR (first run may download models)...")
-        _ocr_reader = easyocr.Reader(['en'], gpu=False, verbose=False)
-        print("[OCR] Ready.")
+        with _ocr_lock:
+            if _ocr_reader is None:  # Double-check after acquiring lock
+                _log = get_logger("vision")
+                _log.info("Initializing EasyOCR (first run may download models)...")
+                _ocr_reader = easyocr.Reader(['en'], gpu=False, verbose=False)
+                _log.info("EasyOCR ready.")
     return _ocr_reader
 
 # ============================================================
@@ -37,11 +42,13 @@ def _get_ocr_reader():
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CLICKS_DIR = os.path.join(SCRIPT_DIR, "debug", "clicks")
+FAILURES_DIR = os.path.join(SCRIPT_DIR, "debug", "failures")
 os.makedirs(CLICKS_DIR, exist_ok=True)
+os.makedirs(FAILURES_DIR, exist_ok=True)
 
 _click_seq = 0
 
-def _cleanup_clicks_dir(max_files=20):
+def _cleanup_clicks_dir(max_files=50):
     try:
         files = sorted(
             [os.path.join(CLICKS_DIR, f) for f in os.listdir(CLICKS_DIR) if f.endswith(".png")],
@@ -84,6 +91,55 @@ def clear_click_trail():
         pass
 
 # ============================================================
+# FAILURE SCREENSHOTS (persistent — never auto-deleted)
+# ============================================================
+
+def _cleanup_failures_dir(max_files=200):
+    """Keep failure screenshots bounded but generous. These are NOT rotated
+    aggressively like click trails — they persist across sessions for
+    post-mortem analysis. Only the oldest are pruned once we exceed 200."""
+    try:
+        files = sorted(
+            [os.path.join(FAILURES_DIR, f) for f in os.listdir(FAILURES_DIR) if f.endswith(".png")],
+            key=os.path.getmtime
+        )
+        while len(files) > max_files:
+            os.remove(files.pop(0))
+    except Exception:
+        pass
+
+def save_failure_screenshot(device, label, screen=None):
+    """Save a persistent failure screenshot for post-mortem diagnosis.
+
+    Unlike click trail images, these are stored in debug/failures/ and are
+    NOT cleared between runs. They persist until 200 accumulate, then only
+    the oldest are pruned. Use this at every failure point in critical flows
+    so there's always a visual record of what the screen looked like when
+    something went wrong.
+
+    Returns the saved filepath, or None on error.
+    """
+    log = get_logger("vision", device)
+    try:
+        if screen is None:
+            screen = load_screenshot(device)
+        if screen is None:
+            log.warning("Cannot save failure screenshot — screenshot failed")
+            return None
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_device = device.replace(":", "_")
+        safe_label = label.replace(" ", "_").replace("/", "_")
+        filename = f"{timestamp}_{safe_device}_{safe_label}.png"
+        filepath = os.path.join(FAILURES_DIR, filename)
+        cv2.imwrite(filepath, screen)
+        log.info("Failure screenshot saved: debug/failures/%s", filename)
+        _cleanup_failures_dir()
+        return filepath
+    except Exception as e:
+        log.warning("Failed to save failure screenshot: %s", e)
+        return None
+
+# ============================================================
 # TEMPLATE CACHE
 # ============================================================
 
@@ -102,17 +158,22 @@ def get_template(image_path):
 
 def load_screenshot(device):
     """Take a screenshot and return the image directly in memory (no disk I/O)."""
-    result = subprocess.run(
-        [adb_path, "-s", device, "exec-out", "screencap", "-p"],
-        capture_output=True
-    )
+    log = get_logger("vision", device)
+    try:
+        result = subprocess.run(
+            [adb_path, "-s", device, "exec-out", "screencap", "-p"],
+            capture_output=True, timeout=10
+        )
+    except subprocess.TimeoutExpired:
+        log.warning("Screenshot timed out (ADB hung?)")
+        return None
     if result.returncode != 0 or not result.stdout:
-        print(f"[{device}] Screenshot failed")
+        log.warning("Screenshot failed (returncode=%d)", result.returncode)
         return None
     img_array = np.frombuffer(result.stdout, dtype=np.uint8)
     image = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
     if image is None:
-        print(f"[{device}] Failed to decode screenshot")
+        log.warning("Failed to decode screenshot")
     return image
 
 # ============================================================
@@ -175,6 +236,7 @@ def read_ap(device, retries=5):
     Uses thresholding to isolate white text from the green background.
     Returns (current, max) tuple, or None if AP couldn't be read.
     """
+    log = get_logger("vision", device)
     for attempt in range(retries):
         screen = load_screenshot(device)
         if screen is None:
@@ -196,14 +258,14 @@ def read_ap(device, retries=5):
         if match:
             current = int(match.group(1))
             maximum = int(match.group(2))
-            print(f"[{device}] AP: {current}/{maximum}")
+            log.debug("AP: %d/%d", current, maximum)
             return current, maximum
 
         # Probably showing the timer right now, wait and retry
         if attempt < retries - 1:
             time.sleep(2)
 
-    print(f"[{device}] Could not read AP after {retries} attempts")
+    log.warning("Could not read AP after %d attempts", retries)
     return None
 
 
@@ -212,8 +274,10 @@ def read_ap(device, retries=5):
 # ============================================================
 
 def find_image(screen, image_name, threshold=0.8, region=None):
-    """Find an image template on screen. Returns (max_val, max_loc, h, w) or None.
-    region: optional (x1, y1, x2, y2) to restrict search area. Coordinates are in full-screen space."""
+    """Find an image template on screen.
+    Returns (max_val, max_loc, h, w) on match, or None on failure.
+    On failure, the best score is stored in find_image.last_best for logging."""
+    find_image.last_best = 0.0
     button = get_template(f"elements/{image_name}")
     if screen is None or button is None:
         return None
@@ -223,6 +287,7 @@ def find_image(screen, image_name, threshold=0.8, region=None):
         cropped = screen[y1:y2, x1:x2]
         result = cv2.matchTemplate(cropped, button, cv2.TM_CCOEFF_NORMED)
         min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
+        find_image.last_best = max_val
         if max_val > threshold:
             h, w = button.shape[:2]
             # Translate back to full-screen coordinates
@@ -231,11 +296,14 @@ def find_image(screen, image_name, threshold=0.8, region=None):
 
     result = cv2.matchTemplate(screen, button, cv2.TM_CCOEFF_NORMED)
     min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
+    find_image.last_best = max_val
 
     if max_val > threshold:
         h, w = button.shape[:2]
         return max_val, max_loc, h, w
     return None
+
+find_image.last_best = 0.0  # Initialize the attribute
 
 def find_all_matches(screen, image_name, threshold=0.8, min_distance=50):
     """Find all non-overlapping matches of a template on screen."""
@@ -277,10 +345,11 @@ def adb_swipe(device, x1, y1, x2, y2, duration_ms=300):
 
 def tap(button_name, device):
     """Tap a button by its name from the BUTTONS dictionary"""
+    log = get_logger("vision", device)
     x = BUTTONS[button_name]["x"]
     y = BUTTONS[button_name]["y"]
     adb_tap(device, x, y)
-    print(f"[{device}] Tapped {button_name} at {x}, {y}")
+    log.debug("Tapped %s at %d, %d", button_name, x, y)
 
 # Region constraints for templates that should only match in specific screen areas.
 # Values are (x1, y1, x2, y2) defining the search region.
@@ -291,6 +360,7 @@ IMAGE_REGIONS = {
 
 def tap_image(image_name, device, threshold=0.8):
     """Find an image on screen and tap it"""
+    log = get_logger("vision", device)
     screen = load_screenshot(device)
     region = IMAGE_REGIONS.get(image_name)
     match = find_image(screen, image_name, threshold=threshold, region=region)
@@ -302,21 +372,12 @@ def tap_image(image_name, device, threshold=0.8):
         if screen is not None:
             _save_click_trail(screen, device, center_x, center_y, image_name.replace(".png", ""))
         adb_tap(device, center_x, center_y)
-        print(f"[{device}] Found and tapped {image_name} at ({center_x}, {center_y})")
+        log.debug("Tapped %s at (%d, %d), confidence %.0f%%", image_name, center_x, center_y, max_val * 100)
         return True
     else:
-        # Log best match score for debugging template match failures
-        button = get_template(f"elements/{image_name}")
-        if screen is not None and button is not None:
-            search_area = screen
-            if region:
-                x1, y1, x2, y2 = region
-                search_area = screen[y1:y2, x1:x2]
-            result = cv2.matchTemplate(search_area, button, cv2.TM_CCOEFF_NORMED)
-            _, best_val, _, _ = cv2.minMaxLoc(result)
-            print(f"[{device}] Couldn't find {image_name} (best: {best_val*100:.0f}%, need: {threshold*100:.0f}%)")
-        else:
-            print(f"[{device}] Couldn't find {image_name} (template or screenshot missing)")
+        best_val = find_image.last_best
+        log.debug("Couldn't find %s (best: %.0f%%, need: %.0f%%)", image_name, best_val * 100, threshold * 100)
+        stats.record_template_miss(device, image_name, best_val)
         return False
 
 def logged_tap(device, x, y, label="coord_tap"):
@@ -329,25 +390,27 @@ def logged_tap(device, x, y, label="coord_tap"):
 
 def wait_for_image_and_tap(image_name, device, timeout=5, threshold=0.8):
     """Wait for an image to appear on screen and tap it, with a timeout"""
+    log = get_logger("vision", device)
     start_time = time.time()
     while time.time() - start_time < timeout:
         if tap_image(image_name, device, threshold=threshold):
             return True
         time.sleep(0.5)
-    print(f"[{device}] Timed out waiting for {image_name} after {timeout}s")
+    log.debug("Timed out waiting for %s after %ds", image_name, timeout)
     return False
 
 def tap_tower_until_attack_menu(device, tower_x=540, tower_y=900, timeout=10):
     """Tap the tower repeatedly until the attack button menu appears"""
+    log = get_logger("vision", device)
     start_time = time.time()
     attempt = 0
     while time.time() - start_time < timeout:
         attempt += 1
-        print(f"[{device}] Tapping tower at ({tower_x}, {tower_y}), attempt {attempt}...")
+        log.debug("Tapping tower at (%d, %d), attempt %d...", tower_x, tower_y, attempt)
         adb_tap(device, tower_x, tower_y)
         time.sleep(1)
         if tap_image("attack_button.png", device):
-            print(f"[{device}] Attack menu opened and attack button tapped!")
+            log.debug("Attack menu opened and attack button tapped!")
             return True
-    print(f"[{device}] Timed out waiting for attack menu after {timeout}s")
+    log.debug("Timed out waiting for attack menu after %ds", timeout)
     return False

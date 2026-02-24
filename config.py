@@ -85,13 +85,14 @@ print(f"Using ADB: {adb_path}")
 EMULATOR_PORTS = {
     "MuMu12":     [16384 + (i * 32) for i in range(8)],
     "MuMu5":      [5555 + (i * 2)   for i in range(8)],
-    "BlueStacks": [5555 + (i * 10)  for i in range(8)],
+    "BlueStacks": [5555 + (i * 10)  for i in range(10)],
 }
 
 # ============================================================
 # GLOBAL STATE
 # ============================================================
 
+DEVICE_TOTAL_TROOPS = {}   # {device_id: int} - total troops per account (default 5)
 LAST_ATTACKED_SQUARE = {}  # {device_id: (row, col)} - per device tracking
 MANUAL_ATTACK_SQUARES = set()  # Squares user manually selected to attack: {(row, col), ...}
 MANUAL_IGNORE_SQUARES = set()  # Squares user manually selected to ignore: {(row, col), ...}
@@ -140,23 +141,26 @@ BORDER_COLORS = {
 # CONFIGURATION SETTERS
 # ============================================================
 
+from botlog import get_logger as _get_logger
+_log = _get_logger("config")
+
 def set_min_troops(value):
     """Set the minimum troops available threshold"""
     global MIN_TROOPS_AVAILABLE
     MIN_TROOPS_AVAILABLE = value
-    print(f"Minimum troops available set to: {value}")
+    _log.info("Minimum troops available set to: %d", value)
 
 def set_auto_heal(enabled):
     """Set the auto heal enabled state"""
     global AUTO_HEAL_ENABLED
     AUTO_HEAL_ENABLED = enabled
-    print(f"Auto heal: {'enabled' if enabled else 'disabled'}")
+    _log.info("Auto heal: %s", "enabled" if enabled else "disabled")
 
 def set_auto_restore_ap(enabled):
     """Set the auto restore AP enabled state"""
     global AUTO_RESTORE_AP_ENABLED
     AUTO_RESTORE_AP_ENABLED = enabled
-    print(f"Auto restore AP: {'enabled' if enabled else 'disabled'}")
+    _log.info("Auto restore AP: %s", "enabled" if enabled else "disabled")
 
 def set_ap_restore_options(use_free, use_potions, allow_large, use_gems, gem_limit):
     """Set AP restore source preferences"""
@@ -166,11 +170,12 @@ def set_ap_restore_options(use_free, use_potions, allow_large, use_gems, gem_lim
     AP_ALLOW_LARGE_POTIONS = allow_large
     AP_USE_GEMS = use_gems
     AP_GEM_LIMIT = max(0, min(gem_limit, 3500))
-    print(f"AP restore: free={use_free}, potions={use_potions}, large={allow_large}, gems={use_gems}, gem_limit={AP_GEM_LIMIT}")
+    _log.info("AP restore: free=%s, potions=%s, large=%s, gems=%s, gem_limit=%d",
+              use_free, use_potions, allow_large, use_gems, AP_GEM_LIMIT)
 
 def set_territory_config(my_team, enemy_teams):
     """Set which team you are and which teams to attack"""
     global MY_TEAM_COLOR, ENEMY_TEAMS
     MY_TEAM_COLOR = my_team
     ENEMY_TEAMS = enemy_teams
-    print(f"Territory config: My team = {my_team}, Attacking = {enemy_teams}")
+    _log.info("Territory config: My team = %s, Attacking = %s", my_team, enemy_teams)
