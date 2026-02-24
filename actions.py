@@ -9,11 +9,12 @@ import subprocess
 import config
 from botlog import get_logger, timed_action, stats
 from vision import (tap_image, wait_for_image_and_tap, load_screenshot,
-                    find_image, find_all_matches, get_template,
+                    find_image, get_last_best, find_all_matches, get_template,
                     adb_tap, adb_swipe, logged_tap, clear_click_trail,
                     save_failure_screenshot, read_ap, read_text)
 from navigation import navigate, check_screen, DEBUG_DIR
-from troops import troops_avail, all_troops_home, heal_all
+from troops import (troops_avail, all_troops_home, heal_all,
+                    read_panel_statuses, TroopAction, capture_departing_portrait)
 
 _log = get_logger("actions")
 
@@ -38,63 +39,78 @@ def _on_war_screen(device):
 # so we don't over-rally while waiting for completion (1-5+ minutes each).
 # Pending rallies auto-expire after PENDING_TIMEOUT_S to prevent getting stuck.
 
-_quest_rallies_pending = {}   # e.g. {"titan": 2, "eg": 1}
-_quest_last_seen = {}         # e.g. {"titan": 10, "eg": 0} — last OCR counter values
-_quest_pending_since = {}     # e.g. {"titan": 1708123456.0} — when pending was last increased
+_quest_rallies_pending = {}   # e.g. {("127.0.0.1:5555", "titan"): 2}
+_quest_last_seen = {}         # e.g. {("127.0.0.1:5555", "titan"): 10}
+_quest_pending_since = {}     # e.g. {("127.0.0.1:5555", "titan"): 1708123456.0}
 
 PENDING_TIMEOUT_S = 360       # 6 minutes — if counter hasn't advanced, assume rallies done/failed
 
 
-def _track_quest_progress(quest_type, current):
+def _track_quest_progress(device, quest_type, current):
     """Update pending rally count based on OCR counter progress.
     When the counter advances, we know some pending rallies completed."""
-    last = _quest_last_seen.get(quest_type)
+    key = (device, quest_type)
+    last = _quest_last_seen.get(key)
     if last is not None and current > last:
         completed = current - last
-        pending = _quest_rallies_pending.get(quest_type, 0)
-        _quest_rallies_pending[quest_type] = max(0, pending - completed)
+        pending = _quest_rallies_pending.get(key, 0)
+        _quest_rallies_pending[key] = max(0, pending - completed)
         if completed > 0 and pending > 0:
-            _log.debug("[%s] %d rally(s) completed, %d still pending", quest_type, completed, _quest_rallies_pending[quest_type])
-        if _quest_rallies_pending.get(quest_type, 0) == 0:
-            _quest_pending_since.pop(quest_type, None)
+            _log.debug("[%s] %d rally(s) completed, %d still pending", quest_type, completed, _quest_rallies_pending[key])
+        if _quest_rallies_pending.get(key, 0) == 0:
+            _quest_pending_since.pop(key, None)
         else:
-            _quest_pending_since[quest_type] = time.time()  # Reset timer for remaining
+            _quest_pending_since[key] = time.time()  # Reset timer for remaining
     elif last is not None and current < last:
         # Counter went backwards (quest reset / new day) — clear tracking
-        _quest_rallies_pending[quest_type] = 0
-        _quest_pending_since.pop(quest_type, None)
-    _quest_last_seen[quest_type] = current
+        _quest_rallies_pending[key] = 0
+        _quest_pending_since.pop(key, None)
+    _quest_last_seen[key] = current
 
     # Timeout: if pending rallies haven't completed within PENDING_TIMEOUT_S, clear them
-    if quest_type in _quest_pending_since:
-        elapsed = time.time() - _quest_pending_since[quest_type]
-        if elapsed > PENDING_TIMEOUT_S and _quest_rallies_pending.get(quest_type, 0) > 0:
+    if key in _quest_pending_since:
+        elapsed = time.time() - _quest_pending_since[key]
+        if elapsed > PENDING_TIMEOUT_S and _quest_rallies_pending.get(key, 0) > 0:
             _log.warning("[%s] Pending rallies timed out after %.0fs — resetting", quest_type, elapsed)
-            _quest_rallies_pending[quest_type] = 0
-            _quest_pending_since.pop(quest_type, None)
+            _quest_rallies_pending[key] = 0
+            _quest_pending_since.pop(key, None)
 
 
-def _record_rally_started(quest_type):
+def _record_rally_started(device, quest_type):
     """Record that we started/joined a rally for this quest type."""
-    _quest_rallies_pending[quest_type] = _quest_rallies_pending.get(quest_type, 0) + 1
+    key = (device, quest_type)
+    _quest_rallies_pending[key] = _quest_rallies_pending.get(key, 0) + 1
     # Only set timestamp on first pending (don't reset on subsequent)
-    if quest_type not in _quest_pending_since:
-        _quest_pending_since[quest_type] = time.time()
-    _log.debug("[%s] Rally started — %d pending", quest_type, _quest_rallies_pending[quest_type])
+    if key not in _quest_pending_since:
+        _quest_pending_since[key] = time.time()
+    _log.debug("[%s] Rally started — %d pending", quest_type, _quest_rallies_pending[key])
 
 
-def _effective_remaining(quest_type, current, target):
+def _effective_remaining(device, quest_type, current, target):
     """How many more rallies we actually need, accounting for in-progress ones."""
+    key = (device, quest_type)
     base_remaining = target - current
-    pending = _quest_rallies_pending.get(quest_type, 0)
+    pending = _quest_rallies_pending.get(key, 0)
     return max(0, base_remaining - pending)
 
 
-def reset_quest_tracking():
-    """Clear all rally tracking state. Call when auto quest starts or stops."""
-    _quest_rallies_pending.clear()
-    _quest_last_seen.clear()
-    _quest_pending_since.clear()
+def reset_quest_tracking(device=None):
+    """Clear rally tracking state. If device is given, clear only that device's state.
+    If device is None, clear all state (backwards compatible)."""
+    if device is None:
+        _quest_rallies_pending.clear()
+        _quest_last_seen.clear()
+        _quest_pending_since.clear()
+    else:
+        for d in list(_quest_rallies_pending):
+            if d[0] == device:
+                del _quest_rallies_pending[d]
+        for d in list(_quest_last_seen):
+            if d[0] == device:
+                del _quest_last_seen[d]
+        for d in list(_quest_pending_since):
+            if d[0] == device:
+                del _quest_pending_since[d]
 
 
 # ---- Quest OCR helpers ----
@@ -238,7 +254,7 @@ def _check_quests_legacy(device, stop_check):
                     if config.EG_RALLY_OWN_ENABLED:
                         log.info("No rally to join, starting own EG rally")
                         if navigate("map_screen", device):
-                            rally_eg(device)
+                            rally_eg(device, stop_check=stop_check)
                     else:
                         log.info("No EG rally to join — own rally disabled, skipping")
                 else:
@@ -301,29 +317,29 @@ def check_quests(device, stop_check=None):
         # Update tracking with latest counter values
         for q in quests:
             if q["quest_type"] in ("titan", "eg", "pvp"):
-                _track_quest_progress(q["quest_type"], q["current"])
+                _track_quest_progress(device, q["quest_type"], q["current"])
 
         # Filter to quests that still need work (accounting for pending rallies)
         actionable = []
         for q in quests:
             if q["completed"] or q["quest_type"] not in ("titan", "eg", "pvp"):
                 continue
-            eff = _effective_remaining(q["quest_type"], q["current"], q["target"])
+            eff = _effective_remaining(device, q["quest_type"], q["current"], q["target"])
             if eff > 0:
                 actionable.append(q)
 
         if not actionable:
             # Check if we're truly done or just waiting for pending rallies
-            pending_types = [qt for qt, cnt in _quest_rallies_pending.items() if cnt > 0]
+            pending_types = [qt for (dev, qt), cnt in _quest_rallies_pending.items() if dev == device and cnt > 0]
             if pending_types:
-                pending_str = ", ".join(f"{qt} ({_quest_rallies_pending[qt]})" for qt in pending_types)
+                pending_str = ", ".join(f"{qt} ({_quest_rallies_pending[(device, qt)]})" for qt in pending_types)
                 log.info("Waiting for pending rallies to complete: %s", pending_str)
             else:
                 log.info("No actionable quests remaining (all complete or skip-only)")
             return True
 
         remaining_str = ", ".join(
-            f"{q['quest_type']} ({_effective_remaining(q['quest_type'], q['current'], q['target'])} needed)" for q in actionable
+            f"{q['quest_type']} ({_effective_remaining(device, q['quest_type'], q['current'], q['target'])} needed)" for q in actionable
         )
         log.info("Actionable: %s", remaining_str)
 
@@ -356,8 +372,8 @@ def check_quests(device, stop_check=None):
                     return True
 
                 # Check effective remaining for each type
-                eg_needed = _effective_remaining("eg", *quest_info["eg"]) if "eg" in quest_info else 0
-                titan_needed = _effective_remaining("titan", *quest_info["titan"]) if "titan" in quest_info else 0
+                eg_needed = _effective_remaining(device, "eg", *quest_info["eg"]) if "eg" in quest_info else 0
+                titan_needed = _effective_remaining(device, "titan", *quest_info["titan"]) if "titan" in quest_info else 0
 
                 if eg_needed <= 0 and titan_needed <= 0:
                     log.info("All rally quests covered (pending completion)")
@@ -370,14 +386,14 @@ def check_quests(device, stop_check=None):
                 if titan_needed > 0:
                     types_to_join.append("titan")
 
-                needed_str = ", ".join(f"{t} ({_effective_remaining(t, *quest_info[t])})" for t in types_to_join)
+                needed_str = ", ".join(f"{t} ({_effective_remaining(device, t, *quest_info[t])})" for t in types_to_join)
                 log.info("Looking for %s rally (%s needed)...", "/".join(types_to_join), needed_str)
                 joined_type = join_rally(types_to_join, device, skip_heal=True)
                 if stop_check and stop_check():
                     return True
 
                 if joined_type:
-                    _record_rally_started(joined_type)
+                    _record_rally_started(device, joined_type)
                     any_joined = True
                     continue  # Try to join another
 
@@ -387,7 +403,7 @@ def check_quests(device, stop_check=None):
                     log.info("No rally to join, starting own Titan rally")
                     if navigate("map_screen", device):
                         if rally_titan(device):
-                            _record_rally_started("titan")
+                            _record_rally_started(device, "titan")
                             started = True
                     if stop_check and stop_check():
                         return True
@@ -395,15 +411,16 @@ def check_quests(device, stop_check=None):
                     if config.EG_RALLY_OWN_ENABLED:
                         log.info("No rally to join, starting own EG rally")
                         if navigate("map_screen", device):
-                            if rally_eg(device):
-                                _record_rally_started("eg")
+                            if rally_eg(device, stop_check=stop_check):
+                                _record_rally_started(device, "eg")
                                 started = True
                     else:
                         log.info("No EG rally to join — own rally disabled, skipping")
                     if stop_check and stop_check():
                         return True
                 if not started:
-                    break  # Rally failed, stop trying
+                    log.warning("Rally loop: could not join or start any rally — stopping")
+                    break
 
             return True
 
@@ -651,6 +668,7 @@ def teleport(device):
         log.debug("Time elapsed: %.1fs / 90s", elapsed)
 
     log.warning("Teleport failed after %d attempts", attempt_count)
+    save_failure_screenshot(device, "teleport_timeout")
     return False
 
 # ============================================================
@@ -665,6 +683,7 @@ def join_rally(rally_types, device, skip_heal=False):
     Returns the type joined as a string, or False if none found.
     """
     log = get_logger("actions", device)
+    _jr_start = time.time()
     if isinstance(rally_types, str):
         rally_types = [rally_types]
 
@@ -725,6 +744,8 @@ def join_rally(rally_types, device, skip_heal=False):
                 return True
 
             log.debug("Back-out attempt %d — not on war screen yet", attempt + 1)
+        log.warning("Back-out failed after 3 attempts — stuck on %s", check_screen(device))
+        save_failure_screenshot(device, "backout_stuck")
         return False
 
     def _exit_war_screen():
@@ -847,7 +868,7 @@ def join_rally(rally_types, device, skip_heal=False):
                     if match is None:
                         match = find_image(s, "slot.png", threshold=0.65)
                         if match:
-                            log.debug("slot.png matched at lower threshold (%.0f%%)", find_image.last_best * 100)
+                            log.debug("slot.png matched at lower threshold (%.0f%%)", get_last_best() * 100)
                     if match:
                         max_val, max_loc, sh, sw = match
                         cx = max_loc[0] + sw // 2
@@ -869,7 +890,7 @@ def join_rally(rally_types, device, skip_heal=False):
                     if last_screen is not None:
                         from navigation import _save_debug_screenshot
                         _save_debug_screenshot(device, "slot_not_found", last_screen)
-                        best = find_image.last_best
+                        best = get_last_best()
                         log.warning("No slot found (best slot match: %.0f%%, best full_rally: check debug screenshot) — backing out", best * 100)
                     else:
                         log.warning("No slot found (no screenshot captured) — backing out")
@@ -895,6 +916,7 @@ def join_rally(rally_types, device, skip_heal=False):
                     if new_troops < pre_war_troops:
                         # Clear success: fewer troops than before
                         log.info("%s rally joined! (troops %d -> %d)", rally_type, pre_war_troops, new_troops)
+                        stats.record_action(device, "join_rally", True, time.time() - _jr_start)
                         return rally_type
                     elif new_troops > pre_war_troops:
                         # Troop(s) returned during the join attempt — ambiguous.
@@ -909,6 +931,7 @@ def join_rally(rally_types, device, skip_heal=False):
                         from navigation import _save_debug_screenshot
                         _save_debug_screenshot(device, "join_ambiguous_troop_increase")
                         # Treat as success — we tapped depart and landed on map_screen
+                        stats.record_action(device, "join_rally", True, time.time() - _jr_start)
                         return rally_type
                     else:
                         # Same count — genuine failure (rally was full, depart didn't work)
@@ -976,6 +999,7 @@ def join_rally(rally_types, device, skip_heal=False):
     # No rally found - exit war screen cleanly
     log.info("No %s rally found after scrolling", types_str)
     _exit_war_screen()
+    stats.record_action(device, "join_rally", False, time.time() - _jr_start)
     return False
 
 # ============================================================
@@ -1108,10 +1132,7 @@ def restore_ap(device, needed):
 
     if not menu_opened:
         log.warning("AP Recovery menu did not open after 5 attempts")
-        # Save screenshot for debugging
-        if screen is not None:
-            cv2.imwrite(os.path.join(DEBUG_DIR, "ap_menu_failed.png"), screen)
-            log.debug("Saved debug/ap_menu_failed.png")
+        save_failure_screenshot(device, "ap_menu_failed")
         # Try to close whatever is open
         _close_ap_menu(device)
         return False
@@ -1120,6 +1141,7 @@ def restore_ap(device, needed):
     ap = _read_ap_from_menu(device)
     if ap is None:
         log.warning("Could not read AP from menu")
+        save_failure_screenshot(device, "ap_read_failed")
         _close_ap_menu(device)
         return False
 
@@ -1285,6 +1307,7 @@ def rally_titan(device):
         return True
     else:
         log.warning("Failed to find depart button")
+        save_failure_screenshot(device, "titan_depart_fail")
         return False
 
 # Candidate dark priest positions around an EG boss (screen 1080x1920).
@@ -1416,7 +1439,7 @@ def _probe_priest(device, x, y, label):
 
 
 @timed_action("rally_eg")
-def rally_eg(device):
+def rally_eg(device, stop_check=None):
     """Start an evil guard rally attacking dark priests around an EG.
 
     Uses probe-and-verify: taps each candidate position, checks if the attack
@@ -1424,6 +1447,7 @@ def rally_eg(device):
     players or blocked by UI).  Attacks whatever priests are available instead
     of aborting on the first miss.
 
+    stop_check: optional callable returning True if we should abort early.
     Persistent screenshots saved to debug/failures/ at every probe and failure.
     """
     log = get_logger("actions", device)
@@ -1511,8 +1535,15 @@ def rally_eg(device):
         return False
 
     def click_depart_with_fallback(priest_num):
-        """Tap the depart button with retries. Saves failure screenshot on exhaustion."""
+        """Tap the depart button with retries. Captures departing portrait on
+        first attempt for troop identity tracking. Saves failure screenshot on exhaustion."""
         for attempt in range(5):
+            if attempt == 0:
+                # Capture which troop is being sent (portrait + slot) before departing
+                result = capture_departing_portrait(device)
+                if result:
+                    slot_id, _ = result
+                    log.debug("P%d: departing troop is slot %d", priest_num, slot_id)
             if tap_image("depart.png", device):
                 log.debug("P%d: depart tapped (attempt %d)", priest_num, attempt + 1)
                 return True
@@ -1529,24 +1560,45 @@ def rally_eg(device):
         save_failure_screenshot(device, f"eg_depart_fail_p{priest_num}")
         return False
 
-    def wait_for_stationed(timeout_seconds, priest_num):
-        """Wait for troops to return (stationed visible). Logs match location.
-        Saves failure screenshot on timeout."""
-        log.debug("P%d: waiting for stationed (timeout=%ds)...", priest_num, timeout_seconds)
+    def poll_troop_ready(timeout_seconds, priest_num):
+        """Poll map panel for stationed status. Returns True when stationed detected.
+        Uses read_panel_statuses for rich status logging (marching → battling →
+        stationed transitions), with fallback to raw template matching if panel
+        reading fails. Checks stop_check every 3s."""
+        log.debug("P%d: polling for stationed (timeout=%ds)...", priest_num, timeout_seconds)
         start_time = time.time()
+        last_summary = None
         while time.time() - start_time < timeout_seconds:
-            screen = load_screenshot(device)
-            if stationed_img is not None and screen is not None:
-                result = cv2.matchTemplate(screen, stationed_img, cv2.TM_CCOEFF_NORMED)
-                _, max_val, _, max_loc = cv2.minMaxLoc(result)
-                if max_val > 0.8:
+            if stop_check and stop_check():
+                log.info("P%d: poll_troop_ready aborted (stop requested)", priest_num)
+                return False
+
+            snapshot = read_panel_statuses(device)
+            if snapshot:
+                # Log status transitions for deployed troops
+                deployed = [t for t in snapshot.troops if not t.is_home]
+                summary = ", ".join(t.action.value for t in deployed)
+                if summary != last_summary:
+                    log.info("P%d: troop status → %s", priest_num, summary)
+                    last_summary = summary
+                if snapshot.any_doing(TroopAction.STATIONING):
                     elapsed = time.time() - start_time
-                    log.debug("P%d: stationed at (%d,%d) %.0f%% after %.1fs",
-                              priest_num, max_loc[0], max_loc[1], max_val * 100, elapsed)
+                    log.debug("P%d: stationed detected via panel after %.1fs", priest_num, elapsed)
                     return True
-            time.sleep(2)
+            else:
+                # Fallback: raw template match (may not be on map screen yet)
+                screen = load_screenshot(device)
+                if stationed_img is not None and screen is not None:
+                    result = cv2.matchTemplate(screen, stationed_img, cv2.TM_CCOEFF_NORMED)
+                    _, max_val, _, max_loc = cv2.minMaxLoc(result)
+                    if max_val > 0.8:
+                        elapsed = time.time() - start_time
+                        log.debug("P%d: stationed at (%d,%d) %.0f%% after %.1fs (fallback)",
+                                  priest_num, max_loc[0], max_loc[1], max_val * 100, elapsed)
+                        return True
+            time.sleep(3)
         elapsed = time.time() - start_time
-        log.warning("P%d: wait_for_stationed TIMED OUT after %.1fs", priest_num, elapsed)
+        log.warning("P%d: poll_troop_ready TIMED OUT after %.1fs", priest_num, elapsed)
         save_failure_screenshot(device, f"eg_stationed_timeout_p{priest_num}")
         return False
 
@@ -1630,7 +1682,7 @@ def rally_eg(device):
             return False
         if not click_depart_with_fallback(1):
             return False
-        if not wait_for_stationed(240, 1):
+        if not poll_troop_ready(240, 1):
             return False
         log.info("P1: rally completed")
         attacks_completed += 1
@@ -1666,7 +1718,7 @@ def rally_eg(device):
                 log.warning("P%d: depart failed — skipping", pnum)
                 continue
             time.sleep(1)
-            if not wait_for_stationed(30, pnum):
+            if not poll_troop_ready(30, pnum):
                 log.warning("P%d: stationed timeout — continuing anyway", pnum)
             log.info("P%d: rally completed", pnum)
             attacks_completed += 1
@@ -1690,11 +1742,34 @@ def rally_eg(device):
 
     pnum = 6
     x6, y6 = EG_PRIEST_POSITIONS[5]
-    log.info("P6: starting final attack at (%d,%d)", x6, y6)
+    log.info("P6: starting final EG rally at (%d,%d)", x6, y6)
 
     # Dismiss dialog from previous priest
     if not dismiss_and_verify_map(6):
         return False
+
+    # Ensure a troop is available for the EG rally — the P5 troop may still
+    # be stationed at the last dark priest.  Wait up to 300s for it to return.
+    if troops_avail(device) <= config.MIN_TROOPS_AVAILABLE:
+        log.info("P6: no troop available yet — waiting for one to free up")
+        wait_start = time.time()
+        while time.time() - wait_start < 300:
+            if stop_check and stop_check():
+                log.info("P6: troop wait aborted (stop requested)")
+                return False
+            snapshot = read_panel_statuses(device)
+            if snapshot:
+                deployed = [t for t in snapshot.troops if not t.is_home]
+                summary = ", ".join(t.action.value for t in deployed)
+                log.debug("P6: waiting for troop — current: %s", summary)
+            if troops_avail(device) > config.MIN_TROOPS_AVAILABLE:
+                log.info("P6: troop now available — proceeding with EG rally")
+                break
+            time.sleep(3)
+        else:
+            log.warning("P6: no troop available after 300s — aborting EG rally")
+            save_failure_screenshot(device, "eg_no_troop_for_p6")
+            return False
 
     logged_tap(device, x6, y6, "eg_final_priest")
     time.sleep(1)
@@ -1704,7 +1779,7 @@ def rally_eg(device):
     try_stationed_before_depart(6)
     if not click_depart_with_fallback(6):
         return False
-    if not wait_for_stationed(240, 6):
+    if not poll_troop_ready(240, 6):
         return False
     if not tap_image("stationed.png", device):
         log.warning("P6: final stationed tap failed")
@@ -1915,7 +1990,7 @@ def join_war_rallies(device):
                             if match is None:
                                 match = find_image(s, "slot.png", threshold=0.65)
                                 if match:
-                                    log.debug("slot.png matched at lower threshold (%.0f%%)", find_image.last_best * 100)
+                                    log.debug("slot.png matched at lower threshold (%.0f%%)", get_last_best() * 100)
                             if match:
                                 max_val, max_loc, sh, sw = match
                                 cx = max_loc[0] + sw // 2

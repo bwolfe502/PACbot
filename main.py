@@ -19,7 +19,7 @@ from config import (set_min_troops, set_auto_heal, set_auto_restore_ap,
 from devices import get_devices, get_emulator_instances, auto_connect_emulators
 from navigation import check_screen, navigate
 from vision import adb_tap, tap_image, load_screenshot, find_image, wait_for_image_and_tap, read_ap
-from troops import troops_avail, heal_all
+from troops import troops_avail, heal_all, read_panel_statuses
 from actions import (attack, reinforce_throne, target, check_quests, teleport,
                      rally_titan, rally_eg, search_eg_reset, join_rally,
                      join_war_rallies, reset_quest_tracking, test_eg_positions)
@@ -111,10 +111,31 @@ def sleep_interval(base, variation, stop_check):
             break
         time.sleep(1)
 
+def _smart_wait_for_troops(device, stop_check, dlog, max_wait=120):
+    """Check troop statuses and wait if one is close to finishing (< max_wait seconds).
+    Returns True if a troop became available, False if timed out or stopped."""
+    snapshot = read_panel_statuses(device)
+    if snapshot is None:
+        return False
+    soonest = snapshot.soonest_free()
+    if soonest is None or soonest.time_left is None:
+        return False
+    wait_secs = soonest.time_left
+    if wait_secs > max_wait:
+        dlog.debug("Soonest troop free in %ds — too long, skipping wait", wait_secs)
+        return False
+    dlog.info("Troop %s finishes in %ds — waiting", soonest.action.value, wait_secs)
+    for _ in range(wait_secs + 5):  # Small buffer
+        if stop_check():
+            return False
+        time.sleep(1)
+    return True
+
+
 def run_auto_quest(device, stop_event):
     dlog = get_logger("main", device)
     dlog.info("Auto Quest started")
-    reset_quest_tracking()
+    reset_quest_tracking(device)
     stop_check = stop_event.is_set
     try:
         while not stop_check():
@@ -129,6 +150,8 @@ def run_auto_quest(device, stop_event):
                 check_quests(device, stop_check=stop_check)
             else:
                 dlog.warning("Not enough troops for quests")
+                if _smart_wait_for_troops(device, stop_check, dlog):
+                    continue  # Troop freed up — retry immediately
             if stop_check():
                 break
             for _ in range(10):
@@ -165,6 +188,8 @@ def run_auto_titan(device, stop_event, interval, variation):
                 rally_count += 1
             else:
                 dlog.warning("Not enough troops for Rally Titan")
+                if _smart_wait_for_troops(device, stop_check, dlog):
+                    continue  # Troop freed up — retry immediately
             if stop_check():
                 break
             sleep_interval(interval, variation, stop_check)
@@ -190,6 +215,8 @@ def run_auto_groot(device, stop_event, interval, variation):
                 join_rally("groot", device)
             else:
                 dlog.warning("Not enough troops for Rally Groot")
+                if _smart_wait_for_troops(device, stop_check, dlog):
+                    continue  # Troop freed up — retry immediately
             if stop_check():
                 break
             sleep_interval(interval, variation, stop_check)
@@ -1223,6 +1250,24 @@ def create_gui():
     add_debug_button(debug_tab, "Save Screenshot", save_screenshot)
     add_debug_button(debug_tab, "Check Quests", check_quests)
     add_debug_button(debug_tab, "Check Troops", troops_avail)
+
+    def debug_troop_status(device):
+        """Read and log full troop panel statuses."""
+        snapshot = read_panel_statuses(device)
+        dlog = get_logger("main", device)
+        if snapshot is None:
+            dlog.info("Troop Status: could not read (not on map screen?)")
+            return
+        for i, t in enumerate(snapshot.troops, 1):
+            if t.is_home:
+                dlog.info("  Troop %d: HOME", i)
+            elif t.time_left is not None:
+                dlog.info("  Troop %d: %s (%ds left)", i, t.action.value, t.time_left)
+            else:
+                dlog.info("  Troop %d: %s", i, t.action.value)
+        dlog.info("Troop Status: %d home, %d deployed", snapshot.home_count, snapshot.deployed_count)
+
+    add_debug_button(debug_tab, "Troop Status", debug_troop_status)
     add_debug_button(debug_tab, "Check AP", read_ap)
     add_debug_button(debug_tab, "Check Screen", check_screen)
     add_debug_button(debug_tab, "Test EG Positions", test_eg_positions)

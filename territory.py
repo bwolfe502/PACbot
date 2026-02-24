@@ -8,7 +8,7 @@ from PIL import Image, ImageTk
 import config
 from config import (SQUARE_SIZE, GRID_OFFSET_X, GRID_OFFSET_Y,
                     GRID_WIDTH, GRID_HEIGHT, THRONE_SQUARES, BORDER_COLORS)
-from vision import load_screenshot, tap_image, adb_tap, tap_tower_until_attack_menu, get_template
+from vision import load_screenshot, tap_image, adb_tap, tap_tower_until_attack_menu, get_template, save_failure_screenshot
 from navigation import navigate
 from troops import troops_avail, all_troops_home, heal_all
 from actions import teleport
@@ -586,6 +586,7 @@ def auto_occupy_loop(device):
 
         except Exception as e:
             log.error("Error in auto occupy loop: %s", e, exc_info=True)
+            save_failure_screenshot(device, "occupy_exception")
             if _occupy_sleep(5):
                 break
 

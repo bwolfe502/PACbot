@@ -124,11 +124,7 @@ def check_screen(device):
                 best_val = max_val
                 best_name = screen_name
 
-            # High confidence — skip remaining templates
-            if max_val > 0.9:
-                break
-
-        # Log scores sorted by confidence (partial if early-exit triggered)
+        # Log scores sorted by confidence
         score_str = " | ".join(f"{name}: {val*100:.0f}%" for name, val in
                                sorted(scores.items(), key=lambda x: x[1], reverse=True))
         log.debug("Screen scores: %s", score_str)

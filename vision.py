@@ -21,6 +21,9 @@ import config
 from config import adb_path, BUTTONS
 from botlog import get_logger, stats
 
+# Thread-local storage for find_image best score (avoids race between device threads)
+_thread_local = threading.local()
+
 # Initialize EasyOCR reader once (downloads models on first run)
 _ocr_reader = None
 _ocr_lock = threading.Lock()
@@ -273,11 +276,15 @@ def read_ap(device, retries=5):
 # TEMPLATE MATCHING
 # ============================================================
 
+def get_last_best():
+    """Get the best match score from the last find_image call on this thread."""
+    return getattr(_thread_local, 'last_best', 0.0)
+
 def find_image(screen, image_name, threshold=0.8, region=None):
     """Find an image template on screen.
     Returns (max_val, max_loc, h, w) on match, or None on failure.
-    On failure, the best score is stored in find_image.last_best for logging."""
-    find_image.last_best = 0.0
+    On failure, the best score is stored per-thread via get_last_best()."""
+    _thread_local.last_best = 0.0
     button = get_template(f"elements/{image_name}")
     if screen is None or button is None:
         return None
@@ -287,7 +294,7 @@ def find_image(screen, image_name, threshold=0.8, region=None):
         cropped = screen[y1:y2, x1:x2]
         result = cv2.matchTemplate(cropped, button, cv2.TM_CCOEFF_NORMED)
         min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
-        find_image.last_best = max_val
+        _thread_local.last_best = max_val
         if max_val > threshold:
             h, w = button.shape[:2]
             # Translate back to full-screen coordinates
@@ -296,14 +303,12 @@ def find_image(screen, image_name, threshold=0.8, region=None):
 
     result = cv2.matchTemplate(screen, button, cv2.TM_CCOEFF_NORMED)
     min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
-    find_image.last_best = max_val
+    _thread_local.last_best = max_val
 
     if max_val > threshold:
         h, w = button.shape[:2]
         return max_val, max_loc, h, w
     return None
-
-find_image.last_best = 0.0  # Initialize the attribute
 
 def find_all_matches(screen, image_name, threshold=0.8, min_distance=50):
     """Find all non-overlapping matches of a template on screen."""
@@ -334,14 +339,20 @@ def find_all_matches(screen, image_name, threshold=0.8, min_distance=50):
 
 def adb_tap(device, x, y):
     """Send a tap command via ADB."""
-    subprocess.run([adb_path, "-s", device, "shell", "input", "tap", str(x), str(y)],
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        subprocess.run([adb_path, "-s", device, "shell", "input", "tap", str(x), str(y)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+    except subprocess.TimeoutExpired:
+        get_logger("vision", device).warning("adb_tap timed out (ADB hung?)")
 
 def adb_swipe(device, x1, y1, x2, y2, duration_ms=300):
     """Send a swipe command via ADB."""
-    subprocess.run([adb_path, "-s", device, "shell", "input", "swipe",
-                    str(x1), str(y1), str(x2), str(y2), str(duration_ms)],
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        subprocess.run([adb_path, "-s", device, "shell", "input", "swipe",
+                        str(x1), str(y1), str(x2), str(y2), str(duration_ms)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+    except subprocess.TimeoutExpired:
+        get_logger("vision", device).warning("adb_swipe timed out (ADB hung?)")
 
 def tap(button_name, device):
     """Tap a button by its name from the BUTTONS dictionary"""
@@ -375,7 +386,7 @@ def tap_image(image_name, device, threshold=0.8):
         log.debug("Tapped %s at (%d, %d), confidence %.0f%%", image_name, center_x, center_y, max_val * 100)
         return True
     else:
-        best_val = find_image.last_best
+        best_val = get_last_best()
         log.debug("Couldn't find %s (best: %.0f%%, need: %.0f%%)", image_name, best_val * 100, threshold * 100)
         stats.record_template_miss(device, image_name, best_val)
         return False
