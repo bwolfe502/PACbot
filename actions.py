@@ -161,12 +161,18 @@ def _ocr_quest_rows(device):
         log.warning("Quest OCR: no text detected")
         return None
 
-    # Parse quest entries matching "Quest Name(X/Y)" pattern
+    # Parse quest entries matching "Quest Name(X/Y)" pattern.
+    # OCR often reads '0' as 'o'/'O', so accept those in the digit positions.
     quests = []
-    for match in re.finditer(r"(.+?)\((\d[\d,]*)/(\d[\d,]*)\)", raw_text):
+    for match in re.finditer(r"(.+?)\(([oO\d][\doO,]*)/([oO\d][\doO,]*)\)", raw_text):
         name = match.group(1).strip()
-        current = int(match.group(2).replace(",", ""))
-        target = int(match.group(3).replace(",", ""))
+        raw_cur = match.group(2).replace(",", "")
+        raw_tgt = match.group(3).replace(",", "")
+        # Fix OCR o/O -> 0
+        raw_cur = raw_cur.replace("o", "0").replace("O", "0")
+        raw_tgt = raw_tgt.replace("o", "0").replace("O", "0")
+        current = int(raw_cur)
+        target = int(raw_tgt)
         quest_type = _classify_quest_text(name)
 
         # Override OCR targets with known minimum caps.
@@ -791,112 +797,134 @@ def join_rally(rally_types, device, skip_heal=False):
 
     def check_for_joinable_rally():
         """Check current screen for a joinable rally of any requested type.
-        Returns type string if joined, False if none found, 'lost' if off war screen."""
+        Returns type string if joined, False if none found, 'lost' if off war screen.
+        After a full-rally or slot-not-found, backs out and retries other visible
+        rallies (up to 3 retries to avoid infinite loops on persistent failures)."""
+        retries_left = 3
         screen = load_screenshot(device)
         if screen is None:
             return False
 
-        join_locs = find_all_matches(screen, "rally/join.png")
-        if not join_locs:
-            return False
+        while retries_left >= 0:
+            join_locs = find_all_matches(screen, "rally/join.png")
+            if not join_locs:
+                return False
 
-        for rally_type in rally_types:
-            if rally_type not in rally_icons:
-                continue
-            icon_h, icon_w = rally_icons[rally_type].shape[:2]
-            rally_locs = find_all_matches(screen, f"rally/{rally_type}.png", threshold=0.9)
+            should_rescan = False  # set True when we need fresh screenshot + rematch
 
-            for rally_x, rally_y in rally_locs:
-                # The monster name label is at the bottom of the card,
-                # approximately at rally_y + icon_h (just below the matched icon).
-                label_y = rally_y + icon_h
-
-                # Find the closest join button to this icon
-                best_join = None
-                best_dist = float('inf')
-                for join_x, join_y in join_locs:
-                    dist = abs(join_y - label_y)
-                    if dist < best_dist:
-                        best_dist = dist
-                        best_join = (join_x, join_y)
-
-                if best_join is None or best_dist > 120:
+            for rally_type in rally_types:
+                if should_rescan:
+                    break
+                if rally_type not in rally_icons:
                     continue
+                icon_h, icon_w = rally_icons[rally_type].shape[:2]
+                rally_locs = find_all_matches(screen, f"rally/{rally_type}.png", threshold=0.9)
 
-                join_x, join_y = best_join
+                for rally_x, rally_y in rally_locs:
+                    # The monster name label is at the bottom of the card,
+                    # approximately at rally_y + icon_h (just below the matched icon).
+                    label_y = rally_y + icon_h
 
-                # Verify the icon's label says the expected type
-                icon_label = _ocr_label_at(screen, label_y, "rally_icon_label")
-                log.debug("Icon label OCR (y=%d): %s", label_y, icon_label)
-                if not _text_matches_type(icon_label, rally_type):
-                    log.debug("Icon label mismatch — expected '%s', got: %s", rally_type, icon_label)
-                    continue
+                    # Find the closest join button to this icon
+                    best_join = None
+                    best_dist = float('inf')
+                    for join_x, join_y in join_locs:
+                        dist = abs(join_y - label_y)
+                        if dist < best_dist:
+                            best_dist = dist
+                            best_join = (join_x, join_y)
 
-                # Verify what the join button is actually on (label at join button's Y)
-                join_label = _ocr_label_at(screen, join_y, "rally_join_target")
-                log.debug("Join target OCR (y=%d): %s", join_y, join_label)
-                if not _text_matches_type(join_label, rally_type):
-                    log.debug("Join button is on '%s', not '%s' — skipping", join_label, rally_type)
-                    continue
-
-                log.info("Found joinable %s rally (icon_y=%d, join_y=%d, dist=%d)", rally_type, label_y, join_y, best_dist)
-
-                h, w = join_btn.shape[:2]
-                log.debug("Clicking join at (%d, %d)", join_x + w // 2, join_y + h // 2)
-                adb_tap(device, join_x + w // 2, join_y + h // 2)
-                time.sleep(1)
-
-                # Wait for slot or full rally (single screenshot per iteration)
-                slot_found = False
-                rally_full = False
-                last_screen = None
-                start_time = time.time()
-                while time.time() - start_time < 5:
-                    s = load_screenshot(device)
-                    if s is None:
-                        time.sleep(0.5)
+                    if best_join is None or best_dist > 120:
                         continue
-                    last_screen = s
 
-                    # Check full rally
-                    if find_image(s, "full_rally.png", threshold=0.8):
-                        rally_full = True
-                        break
+                    join_x, join_y = best_join
 
-                    # Check for empty slot — try normal threshold, then lower
-                    match = find_image(s, "slot.png", threshold=0.8)
-                    if match is None:
-                        match = find_image(s, "slot.png", threshold=0.65)
+                    # Verify the icon's label says the expected type
+                    icon_label = _ocr_label_at(screen, label_y, "rally_icon_label")
+                    log.debug("Icon label OCR (y=%d): %s", label_y, icon_label)
+                    if not _text_matches_type(icon_label, rally_type):
+                        log.debug("Icon label mismatch — expected '%s', got: %s", rally_type, icon_label)
+                        continue
+
+                    # Verify what the join button is actually on (label at join button's Y)
+                    join_label = _ocr_label_at(screen, join_y, "rally_join_target")
+                    log.debug("Join target OCR (y=%d): %s", join_y, join_label)
+                    if not _text_matches_type(join_label, rally_type):
+                        log.debug("Join button is on '%s', not '%s' — skipping", join_label, rally_type)
+                        continue
+
+                    log.info("Found joinable %s rally (icon_y=%d, join_y=%d, dist=%d)", rally_type, label_y, join_y, best_dist)
+
+                    h, w = join_btn.shape[:2]
+                    log.debug("Clicking join at (%d, %d)", join_x + w // 2, join_y + h // 2)
+                    adb_tap(device, join_x + w // 2, join_y + h // 2)
+                    time.sleep(1)
+
+                    # Wait for rally detail screen to load — check for depart.png
+                    # as the definitive signal, then look for slot or full indicators
+                    slot_found = False
+                    rally_full = False
+                    detail_loaded = False
+                    last_screen = None
+                    start_time = time.time()
+                    while time.time() - start_time < 6:
+                        s = load_screenshot(device)
+                        if s is None:
+                            time.sleep(0.5)
+                            continue
+                        last_screen = s
+
+                        # Check full rally first (appears quickly)
+                        if find_image(s, "full_rally.png", threshold=0.8):
+                            rally_full = True
+                            break
+
+                        # Check for depart button — confirms detail screen loaded
+                        if not detail_loaded and find_image(s, "depart.png", threshold=0.8):
+                            detail_loaded = True
+
+                        # Check for empty slot at multiple thresholds
+                        match = find_image(s, "slot.png", threshold=0.8)
+                        if match is None:
+                            match = find_image(s, "slot.png", threshold=0.65)
+                            if match:
+                                log.debug("slot.png matched at lower threshold (%.0f%%)", get_last_best() * 100)
+                        if match is None:
+                            match = find_image(s, "slot.png", threshold=0.5)
+                            if match:
+                                log.debug("slot.png matched at 0.5 threshold (%.0f%%)", get_last_best() * 100)
                         if match:
-                            log.debug("slot.png matched at lower threshold (%.0f%%)", get_last_best() * 100)
-                    if match:
-                        max_val, max_loc, sh, sw = match
-                        cx = max_loc[0] + sw // 2
-                        cy = max_loc[1] + sh // 2
-                        log.debug("Found slot at (%d, %d), confidence %.0f%%", cx, cy, max_val * 100)
-                        adb_tap(device, cx, cy)
-                        slot_found = True
-                        break
-                    time.sleep(0.5)
+                            max_val, max_loc, sh, sw = match
+                            cx = max_loc[0] + sw // 2
+                            cy = max_loc[1] + sh // 2
+                            log.debug("Found slot at (%d, %d), confidence %.0f%%", cx, cy, max_val * 100)
+                            adb_tap(device, cx, cy)
+                            slot_found = True
+                            break
+                        time.sleep(0.5)
 
-                if rally_full:
-                    log.warning("Rally is full — backing out")
-                    if not _backout_to_war_screen():
-                        return "lost"
-                    return False  # Force fresh screenshot on next call
+                    if rally_full:
+                        log.warning("Rally is full — backing out to try others")
+                        if not _backout_to_war_screen():
+                            return "lost"
+                        retries_left -= 1
+                        should_rescan = True
+                        break  # Break rally_locs loop, rescan in while loop
 
-                if not slot_found:
-                    # Save debug screenshot so we can see the rally detail screen
-                    if last_screen is not None:
-                        from navigation import _save_debug_screenshot
-                        _save_debug_screenshot(device, "slot_not_found", last_screen)
-                        best = get_last_best()
-                        log.warning("No slot found (best slot match: %.0f%%, best full_rally: check debug screenshot) — backing out", best * 100)
-                    else:
-                        log.warning("No slot found (no screenshot captured) — backing out")
-                    if not _backout_to_war_screen():
-                        return "lost"
-                    return False  # Force fresh screenshot on next call
+                    if not slot_found:
+                        if last_screen is not None:
+                            from navigation import _save_debug_screenshot
+                            _save_debug_screenshot(device, "slot_not_found", last_screen)
+                            best = get_last_best()
+                            log.warning("No slot found (best match: %.0f%%, detail_loaded: %s) — backing out to try others",
+                                        best * 100, detail_loaded)
+                        else:
+                            log.warning("No slot found (no screenshot captured) — backing out")
+                        if not _backout_to_war_screen():
+                            return "lost"
+                        retries_left -= 1
+                        should_rescan = True
+                        break  # Break rally_locs loop, rescan in while loop
 
                 time.sleep(1)
                 if tap_image("depart.png", device):
@@ -947,7 +975,15 @@ def join_rally(rally_types, device, skip_heal=False):
                         return "lost"
                     return False
 
-        return False
+            if should_rescan:
+                # Refresh screenshot and re-enter the while loop to find new matches
+                screen = load_screenshot(device)
+                if screen is None:
+                    return False
+                continue  # Retry with fresh screenshot
+
+            # No more matches at this scroll position
+            return False
 
     # Check current view first
     result = check_for_joinable_rally()
@@ -1108,32 +1144,50 @@ def restore_ap(device, needed):
         log.warning("Failed to navigate to map screen for AP restore")
         return False
 
-    # Tap SEARCH button to open the search/rally menu
-    adb_tap(device, 900, 1800)
-    time.sleep(1)
-
-    # Tap the blue lightning bolt button (AP Recovery button in search menu)
-    adb_tap(device, 315, 1380)
-    time.sleep(1)
-
-    # Wait for AP Recovery menu to appear (check for apwindow.png)
+    # Open AP Recovery menu — retry the entire open sequence if it fails
     menu_opened = False
-    for attempt in range(5):
-        screen = load_screenshot(device)
-        if screen is not None:
-            match = find_image(screen, "apwindow.png", threshold=0.8)
-            if match:
-                log.debug("AP Recovery menu detected (attempt %d)", attempt + 1)
-                menu_opened = True
-                break
-            else:
-                log.debug("Waiting for AP Recovery menu... (attempt %d/5)", attempt + 1)
-        time.sleep(1)
+    for open_attempt in range(2):
+        if open_attempt > 0:
+            log.debug("AP: retrying menu open sequence (attempt %d/2)", open_attempt + 1)
+            _close_ap_menu(device)
+            time.sleep(0.5)
+            if not navigate("map_screen", device):
+                return False
+
+        # Tap SEARCH button to open the search/rally menu
+        adb_tap(device, 900, 1800)
+        time.sleep(1.5)
+
+        # Verify search menu opened before tapping AP Recovery
+        s = load_screenshot(device)
+        if s is not None and check_screen(device) == "map_screen":
+            # Search menu is an overlay, map_screen still detects — check for
+            # rally tab or other search-menu elements as secondary confirmation
+            log.debug("AP: search menu overlay active (map still detected)")
+
+        # Tap the blue lightning bolt button (AP Recovery button in search menu)
+        adb_tap(device, 315, 1380)
+        time.sleep(1.5)
+
+        # Wait for AP Recovery menu to appear (check for apwindow.png)
+        for attempt in range(5):
+            screen = load_screenshot(device)
+            if screen is not None:
+                match = find_image(screen, "apwindow.png", threshold=0.8)
+                if match:
+                    log.debug("AP Recovery menu detected (attempt %d)", attempt + 1)
+                    menu_opened = True
+                    break
+                else:
+                    log.debug("Waiting for AP Recovery menu... (attempt %d/5)", attempt + 1)
+            time.sleep(1)
+
+        if menu_opened:
+            break
 
     if not menu_opened:
-        log.warning("AP Recovery menu did not open after 5 attempts")
+        log.warning("AP Recovery menu did not open after all attempts")
         save_failure_screenshot(device, "ap_menu_failed")
-        # Try to close whatever is open
         _close_ap_menu(device)
         return False
 
@@ -1198,8 +1252,17 @@ def restore_ap(device, needed):
                     log.info("Potion worked: %d -> %d", current, new_ap[0])
                     current = new_ap[0]
                 else:
-                    log.debug("%s AP potion had no effect (out of stock)", potion_labels[i])
-                    break
+                    # Retry once — tap may not have registered due to lag
+                    log.debug("%s AP potion: no change, retrying tap...", potion_labels[i])
+                    adb_tap(device, px, py)
+                    time.sleep(1.5)
+                    new_ap = _read_ap_from_menu(device)
+                    if new_ap is not None and new_ap[0] > current:
+                        log.info("Potion worked on retry: %d -> %d", current, new_ap[0])
+                        current = new_ap[0]
+                    else:
+                        log.debug("%s AP potion out of stock", potion_labels[i])
+                        break
 
     # Step 3: Try gem restore (50 AP per use, escalating gem cost, confirmation required)
     # When exhausted, button still shows 3500 but confirmation won't open.
@@ -1477,10 +1540,21 @@ def rally_eg(device, stop_check=None):
         save_failure_screenshot(device, "eg_search_failed")
         return False
 
+    # Wait for search overlay to fully close and camera to settle
+    time.sleep(1.5)
+    # Verify we're back on map_screen (search overlay dismissed)
+    if check_screen(device) != "map_screen":
+        log.debug("EG: search overlay may still be open, waiting...")
+        time.sleep(1.5)
+        if check_screen(device) != "map_screen":
+            log.warning("EG: not on map_screen after search — recovering")
+            if not navigate("map_screen", device):
+                return False
+
     # Tap EG boss on map to enter the priest view
     log.debug("EG rally: tapping EG on map")
     logged_tap(device, EG_PRIEST_POSITIONS[0][0], EG_PRIEST_POSITIONS[0][1], "eg_boss_on_map")
-    time.sleep(1)
+    time.sleep(1.5)
 
     # Pre-load templates used in inner loops
     checked_img = get_template("elements/checked.png")
@@ -1674,6 +1748,7 @@ def rally_eg(device, stop_check=None):
         time.sleep(0.5)
 
     attacks_completed = 0
+    priests_dead = 0       # priests confirmed dead (attacked by us OR already dead)
 
     if p1_hit:
         log.info("P1: PROBE HIT — attack dialog opened")
@@ -1686,9 +1761,11 @@ def rally_eg(device, stop_check=None):
             return False
         log.info("P1: rally completed")
         attacks_completed += 1
+        priests_dead += 1
     else:
         log.warning("P1: PROBE MISS — no dialog after tapping EG boss")
         save_failure_screenshot(device, "probe_P1_MISS")
+        priests_dead += 1   # priest is already dead (killed by others)
         if check_screen(device) != "map_screen":
             logged_tap(device, 75, 75, "probe_P1_dismiss")
             time.sleep(0.5)
@@ -1718,12 +1795,14 @@ def rally_eg(device, stop_check=None):
                 log.warning("P%d: depart failed — skipping", pnum)
                 continue
             time.sleep(1)
-            if not poll_troop_ready(30, pnum):
+            if not poll_troop_ready(60, pnum):
                 log.warning("P%d: stationed timeout — continuing anyway", pnum)
             log.info("P%d: rally completed", pnum)
             attacks_completed += 1
+            priests_dead += 1
         else:
-            log.info("P%d: MISS — priest dead or blocked, skipping", pnum)
+            log.info("P%d: MISS — priest already dead, skipping", pnum)
+            priests_dead += 1
 
     if attacks_completed == 0 and not p1_hit:
         log.warning("No priests found at any position — aborting")
@@ -1733,12 +1812,16 @@ def rally_eg(device, stop_check=None):
     # =====================================================
     # PRIEST 6 — final attack (special 2-tap flow)
     # All 5 dark priests must be dead before the EG boss can be attacked.
+    # A priest counts as dead whether we killed it or it was already dead (MISS).
     # =====================================================
-    if attacks_completed < 5:
-        log.warning("Only %d/5 priests killed — skipping final EG attack "
-                    "(all 5 dark priests must be dead first)", attacks_completed)
+    if priests_dead < 5:
+        log.warning("Only %d/5 priests dead (%d attacked by us) — skipping final EG attack",
+                    priests_dead, attacks_completed)
         save_failure_screenshot(device, "eg_priests_incomplete")
         return False
+
+    log.info("All 5 priests dead (%d attacked by us, %d already dead) — proceeding to final EG attack",
+             attacks_completed, priests_dead - attacks_completed)
 
     pnum = 6
     x6, y6 = EG_PRIEST_POSITIONS[5]
@@ -1771,10 +1854,52 @@ def rally_eg(device, stop_check=None):
             save_failure_screenshot(device, "eg_no_troop_for_p6")
             return False
 
-    logged_tap(device, x6, y6, "eg_final_priest")
-    time.sleep(1)
-    logged_tap(device, 421, 1412, "eg_final_attack")
-    time.sleep(1)
+    # P6 uses a two-tap sequence: tap EG boss, then tap attack confirm.
+    # Verify the dialog opened by checking for depart/checked/unchecked.
+    # Retry the sequence up to 3 times if the taps don't register.
+    p6_dialog_opened = False
+    for p6_attempt in range(3):
+        logged_tap(device, x6, y6, "eg_final_priest")
+        time.sleep(1)
+        logged_tap(device, 421, 1412, "eg_final_attack")
+        time.sleep(1)
+
+        # Verify the attack dialog appeared
+        for _ in range(4):
+            s = load_screenshot(device)
+            if s is not None:
+                if find_image(s, "depart.png", threshold=0.8):
+                    p6_dialog_opened = True
+                    break
+                if checked_img is not None:
+                    result = cv2.matchTemplate(s, checked_img, cv2.TM_CCOEFF_NORMED)
+                    _, max_val, _, _ = cv2.minMaxLoc(result)
+                    if max_val > 0.8:
+                        p6_dialog_opened = True
+                        break
+                unchecked_tmpl = get_template("elements/unchecked.png")
+                if unchecked_tmpl is not None:
+                    result = cv2.matchTemplate(s, unchecked_tmpl, cv2.TM_CCOEFF_NORMED)
+                    _, max_val, _, _ = cv2.minMaxLoc(result)
+                    if max_val > 0.8:
+                        p6_dialog_opened = True
+                        break
+            time.sleep(0.5)
+
+        if p6_dialog_opened:
+            log.debug("P6: attack dialog confirmed (attempt %d)", p6_attempt + 1)
+            break
+        log.warning("P6: dialog not detected after taps (attempt %d/3) — retrying", p6_attempt + 1)
+        save_failure_screenshot(device, f"eg_p6_dialog_miss_a{p6_attempt+1}")
+        # Dismiss anything that might have opened, return to map
+        if check_screen(device) != "map_screen":
+            logged_tap(device, 75, 75, "eg_p6_dismiss_retry")
+            time.sleep(1)
+
+    if not p6_dialog_opened:
+        log.warning("P6: attack dialog never opened after 3 attempts — aborting")
+        save_failure_screenshot(device, "eg_p6_dialog_failed")
+        return False
 
     try_stationed_before_depart(6)
     if not click_depart_with_fallback(6):
