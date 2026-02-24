@@ -235,9 +235,12 @@ def _check_quests_legacy(device, stop_check):
 
             if not joined:
                 if quest_img == "eg.png":
-                    log.info("No rally to join, starting own EG rally")
-                    if navigate("map_screen", device):
-                        rally_eg(device)
+                    if config.EG_RALLY_OWN_ENABLED:
+                        log.info("No rally to join, starting own EG rally")
+                        if navigate("map_screen", device):
+                            rally_eg(device)
+                    else:
+                        log.info("No EG rally to join — own rally disabled, skipping")
                 else:
                     log.info("No rally to join, starting own Titan rally")
                     if navigate("map_screen", device):
@@ -389,11 +392,14 @@ def check_quests(device, stop_check=None):
                     if stop_check and stop_check():
                         return True
                 elif eg_needed > 0:
-                    log.info("No rally to join, starting own EG rally")
-                    if navigate("map_screen", device):
-                        if rally_eg(device):
-                            _record_rally_started("eg")
-                            started = True
+                    if config.EG_RALLY_OWN_ENABLED:
+                        log.info("No rally to join, starting own EG rally")
+                        if navigate("map_screen", device):
+                            if rally_eg(device):
+                                _record_rally_started("eg")
+                                started = True
+                    else:
+                        log.info("No EG rally to join — own rally disabled, skipping")
                     if stop_check and stop_check():
                         return True
                 if not started:
@@ -1281,37 +1287,58 @@ def rally_titan(device):
         log.warning("Failed to find depart button")
         return False
 
+# Candidate dark priest positions around an EG boss (screen 1080x1920).
+# P1 is the EG boss itself (opens first priest dialog).
+# P2-P5 are surrounding dark priests. P6 is the final center attack.
+EG_PRIEST_POSITIONS = [
+    (540, 665),   # P1: EG boss tap (opens first priest dialog)
+    (172, 895),   # P2: left-center
+    (259, 1213),  # P3: lower-left
+    (817, 1213),  # P4: lower-right
+    (929, 919),   # P5: right-center
+    (540, 913),   # P6: center (final attack / EG boss)
+]
+
+
+def _search_eg_center(device):
+    """Navigate to map → open search → rally tab → select EG → search.
+    Centers the camera on the nearest Evil Guard. Does NOT close the overlay.
+    Returns True if search succeeded, False otherwise."""
+    log = get_logger("actions", device)
+
+    if not navigate("map_screen", device):
+        log.warning("Failed to navigate to map screen")
+        return False
+
+    logged_tap(device, 900, 1800, "eg_search_btn")
+    time.sleep(1)
+
+    logged_tap(device, 850, 560, "eg_rally_tab")
+    time.sleep(1)
+
+    if not wait_for_image_and_tap("rally_eg_select.png", device, timeout=5, threshold=0.65):
+        log.warning("Failed to find Evil Guard select")
+        tap_image("close_x.png", device)
+        return False
+    time.sleep(1)
+
+    if not wait_for_image_and_tap("search.png", device, timeout=5, threshold=0.65):
+        log.warning("Failed to find Search button")
+        tap_image("close_x.png", device)
+        return False
+    time.sleep(1)
+
+    return True
+
+
 def search_eg_reset(device):
     """Search for an Evil Guard without departing to reset titan distances.
     This brings nearby monsters closer again after repeated titan rallies."""
     log = get_logger("actions", device)
     log.info("Searching EG to reset titan distance...")
 
-    if not navigate("map_screen", device):
-        log.warning("Failed to navigate to map screen for EG reset")
+    if not _search_eg_center(device):
         return False
-
-    # Tap SEARCH button
-    logged_tap(device, 900, 1800, "egreset_search_btn")
-    time.sleep(1)
-
-    # Tap RALLY tab
-    logged_tap(device, 850, 560, "egreset_rally_tab")
-    time.sleep(1)
-
-    # Select Evil Guard
-    if not wait_for_image_and_tap("rally_eg_select.png", device, timeout=5, threshold=0.65):
-        log.warning("Failed to find Evil Guard select for reset")
-        tap_image("close_x.png", device)
-        return False
-    time.sleep(1)
-
-    # Tap Search to trigger the distance reset
-    if not wait_for_image_and_tap("search.png", device, timeout=5, threshold=0.65):
-        log.warning("Failed to find Search button for EG reset")
-        tap_image("close_x.png", device)
-        return False
-    time.sleep(1)
 
     # Close out — tap X twice (EG view + search menu)
     tap_image("close_x.png", device)
@@ -1322,13 +1349,82 @@ def search_eg_reset(device):
     log.info("EG search complete — titan distances reset")
     return True
 
+def _probe_priest(device, x, y, label):
+    """Tap a candidate priest position and verify the attack dialog opened.
+
+    Saves BEFORE and AFTER screenshots to debug/failures/ for post-mortem.
+    Returns True (HIT) if checked.png or unchecked.png appears within 3s.
+    Returns False (MISS) and taps back to dismiss any popup on failure.
+    """
+    log = get_logger("actions", device)
+
+    # Verify we're on the map screen before probing
+    current = check_screen(device)
+    if current != "map_screen":
+        log.warning("PROBE %s: on %s instead of map_screen, recovering...", label, current)
+        if not navigate("map_screen", device):
+            log.warning("PROBE %s: could not recover to map screen", label)
+            return False
+
+    # BEFORE screenshot
+    save_failure_screenshot(device, f"probe_{label}_BEFORE")
+
+    # Tap the candidate position
+    logged_tap(device, x, y, f"probe_{label}")
+    time.sleep(1.5)
+
+    # Poll for attack dialog indicators
+    checked_tmpl = get_template("elements/checked.png")
+    unchecked_tmpl = get_template("elements/unchecked.png")
+
+    start = time.time()
+    while time.time() - start < 3:
+        screen = load_screenshot(device)
+        if screen is None:
+            time.sleep(0.5)
+            continue
+
+        # Check for checked.png
+        if checked_tmpl is not None:
+            result = cv2.matchTemplate(screen, checked_tmpl, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, _ = cv2.minMaxLoc(result)
+            if max_val > 0.8:
+                log.info("PROBE HIT %s at (%d,%d) — checked %.0f%%", label, x, y, max_val * 100)
+                save_failure_screenshot(device, f"probe_{label}_HIT", screen)
+                return True
+
+        # Check for unchecked.png
+        if unchecked_tmpl is not None:
+            result = cv2.matchTemplate(screen, unchecked_tmpl, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, _ = cv2.minMaxLoc(result)
+            if max_val > 0.8:
+                log.info("PROBE HIT %s at (%d,%d) — unchecked %.0f%%", label, x, y, max_val * 100)
+                save_failure_screenshot(device, f"probe_{label}_HIT", screen)
+                return True
+
+        time.sleep(0.5)
+
+    # MISS — no dialog appeared
+    log.info("PROBE MISS %s at (%d,%d) — no dialog after 3s", label, x, y)
+    save_failure_screenshot(device, f"probe_{label}_MISS")
+
+    # Only dismiss if not on map screen (tapping 75,75 on map opens profile)
+    if check_screen(device) != "map_screen":
+        logged_tap(device, 75, 75, f"probe_{label}_dismiss")
+        time.sleep(0.5)
+    return False
+
+
 @timed_action("rally_eg")
 def rally_eg(device):
-    """Start an evil guard rally attacking all 6 dark priests around an EG.
+    """Start an evil guard rally attacking dark priests around an EG.
 
-    Flow per priest: tap priest → check/proceed → depart → wait for return.
-    Full failure detection with persistent screenshots at every failure point
-    (saved to debug/failures/ — never auto-deleted between runs).
+    Uses probe-and-verify: taps each candidate position, checks if the attack
+    dialog opened, and skips positions where no priest exists (killed by other
+    players or blocked by UI).  Attacks whatever priests are available instead
+    of aborting on the first miss.
+
+    Persistent screenshots saved to debug/failures/ at every probe and failure.
     """
     log = get_logger("actions", device)
     log.debug("rally_eg() called")
@@ -1352,38 +1448,14 @@ def rally_eg(device):
             log.warning("Not enough AP for evil guard rally (have %d, need %d)", ap[0], config.AP_COST_EVIL_GUARD)
             return False
 
-    if not navigate("map_screen", device):
-        log.warning("Failed to navigate to map screen")
+    # Search EG once — centers camera, stays centered for all priests
+    if not _search_eg_center(device):
+        save_failure_screenshot(device, "eg_search_failed")
         return False
 
-    # Open search menu → rally tab → select Evil Guard → search
-    log.debug("EG rally: tapping search button")
-    logged_tap(device, 900, 1800, "eg_search_btn")
-    time.sleep(1)
-
-    log.debug("EG rally: tapping rally tab")
-    logged_tap(device, 850, 560, "eg_rally_tab")
-    time.sleep(1)
-
-    if not wait_for_image_and_tap("rally_eg_select.png", device, timeout=5, threshold=0.65):
-        log.warning("EG rally: failed to find Evil Guard select")
-        save_failure_screenshot(device, "eg_no_eg_select")
-        logged_tap(device, 75, 75, "eg_close_menu")
-        time.sleep(1)
-        return False
-    time.sleep(1)
-
-    if not wait_for_image_and_tap("search.png", device, timeout=5, threshold=0.65):
-        log.warning("EG rally: failed to find Search button")
-        save_failure_screenshot(device, "eg_no_search_btn")
-        logged_tap(device, 75, 75, "eg_close_menu")
-        time.sleep(1)
-        return False
-    time.sleep(1)
-
-    # Select EG boss on map
+    # Tap EG boss on map to enter the priest view
     log.debug("EG rally: tapping EG on map")
-    logged_tap(device, 540, 665, "eg_boss_on_map")
+    logged_tap(device, EG_PRIEST_POSITIONS[0][0], EG_PRIEST_POSITIONS[0][1], "eg_boss_on_map")
     time.sleep(1)
 
     # Pre-load templates used in inner loops
@@ -1482,92 +1554,149 @@ def rally_eg(device):
         """After a rally completes, dismiss any remaining dialog overlay and
         verify we're back on the map screen before tapping the next priest.
 
-        Taps back button up to 3 times, checking after each whether the
-        dialog is gone (no checked.png or depart.png visible).
-        Saves failure screenshot if dialog can't be dismissed.
+        Checks for dialog presence BEFORE tapping to avoid opening the
+        profile screen by hitting (75,75) on the map.
         """
-        for attempt in range(3):
-            log.debug("P%d: dismissing dialog (attempt %d/3)", priest_num, attempt + 1)
-            logged_tap(device, 75, 75, f"eg_dismiss_p{priest_num}_a{attempt+1}")
-            time.sleep(1.5)
-
+        for attempt in range(5):
             screen = load_screenshot(device)
             if screen is None:
+                time.sleep(1)
                 continue
 
-            # If dialog elements are still visible, keep dismissing
+            # Check if dialog elements are still visible
             dialog_open = False
             if checked_img is not None:
                 result = cv2.matchTemplate(screen, checked_img, cv2.TM_CCOEFF_NORMED)
                 _, max_val, _, _ = cv2.minMaxLoc(result)
                 if max_val > 0.8:
-                    log.debug("P%d: dialog still open (checked %.0f%%), retrying",
-                              priest_num, max_val * 100)
+                    dialog_open = True
+            if not dialog_open:
+                if find_image(screen, "depart.png", threshold=0.8):
                     dialog_open = True
 
             if not dialog_open:
-                depart_match = find_image(screen, "depart.png", threshold=0.8)
-                if depart_match:
-                    log.debug("P%d: dialog still open (depart visible), retrying", priest_num)
-                    dialog_open = True
+                # No dialog — verify we're actually on the map screen
+                current = check_screen(device)
+                if current == "map_screen":
+                    log.debug("P%d: dialog dismissed, map screen ready", priest_num)
+                    return True
+                log.debug("P%d: no dialog but on %s, dismissing (attempt %d/5)",
+                          priest_num, current, attempt + 1)
+            else:
+                log.debug("P%d: dialog still open, dismissing (attempt %d/5)",
+                          priest_num, attempt + 1)
 
-            if not dialog_open:
-                log.debug("P%d: dialog dismissed, map screen ready", priest_num)
-                return True
+            logged_tap(device, 75, 75, f"eg_dismiss_p{priest_num}_a{attempt+1}")
+            time.sleep(1.5)
 
-        log.warning("P%d: could not dismiss dialog after 3 attempts", priest_num)
+        # Last resort: navigate to map
+        log.warning("P%d: could not dismiss after 5 attempts, navigating to map", priest_num)
+        if navigate("map_screen", device):
+            return True
         save_failure_screenshot(device, f"eg_dismiss_fail_p{priest_num}")
         return False
 
     # =====================================================
-    # PRIEST 1 — first dark priest (already selected)
+    # PRIEST 1 — EG boss tap (probe verifies dialog opened)
     # =====================================================
-    log.info("P1: starting attack")
+    log.info("P1: probing EG boss at (%d,%d)", *EG_PRIEST_POSITIONS[0])
 
-    if not check_and_proceed(1):
-        return False
-    if not click_depart_with_fallback(1):
-        return False
-    if not wait_for_stationed(240, 1):
-        return False
-    log.info("P1: rally completed")
+    # P1 was already tapped above (eg_boss_on_map) — verify dialog opened
+    p1_hit = False
+    start = time.time()
+    while time.time() - start < 3:
+        screen = load_screenshot(device)
+        if screen is not None and checked_img is not None:
+            result = cv2.matchTemplate(screen, checked_img, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, _ = cv2.minMaxLoc(result)
+            if max_val > 0.8:
+                p1_hit = True
+                break
+        unchecked_tmpl = get_template("elements/unchecked.png")
+        if screen is not None and unchecked_tmpl is not None:
+            result = cv2.matchTemplate(screen, unchecked_tmpl, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, _ = cv2.minMaxLoc(result)
+            if max_val > 0.8:
+                p1_hit = True
+                break
+        time.sleep(0.5)
+
+    attacks_completed = 0
+
+    if p1_hit:
+        log.info("P1: PROBE HIT — attack dialog opened")
+        save_failure_screenshot(device, "probe_P1_HIT")
+        if not check_and_proceed(1):
+            return False
+        if not click_depart_with_fallback(1):
+            return False
+        if not wait_for_stationed(240, 1):
+            return False
+        log.info("P1: rally completed")
+        attacks_completed += 1
+    else:
+        log.warning("P1: PROBE MISS — no dialog after tapping EG boss")
+        save_failure_screenshot(device, "probe_P1_MISS")
+        if check_screen(device) != "map_screen":
+            logged_tap(device, 75, 75, "probe_P1_dismiss")
+            time.sleep(0.5)
 
     # =====================================================
-    # PRIESTS 2–5 — loop over 4 dark priest positions
+    # PRIESTS 2–5 — probe each, skip misses
     # =====================================================
-    priest_positions = [(172, 895), (259, 1213), (817, 1213), (929, 919)]
-    for i, (x, y) in enumerate(priest_positions):
-        pnum = i + 2
-        log.info("P%d: starting attack at (%d, %d)", pnum, x, y)
+    for i in range(1, 5):  # EG_PRIEST_POSITIONS[1] through [4]
+        pnum = i + 1
+        x, y = EG_PRIEST_POSITIONS[i]
+        log.info("P%d: probing at (%d, %d)", pnum, x, y)
 
         # Dismiss any remaining dialog from the previous rally
-        if not dismiss_and_verify_map(pnum):
-            return False
+        if attacks_completed > 0 or p1_hit:
+            if not dismiss_and_verify_map(pnum):
+                log.warning("P%d: could not dismiss dialog, aborting", pnum)
+                return False
 
-        # Tap the dark priest on the map
-        logged_tap(device, x, y, f"eg_priest_{pnum}")
-        time.sleep(1)
+        # Probe: tap + verify dialog opened
+        if _probe_priest(device, x, y, f"P{pnum}"):
+            # HIT — proceed with attack
+            if not check_and_proceed(pnum):
+                log.warning("P%d: check_and_proceed failed after probe hit — skipping", pnum)
+                continue
+            try_stationed_before_depart(pnum)
+            if not click_depart_with_fallback(pnum):
+                log.warning("P%d: depart failed — skipping", pnum)
+                continue
+            time.sleep(1)
+            if not wait_for_stationed(30, pnum):
+                log.warning("P%d: stationed timeout — continuing anyway", pnum)
+            log.info("P%d: rally completed", pnum)
+            attacks_completed += 1
+        else:
+            log.info("P%d: MISS — priest dead or blocked, skipping", pnum)
 
-        if not check_and_proceed(pnum):
-            return False
-        try_stationed_before_depart(pnum)
-        if not click_depart_with_fallback(pnum):
-            return False
-        time.sleep(1)
-        if not wait_for_stationed(30, pnum):
-            return False
-        log.info("P%d: rally completed", pnum)
+    if attacks_completed == 0 and not p1_hit:
+        log.warning("No priests found at any position — aborting")
+        save_failure_screenshot(device, "eg_no_priests_found")
+        return False
 
     # =====================================================
-    # PRIEST 6 — final dark priest
+    # PRIEST 6 — final attack (special 2-tap flow)
+    # All 5 dark priests must be dead before the EG boss can be attacked.
     # =====================================================
-    log.info("P6: starting final attack")
+    if attacks_completed < 5:
+        log.warning("Only %d/5 priests killed — skipping final EG attack "
+                    "(all 5 dark priests must be dead first)", attacks_completed)
+        save_failure_screenshot(device, "eg_priests_incomplete")
+        return False
 
-    # Dismiss dialog from priest 5
+    pnum = 6
+    x6, y6 = EG_PRIEST_POSITIONS[5]
+    log.info("P6: starting final attack at (%d,%d)", x6, y6)
+
+    # Dismiss dialog from previous priest
     if not dismiss_and_verify_map(6):
         return False
 
-    logged_tap(device, 540, 913, "eg_final_priest")
+    logged_tap(device, x6, y6, "eg_final_priest")
     time.sleep(1)
     logged_tap(device, 421, 1412, "eg_final_attack")
     time.sleep(1)
@@ -1588,8 +1717,106 @@ def rally_eg(device):
         save_failure_screenshot(device, "eg_return_fail")
         return False
 
-    log.info("Evil Guard rally completed successfully — all 6 priests attacked!")
+    attacks_completed += 1
+    log.info("Evil Guard rally completed — %d priests attacked!", attacks_completed)
     return True
+
+@timed_action("test_eg_positions")
+def test_eg_positions(device):
+    """Diagnostic: probe all EG priest positions and report hit/miss.
+
+    Searches for an EG to center the camera, then probes each candidate
+    position WITHOUT attacking. Logs a summary table and saves before/after
+    screenshots for every probe to debug/failures/.
+
+    Safe to run repeatedly for data collection.
+    """
+    log = get_logger("actions", device)
+    log.info("=== TEST EG POSITIONS — starting diagnostic ===")
+
+    if not _search_eg_center(device):
+        log.warning("TEST: could not center on EG — aborting")
+        return False
+
+    # Tap EG boss to set up the view (same as rally_eg P1 entry)
+    p1_x, p1_y = EG_PRIEST_POSITIONS[0]
+    log.info("TEST: tapping EG boss at (%d,%d) to enter priest view", p1_x, p1_y)
+    logged_tap(device, p1_x, p1_y, "test_eg_boss")
+    time.sleep(1.5)
+
+    results = {}
+
+    # Probe P1 — already tapped above, just check if dialog opened
+    checked_tmpl = get_template("elements/checked.png")
+    unchecked_tmpl = get_template("elements/unchecked.png")
+    p1_hit = False
+    save_failure_screenshot(device, "test_probe_P1_BEFORE")
+    start = time.time()
+    while time.time() - start < 3:
+        screen = load_screenshot(device)
+        if screen is not None:
+            if checked_tmpl is not None:
+                result = cv2.matchTemplate(screen, checked_tmpl, cv2.TM_CCOEFF_NORMED)
+                _, max_val, _, _ = cv2.minMaxLoc(result)
+                if max_val > 0.8:
+                    p1_hit = True
+                    break
+            if unchecked_tmpl is not None:
+                result = cv2.matchTemplate(screen, unchecked_tmpl, cv2.TM_CCOEFF_NORMED)
+                _, max_val, _, _ = cv2.minMaxLoc(result)
+                if max_val > 0.8:
+                    p1_hit = True
+                    break
+        time.sleep(0.5)
+
+    results["P1"] = p1_hit
+    status = "HIT" if p1_hit else "MISS"
+    log.info("TEST P1 (%d,%d): %s", p1_x, p1_y, status)
+    save_failure_screenshot(device, f"test_probe_P1_{status}")
+
+    # Dismiss P1 dialog if hit
+    if p1_hit:
+        logged_tap(device, 75, 75, "test_dismiss_P1")
+        time.sleep(1)
+
+    # Probe P2-P5
+    for i in range(1, 5):
+        pnum = i + 1
+        x, y = EG_PRIEST_POSITIONS[i]
+        label = f"P{pnum}"
+
+        # Dismiss any leftover dialog
+        logged_tap(device, 75, 75, f"test_dismiss_before_{label}")
+        time.sleep(1)
+
+        hit = _probe_priest(device, x, y, f"test_{label}")
+        results[label] = hit
+        log.info("TEST %s (%d,%d): %s", label, x, y, "HIT" if hit else "MISS")
+
+        # Dismiss dialog if hit (don't attack)
+        if hit:
+            logged_tap(device, 75, 75, f"test_dismiss_{label}")
+            time.sleep(1)
+
+    # Probe P6
+    p6_x, p6_y = EG_PRIEST_POSITIONS[5]
+    logged_tap(device, 75, 75, "test_dismiss_before_P6")
+    time.sleep(1)
+    hit = _probe_priest(device, p6_x, p6_y, "test_P6")
+    results["P6"] = hit
+    log.info("TEST P6 (%d,%d): %s", p6_x, p6_y, "HIT" if hit else "MISS")
+    if hit:
+        logged_tap(device, 75, 75, "test_dismiss_P6")
+        time.sleep(1)
+
+    # Summary
+    hits = sum(1 for v in results.values() if v)
+    total = len(results)
+    summary_lines = [f"  {label}: {'HIT' if hit else 'MISS'}" for label, hit in results.items()]
+    log.info("=== TEST EG POSITIONS — %d/%d hit ===\n%s", hits, total, "\n".join(summary_lines))
+
+    return results
+
 
 @timed_action("join_war_rallies")
 def join_war_rallies(device):

@@ -14,14 +14,15 @@ import logging
 import config
 from updater import get_current_version
 from config import (set_min_troops, set_auto_heal, set_auto_restore_ap,
-                     set_ap_restore_options, set_territory_config, running_tasks)
+                     set_ap_restore_options, set_territory_config, set_eg_rally_own,
+                     running_tasks)
 from devices import get_devices, get_emulator_instances, auto_connect_emulators
 from navigation import check_screen, navigate
 from vision import adb_tap, tap_image, load_screenshot, find_image, wait_for_image_and_tap, read_ap
 from troops import troops_avail, heal_all
 from actions import (attack, reinforce_throne, target, check_quests, teleport,
                      rally_titan, rally_eg, search_eg_reset, join_rally,
-                     join_war_rallies, reset_quest_tracking)
+                     join_war_rallies, reset_quest_tracking, test_eg_positions)
 from territory import (attack_territory, auto_occupy_loop,
                        open_territory_manager, sample_specific_squares)
 from botlog import get_logger
@@ -51,6 +52,7 @@ DEFAULTS = {
     "enemy_team": "green",
     "mode": "bl",
     "verbose_logging": False,
+    "eg_rally_own": True,
 }
 
 def load_settings():
@@ -898,6 +900,18 @@ def create_gui():
                    command=toggle_auto_restore_ap, font=("Segoe UI", 9),
                    bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.LEFT)
 
+    # EG rally own toggle
+    eg_rally_own_var = tk.BooleanVar(value=settings.get("eg_rally_own", True))
+    set_eg_rally_own(settings.get("eg_rally_own", True))
+
+    def toggle_eg_rally_own():
+        set_eg_rally_own(eg_rally_own_var.get())
+        save_current_settings()
+
+    tk.Checkbutton(row1, text="Rally Own EG", variable=eg_rally_own_var,
+                   command=toggle_eg_rally_own, font=("Segoe UI", 9),
+                   bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.LEFT)
+
     # Show AP settings row if auto restore is already enabled
     if settings["auto_restore_ap"]:
         ap_settings_row.pack(fill=tk.X, pady=(2, 0), after=row1)
@@ -1072,6 +1086,7 @@ def create_gui():
             "enemy_team": enemy_var.get(),
             "mode": mode_var.get(),
             "verbose_logging": verbose_var.get(),
+            "eg_rally_own": eg_rally_own_var.get(),
             "device_troops": dt,
         })
 
@@ -1210,6 +1225,7 @@ def create_gui():
     add_debug_button(debug_tab, "Check Troops", troops_avail)
     add_debug_button(debug_tab, "Check AP", read_ap)
     add_debug_button(debug_tab, "Check Screen", check_screen)
+    add_debug_button(debug_tab, "Test EG Positions", test_eg_positions)
     add_debug_button(debug_tab, "Attack Territory (Debug)", lambda dev: attack_territory(dev, debug=True))
     add_debug_button(debug_tab, "Sample Specific Squares", sample_specific_squares)
 

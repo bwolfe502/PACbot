@@ -99,6 +99,7 @@ MANUAL_IGNORE_SQUARES = set()  # Squares user manually selected to ignore: {(row
 MIN_TROOPS_AVAILABLE = 0
 AUTO_HEAL_ENABLED = False
 AUTO_RESTORE_AP_ENABLED = False
+EG_RALLY_OWN_ENABLED = True    # If False, only join EG rallies — never start own
 
 # AP restore source options
 AP_USE_FREE = True           # Use free AP restores (25 AP each, 2x daily)
@@ -172,6 +173,12 @@ def set_ap_restore_options(use_free, use_potions, allow_large, use_gems, gem_lim
     AP_GEM_LIMIT = max(0, min(gem_limit, 3500))
     _log.info("AP restore: free=%s, potions=%s, large=%s, gems=%s, gem_limit=%d",
               use_free, use_potions, allow_large, use_gems, AP_GEM_LIMIT)
+
+def set_eg_rally_own(enabled):
+    """Set whether the bot can start its own EG rallies (vs join-only)"""
+    global EG_RALLY_OWN_ENABLED
+    EG_RALLY_OWN_ENABLED = enabled
+    _log.info("EG rally own: %s", "enabled" if enabled else "disabled")
 
 def set_territory_config(my_team, enemy_teams):
     """Set which team you are and which teams to attack"""
