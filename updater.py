@@ -88,7 +88,14 @@ def version_tuple(v):
 def check_and_update():
     """
     Main update flow. Checks GitHub and updates if a newer version exists.
+    Skips automatically when running from a git checkout (developer mode).
     """
+    # Skip updates for developers working from a git clone
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    if os.path.isdir(os.path.join(app_dir, ".git")):
+        print("Git repo detected — skipping auto-update (developer mode).")
+        return False
+
     import requests
 
     current = get_current_version()
