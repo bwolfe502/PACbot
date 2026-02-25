@@ -2480,6 +2480,8 @@ def mine_mithril(device):
         # Wait for troop selection screen and tap DEPART
         if wait_for_image_and_tap("mithril_depart.png", device, timeout=4, threshold=0.7):
             deployed_count += 1
+            if deployed_count == 1:
+                config.MITHRIL_DEPLOY_TIME[device] = time.time()
             time.sleep(2)  # Wait for deploy animation to return to overview
         else:
             log.warning("Mine %d: depart button not found after ATTACK", i + 1)
@@ -2488,10 +2490,6 @@ def mine_mithril(device):
             time.sleep(1)
 
     log.info("Deployed %d/%d troops to mithril mines", deployed_count, len(_MITHRIL_MINES))
-
-    # Start deploy timer if any troops were placed
-    if deployed_count > 0:
-        config.MITHRIL_DEPLOY_TIME[device] = time.time()
 
     # Step 7: Navigate back to map screen
     adb_tap(device, 75, 75)  # Back from Advanced Mithril
