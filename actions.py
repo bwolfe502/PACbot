@@ -1314,15 +1314,17 @@ def _read_ap_from_menu(device):
     img = screen[y1:y2, x1:x2]
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-    inverted = cv2.bitwise_not(gray)
+    # Threshold to isolate white text and strip outline/shadow artifacts
+    # that cause EasyOCR to miss the '/' character
+    _, thresh = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
 
     # Save debug crop so we can inspect what OCR sees
-    cv2.imwrite(os.path.join(DEBUG_DIR, "ap_menu_crop.png"), inverted)
+    cv2.imwrite(os.path.join(DEBUG_DIR, "ap_menu_crop.png"), thresh)
     log.debug("AP menu OCR: saved debug/ap_menu_crop.png (region %s)", _AP_MENU_REGION)
 
     from vision import _get_ocr_reader
     reader = _get_ocr_reader()
-    results = reader.readtext(inverted, allowlist="0123456789/", detail=0)
+    results = reader.readtext(thresh, allowlist="0123456789/", detail=0)
     raw = " ".join(results).strip()
     log.debug("AP menu OCR raw: '%s'", raw)
 
