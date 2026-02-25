@@ -12,6 +12,7 @@ import config
 from vision import (load_screenshot, tap_image, adb_tap, logged_tap,
                     get_template, save_failure_screenshot)
 from navigation import navigate
+from config import Screen
 from botlog import get_logger, timed_action
 
 
@@ -232,7 +233,7 @@ def heal_all(device):
     """Check if we're on map_screen and if heal is needed, then heal all troops.
     Repeats until no more heal button is found (all troops healed)."""
     log = get_logger("troops", device)
-    if not navigate("map_screen", device):
+    if not navigate(Screen.MAP, device):
         log.warning("Failed to navigate to map screen for healing")
         return False
 
@@ -256,7 +257,7 @@ def heal_all(device):
     if healed_any:
         log.info("Heal sequence complete — all troops healed")
         # Navigate back to map_screen to ensure clean state
-        navigate("map_screen", device)
+        navigate(Screen.MAP, device)
     else:
         log.debug("No healing needed")
     return True

@@ -7,7 +7,7 @@ from PIL import Image, ImageTk
 
 import config
 from config import (SQUARE_SIZE, GRID_OFFSET_X, GRID_OFFSET_Y,
-                    GRID_WIDTH, GRID_HEIGHT, THRONE_SQUARES, BORDER_COLORS)
+                    GRID_WIDTH, GRID_HEIGHT, THRONE_SQUARES, BORDER_COLORS, Screen)
 from vision import load_screenshot, tap_image, adb_tap, tap_tower_until_attack_menu, get_template, save_failure_screenshot
 from navigation import navigate
 from troops import troops_avail, all_troops_home, heal_all
@@ -25,7 +25,7 @@ def open_territory_manager(device):
     log = get_logger("territory", device)
 
     # Take a screenshot of territory screen
-    if not navigate("territory_screen", device):
+    if not navigate(Screen.TERRITORY, device):
         log.warning("Failed to navigate to territory screen")
         return
 
@@ -220,7 +220,7 @@ def attack_territory(device, debug=False):
     log.info("Starting territory attack workflow...")
 
     # Step 1: Navigate to map screen
-    if not navigate("map_screen", device):
+    if not navigate(Screen.MAP, device):
         log.warning("Failed to navigate to map screen")
         return False
 
@@ -238,7 +238,7 @@ def attack_territory(device, debug=False):
     log.info("All troops confirmed home. Proceeding...")
 
     # Step 4: Navigate to territory screen
-    if not navigate("territory_screen", device):
+    if not navigate(Screen.TERRITORY, device):
         log.warning("Failed to navigate to territory screen")
         return False
 
@@ -536,7 +536,7 @@ def auto_occupy_loop(device):
                 target_row, target_col = config.LAST_ATTACKED_SQUARE[device]
                 log.info("Step 3: Navigating to territory screen to click square (%d, %d)...", target_row, target_col)
 
-                if not navigate("territory_screen", device):
+                if not navigate(Screen.TERRITORY, device):
                     log.warning("Failed to navigate to territory screen")
                     if _occupy_sleep(10):
                         break

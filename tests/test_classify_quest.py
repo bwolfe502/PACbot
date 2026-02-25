@@ -1,32 +1,33 @@
 """Tests for _classify_quest_text (actions.py)."""
 
 from actions import _classify_quest_text
+from config import QuestType
 
 
 class TestClassifyQuestText:
     def test_titan(self):
-        assert _classify_quest_text("Defeat Titans") == "titan"
-        assert _classify_quest_text("defeat titans") == "titan"
-        assert _classify_quest_text("TITAN rally") == "titan"
+        assert _classify_quest_text("Defeat Titans") == QuestType.TITAN
+        assert _classify_quest_text("defeat titans") == QuestType.TITAN
+        assert _classify_quest_text("TITAN rally") == QuestType.TITAN
 
     def test_eg(self):
-        assert _classify_quest_text("Evil Guard") == "eg"
-        assert _classify_quest_text("evil guard rally") == "eg"
-        assert _classify_quest_text("Guard") == "eg"
+        assert _classify_quest_text("Evil Guard") == QuestType.EVIL_GUARD
+        assert _classify_quest_text("evil guard rally") == QuestType.EVIL_GUARD
+        assert _classify_quest_text("Guard") == QuestType.EVIL_GUARD
 
     def test_pvp(self):
-        assert _classify_quest_text("PvP Battle") == "pvp"
-        assert _classify_quest_text("Attack enemies") == "pvp"
+        assert _classify_quest_text("PvP Battle") == QuestType.PVP
+        assert _classify_quest_text("Attack enemies") == QuestType.PVP
 
     def test_gather(self):
-        assert _classify_quest_text("Gather Resources") == "gather"
+        assert _classify_quest_text("Gather Resources") == QuestType.GATHER
 
     def test_fortress(self):
-        assert _classify_quest_text("Occupy Fortress") == "fortress"
-        assert _classify_quest_text("fortress defense") == "fortress"
+        assert _classify_quest_text("Occupy Fortress") == QuestType.FORTRESS
+        assert _classify_quest_text("fortress defense") == QuestType.FORTRESS
 
     def test_tower(self):
-        assert _classify_quest_text("Tower defense") == "tower"
+        assert _classify_quest_text("Tower defense") == QuestType.TOWER
 
     def test_unknown(self):
         assert _classify_quest_text("something else entirely") is None
