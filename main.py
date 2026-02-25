@@ -19,7 +19,7 @@ from devices import get_devices, get_emulator_instances, auto_connect_emulators
 from navigation import check_screen, navigate
 from vision import adb_tap, tap_image, load_screenshot, find_image, wait_for_image_and_tap, read_ap
 from troops import troops_avail, heal_all, read_panel_statuses
-from actions import (attack, reinforce_throne, target, check_quests, teleport,
+from actions import (attack, phantom_clash_attack, reinforce_throne, target, check_quests, teleport,
                      rally_titan, rally_eg, search_eg_reset, join_rally,
                      join_war_rallies, reset_quest_tracking, reset_rally_blacklist,
                      test_eg_positions, mine_mithril, mine_mithril_if_due)
@@ -93,6 +93,7 @@ TASK_FUNCTIONS = {
     "Heal All": heal_all,
     "Target": target,
     "Attack": attack,
+    "Phantom Clash Attack": phantom_clash_attack,
     "Reinforce Throne": reinforce_throne,
     "UP UP UP!": join_war_rallies,
     "Teleport": teleport,
@@ -1411,6 +1412,7 @@ def create_gui():
     # War tab
     add_task_row(war_tab, "Target", 30)
     add_task_row(war_tab, "Attack", 30)
+    add_task_row(war_tab, "Phantom Clash Attack", 30)
     add_task_row(war_tab, "Reinforce Throne", 30)
     add_task_row(war_tab, "UP UP UP!", 30)
     add_task_row(war_tab, "Teleport", 30)

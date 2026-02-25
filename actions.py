@@ -626,6 +626,88 @@ def attack(device):
     else:
         log.warning("Not enough troops available (have %d, need more than %d)", troops, config.MIN_TROOPS_AVAILABLE)
 
+@timed_action("phantom_clash_attack")
+def phantom_clash_attack(device):
+    """Heal all troops first (if auto heal enabled), then attack in Phantom Clash mode"""
+    log = get_logger("actions", device)
+    clear_click_trail()
+    if config.AUTO_HEAL_ENABLED:
+        heal_all(device)
+
+    # Determine if we need to attack based on troop statuses
+    screen = load_screenshot(device)
+    deployed = 5 - troops_avail(device)
+    if deployed >= 5:
+        # All troops out — check if any can attack (stationing or home)
+        has_stationing = find_image(screen, "statuses/stationing.png") is not None
+        has_battling = find_image(screen, "statuses/battling.png") is not None
+        has_marching = find_image(screen, "statuses/marching.png") is not None
+        has_returning = find_image(screen, "statuses/returning.png") is not None
+        if not has_stationing:
+            log.info("All 5 troops deployed and none stationing — skipping attack")
+            return
+        log.info("5 troops deployed but stationing troop found — proceeding to attack")
+    else:
+        log.info("%d/5 troops deployed — proceeding to attack", deployed)
+
+    # Check for returning troops and drag to recall (skip if attack window already open)
+    if not find_image(screen, "esb_middle_attack_window.png"):
+        match = find_image(screen, "statuses/returning.png")
+        if match:
+            _, (mx, my), h, w = match
+            cx, cy = mx + w // 2, my + h // 2
+            log.info("Found returning troops at (%d, %d), dragging to (560, 1200)", cx, cy)
+            adb_swipe(device, cx, cy, 560, 1200, duration_ms=500)
+            time.sleep(1)
+
+    logged_tap(device, 550, 450, "phantom_clash_attack_selection")
+
+    # Wait for the attack menu to open (esb_middle_attack_window.png)
+    start = time.time()
+    menu_open = False
+    while time.time() - start < 31:
+        screen = load_screenshot(device)
+        # Always check for attack button even while waiting for menu
+        match = find_image(screen, "esb_attack.png")
+        if match:
+            _, (mx, my), h, w = match
+            adb_tap(device, mx + w // 2, my + h // 2)
+            log.debug("Tapped esb_attack.png")
+            menu_open = True
+            break
+        if find_image(screen, "esb_middle_attack_window.png"):
+            log.debug("Attack menu open, waiting for esb_attack.png...")
+            menu_open = True
+        else:
+            log.debug("Attack menu not detected, retapping king")
+            logged_tap(device, 550, 450, "phantom_clash_attack_selection")
+        time.sleep(1)
+
+    if not menu_open:
+        log.warning("Timed out waiting for attack menu after 31s")
+        return
+
+    # Menu is open but attack button wasn't found yet — keep polling
+    if not find_image(load_screenshot(device), "esb_attack.png"):
+        while time.time() - start < 31:
+            screen = load_screenshot(device)
+            match = find_image(screen, "esb_attack.png")
+            if match:
+                _, (mx, my), h, w = match
+                adb_tap(device, mx + w // 2, my + h // 2)
+                log.debug("Tapped esb_attack.png")
+                break
+            time.sleep(1)
+        else:
+            log.warning("Timed out waiting for esb_attack.png after 31s")
+            return
+
+    time.sleep(1)  # Wait for attack dialog
+    if tap_image("depart.png", device):
+        log.info("Phantom Clash attack departed")
+    else:
+        log.warning("Depart button not found after Phantom Clash attack sequence")
+
 @timed_action("reinforce_throne")
 def reinforce_throne(device):
     """Heal all troops first (if auto heal enabled), then check troops and reinforce throne"""
