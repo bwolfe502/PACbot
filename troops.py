@@ -237,8 +237,7 @@ def heal_all(device):
         return False
 
     healed_any = False
-    max_heals = 20  # Safety cap — 5 troops max, 20 is generous
-    for _ in range(max_heals):
+    for _ in range(config.MAX_HEAL_ITERATIONS):
         if not tap_image("heal.png", device):
             break
         healed_any = True

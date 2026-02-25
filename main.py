@@ -3,14 +3,11 @@ from tkinter import ttk, messagebox, filedialog
 import threading
 import queue
 import time
-import traceback
 import os
 import sys
-import subprocess
 import random
 import json
 import logging
-import zipfile
 import platform
 
 import config

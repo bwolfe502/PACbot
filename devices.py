@@ -135,7 +135,7 @@ def _get_emulator_instances_windows(devices):
                                           window_text, pid, process_name)
                     except (psutil.NoSuchProcess, psutil.AccessDenied):
                         pass
-                except:
+                except Exception:
                     pass
 
         win32gui.EnumWindows(enum_callback, emulator_windows)
@@ -165,7 +165,7 @@ def _get_emulator_instances_windows(devices):
                                 device_map[device] = info["name"]
                                 _log.debug("Mapped %s -> %s (via port %s)", device, info['name'], port)
                                 break
-                        except:
+                        except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
                             continue
 
                 if device not in device_map:

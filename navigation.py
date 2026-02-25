@@ -15,8 +15,8 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEBUG_DIR = os.path.join(SCRIPT_DIR, "debug")
 os.makedirs(DEBUG_DIR, exist_ok=True)
 
-# Keep only the last 50 debug screenshots to avoid filling disk
-def _cleanup_debug_dir(max_files=50):
+# Keep only the last N debug screenshots to avoid filling disk
+def _cleanup_debug_dir(max_files=config.DEBUG_SCREENSHOT_MAX):
     try:
         files = sorted(
             [os.path.join(DEBUG_DIR, f) for f in os.listdir(DEBUG_DIR) if f.endswith(".png")],
@@ -131,7 +131,7 @@ def check_screen(device):
                                sorted(scores.items(), key=lambda x: x[1], reverse=True))
         log.debug("Screen scores: %s", score_str)
 
-        if best_val > 0.8 and best_name is not None:
+        if best_val > config.SCREEN_MATCH_THRESHOLD and best_name is not None:
             log.debug("Screen identified: %s (%.0f%%)", best_name, best_val * 100)
             return best_name
 

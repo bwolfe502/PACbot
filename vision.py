@@ -18,7 +18,7 @@ import easyocr
 import threading
 
 import config
-from config import adb_path, BUTTONS
+from config import adb_path, BUTTONS, ADB_COMMAND_TIMEOUT
 from botlog import get_logger, stats
 
 # Thread-local storage for find_image best score (avoids race between device threads)
@@ -52,7 +52,7 @@ os.makedirs(FAILURES_DIR, exist_ok=True)
 _click_seq = 0
 _click_seq_lock = threading.Lock()
 
-def _cleanup_clicks_dir(max_files=50):
+def _cleanup_clicks_dir(max_files=config.CLICK_TRAIL_MAX):
     try:
         files = sorted(
             [os.path.join(CLICKS_DIR, f) for f in os.listdir(CLICKS_DIR) if f.endswith(".png")],
@@ -101,10 +101,10 @@ def clear_click_trail():
 # FAILURE SCREENSHOTS (persistent — never auto-deleted)
 # ============================================================
 
-def _cleanup_failures_dir(max_files=200):
+def _cleanup_failures_dir(max_files=config.FAILURE_SCREENSHOT_MAX):
     """Keep failure screenshots bounded but generous. These are NOT rotated
     aggressively like click trails — they persist across sessions for
-    post-mortem analysis. Only the oldest are pruned once we exceed 200."""
+    post-mortem analysis. Only the oldest are pruned once we exceed the limit."""
     try:
         files = sorted(
             [os.path.join(FAILURES_DIR, f) for f in os.listdir(FAILURES_DIR) if f.endswith(".png")],
@@ -174,11 +174,11 @@ def load_screenshot(device):
     try:
         result = subprocess.run(
             [adb_path, "-s", device, "exec-out", "screencap", "-p"],
-            capture_output=True, timeout=10
+            capture_output=True, timeout=ADB_COMMAND_TIMEOUT
         )
     except subprocess.TimeoutExpired:
-        log.warning("Screenshot timed out after 10s (ADB hung?)")
-        stats.record_adb_timing(device, "screenshot", 10.0, success=False)
+        log.warning("Screenshot timed out after %ds (ADB hung?)", ADB_COMMAND_TIMEOUT)
+        stats.record_adb_timing(device, "screenshot", float(ADB_COMMAND_TIMEOUT), success=False)
         return None
     elapsed = time.time() - t0
     if result.returncode != 0 or not result.stdout:
@@ -376,10 +376,10 @@ def adb_tap(device, x, y):
     t0 = time.time()
     try:
         subprocess.run([adb_path, "-s", device, "shell", "input", "tap", str(x), str(y)],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=ADB_COMMAND_TIMEOUT)
     except subprocess.TimeoutExpired:
-        get_logger("vision", device).warning("adb_tap timed out after 10s (ADB hung?)")
-        stats.record_adb_timing(device, "tap", 10.0, success=False)
+        get_logger("vision", device).warning("adb_tap timed out after %ds (ADB hung?)", ADB_COMMAND_TIMEOUT)
+        stats.record_adb_timing(device, "tap", float(ADB_COMMAND_TIMEOUT), success=False)
         return
     elapsed = time.time() - t0
     stats.record_adb_timing(device, "tap", elapsed)
@@ -392,10 +392,10 @@ def adb_swipe(device, x1, y1, x2, y2, duration_ms=300):
     try:
         subprocess.run([adb_path, "-s", device, "shell", "input", "swipe",
                         str(x1), str(y1), str(x2), str(y2), str(duration_ms)],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=ADB_COMMAND_TIMEOUT)
     except subprocess.TimeoutExpired:
-        get_logger("vision", device).warning("adb_swipe timed out after 10s (ADB hung?)")
-        stats.record_adb_timing(device, "swipe", 10.0, success=False)
+        get_logger("vision", device).warning("adb_swipe timed out after %ds (ADB hung?)", ADB_COMMAND_TIMEOUT)
+        stats.record_adb_timing(device, "swipe", float(ADB_COMMAND_TIMEOUT), success=False)
         return
     elapsed = time.time() - t0
     stats.record_adb_timing(device, "swipe", elapsed)

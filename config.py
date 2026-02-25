@@ -120,6 +120,20 @@ AP_COST_RALLY_TITAN = 20
 AP_COST_EVIL_GUARD = 70
 CLICK_TRAIL_ENABLED = True
 
+# ADB & vision constants
+ADB_COMMAND_TIMEOUT = 10         # seconds — timeout for adb tap/swipe/screenshot
+SCREEN_MATCH_THRESHOLD = 0.8    # confidence required to identify a screen
+
+# Debug screenshot limits (rolling cleanup)
+DEBUG_SCREENSHOT_MAX = 50        # max debug screenshots before cleanup
+CLICK_TRAIL_MAX = 50             # max click trail images before cleanup
+FAILURE_SCREENSHOT_MAX = 200     # max failure screenshots (persistent)
+
+# Safety caps for action loops
+MAX_RALLY_ATTEMPTS = 15          # max iterations in rally join loop
+MAX_HEAL_ITERATIONS = 20         # max heal_all cycles (5 troops + safety buffer)
+QUEST_PENDING_TIMEOUT = 360      # seconds — timeout for quest-pending rally (6 min)
+
 # Mithril mining
 MITHRIL_ENABLED = False
 MITHRIL_INTERVAL = 19        # minutes between refresh cycles

@@ -43,7 +43,7 @@ _quest_rallies_pending = {}   # e.g. {("127.0.0.1:5555", "titan"): 2}
 _quest_last_seen = {}         # e.g. {("127.0.0.1:5555", "titan"): 10}
 _quest_pending_since = {}     # e.g. {("127.0.0.1:5555", "titan"): 1708123456.0}
 
-PENDING_TIMEOUT_S = 360       # 6 minutes — if counter hasn't advanced, assume rallies done/failed
+PENDING_TIMEOUT_S = config.QUEST_PENDING_TIMEOUT
 
 
 def _track_quest_progress(device, quest_type, current):
@@ -383,7 +383,7 @@ def check_quests(device, stop_check=None):
                 heal_all(device)
 
             any_joined = False
-            for attempt in range(15):  # safety limit
+            for attempt in range(config.MAX_RALLY_ATTEMPTS):  # safety limit
                 if stop_check and stop_check():
                     return True
 
