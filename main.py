@@ -154,7 +154,7 @@ def run_auto_quest(device, stop_event):
     try:
         while not stop_check():
             with lock:
-                mine_mithril_if_due(device)
+                mine_mithril_if_due(device, stop_check=stop_check)
                 if stop_check():
                     break
                 # Ensure we're on map_screen before checking troops
@@ -191,7 +191,7 @@ def run_auto_titan(device, stop_event, interval, variation):
     try:
         while not stop_check():
             with lock:
-                mine_mithril_if_due(device)
+                mine_mithril_if_due(device, stop_check=stop_check)
                 if stop_check():
                     break
                 if config.AUTO_HEAL_ENABLED:
@@ -229,7 +229,7 @@ def run_auto_groot(device, stop_event, interval, variation):
     try:
         while not stop_check():
             with lock:
-                mine_mithril_if_due(device)
+                mine_mithril_if_due(device, stop_check=stop_check)
                 if stop_check():
                     break
                 if config.AUTO_HEAL_ENABLED:
@@ -319,7 +319,7 @@ def run_auto_pass(device, stop_event, pass_mode, pass_interval, variation):
     try:
         while not stop_check():
             with lock:
-                mine_mithril_if_due(device)
+                mine_mithril_if_due(device, stop_check=stop_check)
                 if stop_check():
                     break
                 result = target(device)
@@ -371,7 +371,7 @@ def run_auto_reinforce(device, stop_event, interval, variation):
     try:
         while not stop_check():
             with lock:
-                mine_mithril_if_due(device)
+                mine_mithril_if_due(device, stop_check=stop_check)
                 if stop_check():
                     break
                 reinforce_throne(device)
@@ -392,7 +392,7 @@ def run_auto_mithril(device, stop_event):
     try:
         while not stop_check():
             with lock:
-                mine_mithril_if_due(device)
+                mine_mithril_if_due(device, stop_check=stop_check)
             if stop_check():
                 break
             sleep_interval(60, 0, stop_check)  # Check every 60s

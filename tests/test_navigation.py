@@ -148,12 +148,12 @@ class TestNavigate:
         assert navigate(Screen.MAP, "dev1") is True
         mock_tap.assert_called_with("dev1", 990, 1850)
 
-    @patch("navigation.adb_tap")
+    @patch("navigation.tap_image")
     @patch("navigation.check_screen")
-    def test_alliance_to_map(self, mock_check, mock_tap):
+    def test_alliance_to_map(self, mock_check, mock_tap_img):
         mock_check.side_effect = [Screen.ALLIANCE, Screen.MAP]
         assert navigate(Screen.MAP, "dev1") is True
-        mock_tap.assert_called_with("dev1", 75, 75)
+        mock_tap_img.assert_called_with("back_arrow.png", "dev1", threshold=0.7)
 
     @patch("navigation._recover_to_known_screen")
     @patch("navigation.check_screen")

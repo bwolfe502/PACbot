@@ -452,6 +452,9 @@ IMAGE_REGIONS = {
     "statuses/returning.png":     (0, 0, 360, 1920),       # left third
     "stationed.png":              (0, 0, 360, 1920),       # left third
     "defending.png":              (0, 0, 360, 1920),       # left third
+
+    # Back arrow (top-left corner)
+    "back_arrow.png":             (0, 0, 200, 200),         # top-left corner
 }
 
 def tap_image(image_name, device, threshold=0.8):
@@ -494,6 +497,33 @@ def wait_for_image_and_tap(image_name, device, timeout=5, threshold=0.8):
         time.sleep(0.5)
     log.debug("Timed out waiting for %s after %ds", image_name, timeout)
     return False
+
+def timed_wait(device, condition_fn, budget_s, label):
+    """Measure how quickly a condition becomes true, then sleep the remaining budget.
+
+    Behavior is identical to time.sleep(budget_s) — total wall time is always
+    budget_s seconds.  But we poll condition_fn every ~150ms and log when (if)
+    it becomes True, so we can later decide which sleeps are safe to shorten.
+
+    condition_fn: callable() -> bool  (called repeatedly until True or budget expires)
+    Returns True if condition was met within budget, False otherwise.
+    """
+    start = time.time()
+    condition_met = False
+    while time.time() - start < budget_s:
+        if condition_fn():
+            condition_met = True
+            actual = time.time() - start
+            stats.record_transition_time(device, label, actual, budget_s, True)
+            remaining = budget_s - actual
+            if remaining > 0:
+                time.sleep(remaining)
+            return True
+        time.sleep(0.15)
+    # Condition never met within budget
+    stats.record_transition_time(device, label, budget_s, budget_s, False)
+    return False
+
 
 def tap_tower_until_attack_menu(device, tower_x=540, tower_y=900, timeout=10):
     """Tap the tower repeatedly until the attack button menu appears"""

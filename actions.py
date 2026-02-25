@@ -9,7 +9,8 @@ import subprocess
 import config
 from config import QuestType, RallyType, Screen
 from botlog import get_logger, timed_action, stats
-from vision import (tap_image, wait_for_image_and_tap, load_screenshot,
+from vision import (tap_image, wait_for_image_and_tap, timed_wait,
+                    load_screenshot,
                     find_image, get_last_best, find_all_matches, get_template,
                     adb_tap, adb_swipe, logged_tap, clear_click_trail,
                     save_failure_screenshot, read_ap, read_text)
@@ -985,9 +986,8 @@ def join_rally(rally_types, device, skip_heal=False):
                 log.debug("Backed out to td_screen, re-entering war_screen")
                 return navigate(Screen.WAR, device)
 
-            # Still in popup — try back button
-            logged_tap(device, 75, 75, "jr_backout")
-            time.sleep(0.5)
+            # Still in popup — try back arrow
+            tap_image("back_arrow.png", device, threshold=0.7)
             if _on_war_screen(device):
                 return True
 
@@ -1713,22 +1713,26 @@ def _search_eg_center(device):
         return False
 
     logged_tap(device, 900, 1800, "eg_search_btn")
-    time.sleep(1)
+    timed_wait(device, lambda: find_image(load_screenshot(device), "rally_eg_select.png", threshold=0.5) is not None,
+               1, "eg_search_menu_open")
 
     logged_tap(device, 850, 560, "eg_rally_tab")
-    time.sleep(1)
+    timed_wait(device, lambda: find_image(load_screenshot(device), "rally_eg_select.png", threshold=0.6) is not None,
+               1, "eg_rally_tab_load")
 
     if not wait_for_image_and_tap("rally_eg_select.png", device, timeout=5, threshold=0.65):
         log.warning("Failed to find Evil Guard select")
         tap_image("close_x.png", device)
         return False
-    time.sleep(1)
+    timed_wait(device, lambda: find_image(load_screenshot(device), "search.png", threshold=0.6) is not None,
+               1, "eg_select_to_search")
 
     if not wait_for_image_and_tap("search.png", device, timeout=5, threshold=0.65):
         log.warning("Failed to find Search button")
         tap_image("close_x.png", device)
         return False
-    time.sleep(1)
+    timed_wait(device, lambda: check_screen(device) == Screen.MAP,
+               1, "eg_search_complete")
 
     return True
 
@@ -1772,12 +1776,25 @@ def _probe_priest(device, x, y, label):
     save_failure_screenshot(device, f"probe_{label}_BEFORE")
 
     # Tap the candidate position
-    logged_tap(device, x, y, f"probe_{label}")
-    time.sleep(1.5)
-
-    # Poll for attack dialog indicators
     checked_tmpl = get_template("elements/checked.png")
     unchecked_tmpl = get_template("elements/unchecked.png")
+
+    def _dialog_visible():
+        s = load_screenshot(device)
+        if s is None:
+            return False
+        if checked_tmpl is not None:
+            res = cv2.matchTemplate(s, checked_tmpl, cv2.TM_CCOEFF_NORMED)
+            if cv2.minMaxLoc(res)[1] > 0.8:
+                return True
+        if unchecked_tmpl is not None:
+            res = cv2.matchTemplate(s, unchecked_tmpl, cv2.TM_CCOEFF_NORMED)
+            if cv2.minMaxLoc(res)[1] > 0.8:
+                return True
+        return False
+
+    logged_tap(device, x, y, f"probe_{label}")
+    timed_wait(device, _dialog_visible, 1.5, "probe_dialog_open")
 
     start = time.time()
     while time.time() - start < 3:
@@ -1810,10 +1827,8 @@ def _probe_priest(device, x, y, label):
     log.info("PROBE MISS %s at (%d,%d) — no dialog after 3s", label, x, y)
     save_failure_screenshot(device, f"probe_{label}_MISS")
 
-    # Only dismiss if not on map screen (tapping 75,75 on map opens profile)
-    if check_screen(device) != Screen.MAP:
-        logged_tap(device, 75, 75, f"probe_{label}_dismiss")
-        time.sleep(0.5)
+    # tap_image won't tap if back arrow isn't visible (e.g. on map screen)
+    tap_image("back_arrow.png", device, threshold=0.7)
     return False
 
 
@@ -1857,24 +1872,41 @@ def rally_eg(device, stop_check=None):
         return False
 
     # Wait for search overlay to fully close and camera to settle
-    time.sleep(1.5)
+    timed_wait(device, lambda: check_screen(device) == Screen.MAP,
+               1.5, "eg_search_overlay_close")
     # Verify we're back on map_screen (search overlay dismissed)
     if check_screen(device) != Screen.MAP:
         log.debug("EG: search overlay may still be open, waiting...")
-        time.sleep(1.5)
+        timed_wait(device, lambda: check_screen(device) == Screen.MAP,
+                   1.5, "eg_search_overlay_close_retry")
         if check_screen(device) != Screen.MAP:
             log.warning("EG: not on map_screen after search — recovering")
             if not navigate(Screen.MAP, device):
                 return False
 
+    # Pre-load templates used in inner loops
+    checked_img = get_template("elements/checked.png")
+    unchecked_img = get_template("elements/unchecked.png")
+    stationed_img = get_template("elements/stationed.png")
+
+    def _dialog_visible():
+        s = load_screenshot(device)
+        if s is None:
+            return False
+        if checked_img is not None:
+            res = cv2.matchTemplate(s, checked_img, cv2.TM_CCOEFF_NORMED)
+            if cv2.minMaxLoc(res)[1] > 0.8:
+                return True
+        if unchecked_img is not None:
+            res = cv2.matchTemplate(s, unchecked_img, cv2.TM_CCOEFF_NORMED)
+            if cv2.minMaxLoc(res)[1] > 0.8:
+                return True
+        return False
+
     # Tap EG boss on map to enter the priest view
     log.debug("EG rally: tapping EG on map")
     logged_tap(device, EG_PRIEST_POSITIONS[0][0], EG_PRIEST_POSITIONS[0][1], "eg_boss_on_map")
-    time.sleep(1.5)
-
-    # Pre-load templates used in inner loops
-    checked_img = get_template("elements/checked.png")
-    stationed_img = get_template("elements/stationed.png")
+    timed_wait(device, _dialog_visible, 1.5, "eg_boss_dialog_open")
 
     # Region constraint for stationed.png: only search center-right of screen
     # to avoid false positives on the hero portrait list (left side, x < 300).
@@ -1893,13 +1925,15 @@ def rally_eg(device, stop_check=None):
                     log.debug("P%d: checked found at (%d,%d) %.0f%%, tapping proceed",
                               priest_num, max_loc[0], max_loc[1], max_val * 100)
                     logged_tap(device, 540, 1500, f"eg_proceed_p{priest_num}")
-                    time.sleep(1)
+                    timed_wait(device,
+                               lambda: find_image(load_screenshot(device), "depart.png", threshold=0.8) is not None,
+                               1, "eg_proceed_to_depart")
                     return True
                 else:
                     log.debug("P%d: check_and_proceed %d/10 — checked best %.0f%%, tapping unchecked",
                               priest_num, attempt + 1, max_val * 100)
                     tap_image("unchecked.png", device)
-                    time.sleep(2)
+                    timed_wait(device, _dialog_visible, 2, "eg_unchecked_toggle")
         log.error("P%d: check_and_proceed FAILED after 10 attempts", priest_num)
         save_failure_screenshot(device, f"eg_check_fail_p{priest_num}")
         return False
@@ -1939,13 +1973,17 @@ def rally_eg(device, stop_check=None):
                 return True
             if tap_image("defending.png", device):
                 log.debug("P%d: found defending, retrying depart", priest_num)
-                time.sleep(1)
+                timed_wait(device,
+                           lambda: find_image(load_screenshot(device), "depart.png", threshold=0.8) is not None,
+                           1, "eg_defending_to_depart")
                 if tap_image("depart.png", device):
                     log.debug("P%d: depart tapped after defending", priest_num)
                     return True
             if attempt < 4:
                 log.debug("P%d: depart not found, retry %d/5...", priest_num, attempt + 1)
-                time.sleep(2)
+                timed_wait(device,
+                           lambda: find_image(load_screenshot(device), "depart.png", threshold=0.8) is not None,
+                           2, "eg_depart_retry_wait")
         log.error("P%d: click_depart FAILED after 5 attempts", priest_num)
         save_failure_screenshot(device, f"eg_depart_fail_p{priest_num}")
         return False
@@ -1986,6 +2024,8 @@ def rally_eg(device, stop_check=None):
                         log.debug("P%d: stationed at (%d,%d) %.0f%% after %.1fs (fallback)",
                                   priest_num, max_loc[0], max_loc[1], max_val * 100, elapsed)
                         return True
+            # Poll interval — recording for optimization analysis
+            stats.record_transition_time(device, "eg_poll_troop_interval", 3, 3, False)
             time.sleep(3)
         elapsed = time.time() - start_time
         log.warning("P%d: poll_troop_ready TIMED OUT after %.1fs", priest_num, elapsed)
@@ -2028,8 +2068,7 @@ def rally_eg(device, stop_check=None):
                 log.debug("P%d: dialog still open, dismissing (attempt %d/5)",
                           priest_num, attempt + 1)
 
-            logged_tap(device, 75, 75, f"eg_dismiss_p{priest_num}_a{attempt+1}")
-            time.sleep(1.5)
+            tap_image("back_arrow.png", device, threshold=0.7)
 
         # Last resort: navigate to map
         log.warning("P%d: could not dismiss after 5 attempts, navigating to map", priest_num)
@@ -2082,9 +2121,7 @@ def rally_eg(device, stop_check=None):
         log.warning("P1: PROBE MISS — no dialog after tapping EG boss")
         save_failure_screenshot(device, "probe_P1_MISS")
         priests_dead += 1   # priest is already dead (killed by others)
-        if check_screen(device) != Screen.MAP:
-            logged_tap(device, 75, 75, "probe_P1_dismiss")
-            time.sleep(0.5)
+        tap_image("back_arrow.png", device, threshold=0.7)
 
     # =====================================================
     # PRIESTS 2–5 — probe each, collect misses for retry
@@ -2111,7 +2148,8 @@ def rally_eg(device, stop_check=None):
             if not click_depart_with_fallback(pnum):
                 log.warning("P%d: depart failed — skipping", pnum)
                 continue
-            time.sleep(1)
+            timed_wait(device, lambda: check_screen(device) == Screen.MAP,
+                       1, "eg_depart_to_map")
             if not poll_troop_ready(60, pnum):
                 log.warning("P%d: stationed timeout — continuing anyway", pnum)
             log.info("P%d: rally completed", pnum)
@@ -2146,9 +2184,11 @@ def rally_eg(device, stop_check=None):
             continue
 
         # Wait for search overlay to close, verify map screen
-        time.sleep(1.5)
+        timed_wait(device, lambda: check_screen(device) == Screen.MAP,
+                   1.5, "eg_retry_overlay_close")
         if check_screen(device) != Screen.MAP:
-            time.sleep(1.5)
+            timed_wait(device, lambda: check_screen(device) == Screen.MAP,
+                       1.5, "eg_retry_overlay_close_2")
             if check_screen(device) != Screen.MAP:
                 if not navigate(Screen.MAP, device):
                     log.warning("P%d retry: can't reach map, assuming dead", pnum)
@@ -2183,7 +2223,8 @@ def rally_eg(device, stop_check=None):
                 log.warning("P%d retry: depart failed — skipping", pnum)
                 priests_dead += 1
                 continue
-            time.sleep(1)
+            timed_wait(device, lambda: check_screen(device) == Screen.MAP,
+                       1, "eg_depart_to_map")
             if not poll_troop_ready(60, pnum):
                 log.warning("P%d retry: stationed timeout — continuing anyway", pnum)
             log.info("P%d retry: rally completed", pnum)
@@ -2222,9 +2263,11 @@ def rally_eg(device, stop_check=None):
         if not _search_eg_center(device):
             log.warning("P6: re-center failed after retries")
             return False
-        time.sleep(1.5)
+        timed_wait(device, lambda: check_screen(device) == Screen.MAP,
+                   1.5, "eg_p6_recenter_overlay_close")
         if check_screen(device) != Screen.MAP:
-            time.sleep(1.5)
+            timed_wait(device, lambda: check_screen(device) == Screen.MAP,
+                       1.5, "eg_p6_recenter_overlay_close_2")
             if check_screen(device) != Screen.MAP:
                 if not navigate(Screen.MAP, device):
                     return False
@@ -2262,9 +2305,10 @@ def rally_eg(device, stop_check=None):
     p6_dialog_opened = False
     for p6_attempt in range(3):
         logged_tap(device, x6, y6, "eg_final_priest")
-        time.sleep(1)
+        timed_wait(device, lambda: check_screen(device) != Screen.MAP,
+                   1, "eg_p6_boss_tap")
         logged_tap(device, 421, 1412, "eg_final_attack")
-        time.sleep(1)
+        timed_wait(device, _dialog_visible, 1, "eg_p6_attack_dialog")
 
         # Verify the attack dialog appeared
         for _ in range(4):
@@ -2299,8 +2343,7 @@ def rally_eg(device, stop_check=None):
         save_failure_screenshot(device, f"eg_p6_dialog_miss_a{p6_attempt+1}")
         # Dismiss anything that might have opened, return to map
         if check_screen(device) != Screen.MAP:
-            logged_tap(device, 75, 75, "eg_p6_dismiss_retry")
-            time.sleep(1)
+            tap_image("back_arrow.png", device, threshold=0.7)
 
     if not p6_dialog_opened:
         log.error("P6: attack dialog never opened after 3 attempts — aborting")
@@ -2317,7 +2360,9 @@ def rally_eg(device, stop_check=None):
         save_failure_screenshot(device, "eg_final_stationed_fail")
         return False
 
-    time.sleep(2)
+    timed_wait(device,
+               lambda: find_image(load_screenshot(device), "return.png", threshold=0.8) is not None,
+               2, "eg_p6_stationed_to_return")
     if not tap_image("return.png", device):
         log.warning("EG rally: return button not found")
         save_failure_screenshot(device, "eg_return_fail")
@@ -2609,13 +2654,25 @@ _MITHRIL_MINES = [
 
 
 @timed_action("mine_mithril")
-def mine_mithril(device):
-    """Navigate to Advanced Mithril, recall all troops, redeploy to all 5 mines."""
+def mine_mithril(device, stop_check=None):
+    """Navigate to Advanced Mithril, recall all troops, redeploy to mines.
+
+    Args:
+        stop_check: Optional callable returning True when the task should abort.
+    """
     log = get_logger("actions", device)
+
+    def _stopped():
+        """Check both explicit stop signal and global mithril toggle."""
+        return (stop_check and stop_check()) or not config.MITHRIL_ENABLED
 
     # Step 1: Navigate to kingdom_screen
     if not navigate(Screen.KINGDOM, device):
         log.warning("Failed to navigate to kingdom screen")
+        return False
+
+    if _stopped():
+        log.info("Mithril mining aborted (stopped)")
         return False
 
     # Step 2: Scroll kingdom screen to bottom (multiple swipes for reliability)
@@ -2623,6 +2680,11 @@ def mine_mithril(device):
         adb_swipe(device, 540, 960, 540, 400, duration_ms=300)
         time.sleep(0.5)
     time.sleep(1)
+
+    if _stopped():
+        log.info("Mithril mining aborted (stopped)")
+        navigate(Screen.MAP, device)
+        return False
 
     # Step 3: Tap Dimensional Tunnel
     logged_tap(device, 280, 880, "dimensional_tunnel")
@@ -2635,12 +2697,21 @@ def mine_mithril(device):
     # Clear deploy timer — troops are about to be recalled
     config.MITHRIL_DEPLOY_TIME.pop(device, None)
 
+    if _stopped():
+        log.info("Mithril mining aborted (stopped)")
+        tap_image("back_arrow.png", device, threshold=0.7)
+        tap_image("back_arrow.png", device, threshold=0.7)
+        navigate(Screen.MAP, device)
+        return False
+
     # Step 5: Recall occupied slots — troops are always left-aligned, so
     # returning slot 1 causes the rest to shift left.  Just tap slot 1
     # up to 5 times; stop early when it's empty.
     recalled_count = 0
     slot_x = _MITHRIL_SLOTS_X[0]
     for i in range(5):
+        if _stopped():
+            break
         adb_tap(device, slot_x, _MITHRIL_SLOT_Y)
         time.sleep(1)
         if wait_for_image_and_tap("mithril_return.png", device, timeout=2, threshold=0.7):
@@ -2655,15 +2726,33 @@ def mine_mithril(device):
         log.info("Recalled %d troops from mithril mines", recalled_count)
         time.sleep(1)
 
-    # Step 6: Deploy to all 5 mines
+    if _stopped():
+        log.info("Mithril mining aborted after recall (stopped)")
+        tap_image("back_arrow.png", device, threshold=0.7)
+        tap_image("back_arrow.png", device, threshold=0.7)
+        navigate(Screen.MAP, device)
+        return False
+
+    # Step 6: Deploy to mines — cap to recalled_count when known,
+    # otherwise try all mines but stop on first failure.
+    max_deploys = recalled_count if recalled_count > 0 else len(_MITHRIL_MINES)
+    mines_to_deploy = _MITHRIL_MINES[:max_deploys]
     deployed_count = 0
-    for i, (mine_x, mine_y) in enumerate(_MITHRIL_MINES):
+    for i, (mine_x, mine_y) in enumerate(mines_to_deploy):
+        if _stopped():
+            break
         log.debug("Deploying to mine %d at (%d, %d)", i + 1, mine_x, mine_y)
         adb_tap(device, mine_x, mine_y)  # Tap mine
         time.sleep(2)
 
         # Look for ATTACK button in the mine popup
         if not wait_for_image_and_tap("mithril_attack.png", device, timeout=2, threshold=0.7):
+            if recalled_count == 0:
+                # First run — no recall data; no ATTACK likely means no troops left
+                log.info("Mine %d: no ATTACK button, no more troops available", i + 1)
+                adb_tap(device, 900, 500)  # dismiss popup
+                time.sleep(1)
+                break
             log.warning("Mine %d: no ATTACK button (occupied or missed)", i + 1)
             save_failure_screenshot(device, f"mithril_no_attack_mine{i+1}")
             adb_tap(device, 900, 500)  # dismiss popup
@@ -2683,13 +2772,11 @@ def mine_mithril(device):
             adb_tap(device, 900, 500)  # dismiss overlay
             time.sleep(1)
 
-    log.info("Deployed %d/%d troops to mithril mines", deployed_count, len(_MITHRIL_MINES))
+    log.info("Deployed %d/%d troops to mithril mines", deployed_count, max_deploys)
 
     # Step 7: Navigate back to map screen
-    adb_tap(device, 75, 75)  # Back from Advanced Mithril
-    time.sleep(1)
-    adb_tap(device, 75, 75)  # Back from Dimensional Treasure
-    time.sleep(1)
+    tap_image("back_arrow.png", device, threshold=0.7)  # Back from Advanced Mithril
+    tap_image("back_arrow.png", device, threshold=0.7)  # Back from Dimensional Treasure
     navigate(Screen.MAP, device)
 
     # Step 8: Record timestamp
@@ -2698,7 +2785,7 @@ def mine_mithril(device):
     return deployed_count > 0
 
 
-def mine_mithril_if_due(device):
+def mine_mithril_if_due(device, stop_check=None):
     """Run mithril mining if enabled and interval has elapsed.
 
     Safe to call frequently — returns immediately if not due.
@@ -2713,4 +2800,4 @@ def mine_mithril_if_due(device):
     log = get_logger("actions", device)
     log.info("Mithril mining due (%.0f min since last) — running between actions",
              elapsed / 60)
-    mine_mithril(device)
+    mine_mithril(device, stop_check=stop_check)

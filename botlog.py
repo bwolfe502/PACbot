@@ -137,6 +137,7 @@ class StatsTracker:
                 "actions": {},
                 "template_misses": {},
                 "template_hits": {},
+                "transition_times": {},
                 "nav_failures": {},
                 "errors": [],
                 "adb_timing": {},
@@ -238,6 +239,27 @@ class StatsTracker:
             if not success:
                 entry["failures"] += 1
 
+    def record_transition_time(self, device, label, actual_s, budgeted_s, condition_met):
+        """Record how long a UI transition actually took vs its sleep budget.
+        Used by timed_wait() to gather data on which sleeps can be shortened."""
+        with self._lock:
+            self._ensure_device(device)
+            transitions = self._data[device].setdefault("transition_times", {})
+            if label not in transitions:
+                transitions[label] = {
+                    "count": 0,
+                    "met_count": 0,
+                    "budgeted_s": budgeted_s,
+                    "samples": [],
+                }
+            entry = transitions[label]
+            entry["count"] += 1
+            if condition_met:
+                entry["met_count"] += 1
+                entry["samples"].append(round(actual_s, 3))
+                if len(entry["samples"]) > 20:
+                    entry["samples"] = entry["samples"][-20:]
+
     def _check_template_trends_unlocked(self, device, template_name):
         """Check if a template's best scores are trending toward failure (no lock).
         Returns a warning string if scores are drifting down, or None."""
@@ -275,6 +297,7 @@ class StatsTracker:
                     "actions": {},
                     "template_misses": data["template_misses"],
                     "template_hits": data.get("template_hits", {}),
+                    "transition_times": {},
                     "nav_failures": data["nav_failures"],
                     "errors": data["errors"],
                     "adb_timing": {},
@@ -291,6 +314,14 @@ class StatsTracker:
                         entry["total_time_s"] / max(1, entry["attempts"]), 1
                     )
                     device_copy["actions"][action_name] = entry
+                for label, info in data.get("transition_times", {}).items():
+                    entry = dict(info)
+                    samples = info["samples"]
+                    if samples:
+                        entry["min_s"] = min(samples)
+                        entry["max_s"] = max(samples)
+                        entry["avg_s"] = round(sum(samples) / len(samples), 3)
+                    device_copy["transition_times"][label] = entry
                 output_devices[device] = device_copy
 
             output = {
@@ -365,6 +396,22 @@ class StatsTracker:
                             f"y:{info['min_y']}-{info['max_y']})"
                         )
                     lines.append(f"  Template hit regions: {', '.join(hit_parts)}")
+
+                if data.get("transition_times"):
+                    lines.append("  Transition times (actual vs budget):")
+                    for label, info in sorted(data["transition_times"].items()):
+                        samples = info["samples"]
+                        if samples:
+                            avg = sum(samples) / len(samples)
+                            waste = info["budgeted_s"] - avg
+                            lines.append(
+                                f"    {label}: {info['met_count']}/{info['count']} met, "
+                                f"avg {avg:.2f}s / budget {info['budgeted_s']}s "
+                                f"(~{waste:.2f}s wasted per call)")
+                        else:
+                            lines.append(
+                                f"    {label}: 0/{info['count']} met "
+                                f"(budget {info['budgeted_s']}s)")
 
                 if data["nav_failures"]:
                     nav_parts = [f"{k}({v})" for k, v in

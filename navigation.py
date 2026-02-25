@@ -64,14 +64,14 @@ SCREEN_TEMPLATES = [
 # Templates without an entry fall back to full-image search.
 SCREEN_REGIONS = {
     Screen.MAP:            (720, 1780, 1080, 1920),   # bottom-right corner
-    Screen.BATTLE_LIST:    (0, 0, 540, 1920),          # left half
-    Screen.ALLIANCE_QUEST: (0, 0, 1080, 640),          # top third
+    Screen.BATTLE_LIST:    (143, 712, 359, 1661),      # tight: 176x909 tpl @ fixed (251,1186)
+    Screen.ALLIANCE_QUEST: (0, 361, 1080, 595),        # tight: 1080x194 tpl @ fixed (540,478)
     Screen.TROOP_DETAIL:   (0, 1720, 1080, 1920),      # bottom 200px, full width
     Screen.TERRITORY:      (0, 0, 540, 960),            # top-left quadrant
-    Screen.WAR:            (0, 0, 1080, 960),            # top half
+    Screen.WAR:            (62, 0, 688, 545),           # tight: 302x236 tpl @ x:233-517 y:118-407
     Screen.PROFILE:        (0, 960, 1080, 1920),         # bottom half
-    Screen.ALLIANCE:       (0, 200, 540, 1700),          # left half, trimmed top/bottom
-    Screen.KINGDOM:        (0, 960, 540, 1920),           # lower-left quadrant
+    Screen.ALLIANCE:       (17, 1124, 356, 1316),       # tight: 299x152 tpl @ fixed (186,1220)
+    Screen.KINGDOM:        (0, 1825, 230, 1920),        # tight: 205x75 tpl @ fixed (107,1882)
 }
 
 # Popup templates that overlay the screen and block taps.
@@ -211,13 +211,13 @@ def _recover_to_known_screen(device):
 
     # Strategy 1: Try tapping cancel button (dismisses confirmation dialogs)
     # Strategy 2: Try tapping red X at top-right of popups
-    # Strategy 3: Tap back button (75, 75)
+    # Strategy 3: Tap back arrow (template match)
     # Each strategy gets one attempt before moving to the next
     strategies = [
         ("close X (template)", lambda: tap_image("close_x.png", device, threshold=0.7)),
         ("cancel button", lambda: tap_image("cancel.png", device, threshold=0.65)),
-        ("back button", lambda: adb_tap(device, 75, 75)),
-        ("back button (retry)", lambda: adb_tap(device, 75, 75)),
+        ("back arrow", lambda: tap_image("back_arrow.png", device, threshold=0.7)),
+        ("back arrow (retry)", lambda: tap_image("back_arrow.png", device, threshold=0.7)),
     ]
 
     for name, action in strategies:
@@ -270,8 +270,7 @@ def navigate(target_screen, device, _depth=0):
         current = check_screen(device)
     elif current == Screen.ALLIANCE and target_screen != Screen.MAP and target_screen != Screen.WAR:
         log.debug("On alliance_screen, going to map_screen first...")
-        adb_tap(device, 75, 75)
-        time.sleep(1)
+        tap_image("back_arrow.png", device, threshold=0.7)
         current = check_screen(device)
 
     # To map_screen - always go back
@@ -281,8 +280,7 @@ def navigate(target_screen, device, _depth=0):
             time.sleep(1)
             current = check_screen(device)
         elif current == Screen.ALLIANCE:
-            adb_tap(device, 75, 75)
-            time.sleep(1)
+            tap_image("back_arrow.png", device, threshold=0.7)
             current = check_screen(device)
         elif current == Screen.KINGDOM:
             # Bottom-right globe icon takes us back to map
@@ -290,13 +288,11 @@ def navigate(target_screen, device, _depth=0):
             time.sleep(1)
             current = check_screen(device)
         elif current in [Screen.BATTLE_LIST, Screen.ALLIANCE_QUEST, Screen.WAR, Screen.TERRITORY, Screen.PROFILE]:
-            adb_tap(device, 75, 75)
-            time.sleep(1)
+            tap_image("back_arrow.png", device, threshold=0.7)
             current = check_screen(device)
             if current == Screen.ALLIANCE:
                 # Went through alliance_screen on the way back from war_screen
-                adb_tap(device, 75, 75)
-                time.sleep(1)
+                tap_image("back_arrow.png", device, threshold=0.7)
                 current = check_screen(device)
             if current != Screen.MAP:
                 # Landed on a different screen (e.g. td_screen from profile) —
@@ -318,7 +314,7 @@ def navigate(target_screen, device, _depth=0):
             if not tap_image("bl_button.png", device):
                 _save_debug_screenshot(device, "bl_button_not_found")
         elif current in [Screen.ALLIANCE_QUEST, Screen.TERRITORY]:
-            adb_tap(device, 75, 75)
+            tap_image("back_arrow.png", device, threshold=0.7)
         else:
             if not navigate(Screen.MAP, device, _depth=_depth + 1):
                 return False
