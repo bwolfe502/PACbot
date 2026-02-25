@@ -58,6 +58,22 @@ SCREEN_TEMPLATES = [
     Screen.TERRITORY, Screen.WAR, Screen.PROFILE, Screen.ALLIANCE, Screen.KINGDOM,
 ]
 
+# Search regions per screen template — (x1, y1, x2, y2).
+# Constrains matchTemplate to where the unique marker actually appears,
+# reducing work by 50-90% per template vs full 1080x1920 search.
+# Templates without an entry fall back to full-image search.
+SCREEN_REGIONS = {
+    Screen.MAP:            (720, 1780, 1080, 1920),   # bottom-right corner
+    Screen.BATTLE_LIST:    (0, 0, 540, 1920),          # left half
+    Screen.ALLIANCE_QUEST: (0, 0, 1080, 640),          # top third
+    Screen.TROOP_DETAIL:   (0, 1720, 1080, 1920),      # bottom 200px, full width
+    Screen.TERRITORY:      (0, 0, 540, 960),            # top-left quadrant
+    Screen.WAR:            (0, 0, 1080, 960),            # top half
+    Screen.PROFILE:        (0, 960, 1080, 1920),         # bottom half
+    Screen.ALLIANCE:       (0, 200, 540, 1700),          # left half, trimmed top/bottom
+    Screen.KINGDOM:        (0, 960, 540, 1920),           # lower-left quadrant
+}
+
 # Popup templates that overlay the screen and block taps.
 # Checked by check_screen() before screen matching — auto-dismissed if found.
 # Format: (template_path, log_name, match_threshold)
@@ -122,7 +138,14 @@ def check_screen(device):
             if element is None:
                 continue
 
-            result = cv2.matchTemplate(screen, element, cv2.TM_CCOEFF_NORMED)
+            region = SCREEN_REGIONS.get(screen_name)
+            if region:
+                rx1, ry1, rx2, ry2 = region
+                search_area = screen[ry1:ry2, rx1:rx2]
+            else:
+                search_area = screen
+
+            result = cv2.matchTemplate(search_area, element, cv2.TM_CCOEFF_NORMED)
             _, max_val, _, _ = cv2.minMaxLoc(result)
             scores[screen_name] = max_val
 
