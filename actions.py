@@ -2438,6 +2438,9 @@ def mine_mithril(device):
     logged_tap(device, 540, 960, "advanced_mithril")
     time.sleep(2)
 
+    # Clear deploy timer — troops are about to be recalled
+    config.MITHRIL_DEPLOY_TIME.pop(device, None)
+
     # Step 5: Recall occupied slots — troops are always left-aligned, so
     # returning slot 1 causes the rest to shift left.  Just tap slot 1
     # up to 5 times; stop early when it's empty.
@@ -2485,6 +2488,10 @@ def mine_mithril(device):
             time.sleep(1)
 
     log.info("Deployed %d/%d troops to mithril mines", deployed_count, len(_MITHRIL_MINES))
+
+    # Start deploy timer if any troops were placed
+    if deployed_count > 0:
+        config.MITHRIL_DEPLOY_TIME[device] = time.time()
 
     # Step 7: Navigate back to map screen
     adb_tap(device, 75, 75)  # Back from Advanced Mithril

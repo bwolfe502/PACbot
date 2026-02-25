@@ -713,6 +713,7 @@ def create_gui():
 
     def _stop_mithril():
         config.MITHRIL_ENABLED = False
+        config.MITHRIL_DEPLOY_TIME.clear()
         if auto_mithril_var.get():
             auto_mithril_var.set(False)
             mithril_frame.config(bg=COLOR_OFF)
@@ -1644,6 +1645,7 @@ def create_gui():
             mithril_frame.config(bg=COLOR_OFF)
             mithril_label.config(text="Mine Mithril: OFF", bg=COLOR_OFF)
             config.MITHRIL_ENABLED = False
+            config.MITHRIL_DEPLOY_TIME.clear()
 
         try:
             while True:
@@ -1658,6 +1660,18 @@ def create_gui():
         window.after(3000, cleanup_dead_tasks)
 
     window.after(3000, cleanup_dead_tasks)
+
+    def update_mithril_timer():
+        """Update the mithril button text with elapsed time since deploy."""
+        if auto_mithril_var.get() and config.MITHRIL_DEPLOY_TIME:
+            earliest = min(config.MITHRIL_DEPLOY_TIME.values())
+            elapsed = int(time.time() - earliest)
+            mm, ss = divmod(elapsed, 60)
+            mithril_label.config(text=f"Mine Mithril: ON ({mm:02d}:{ss:02d})",
+                                 bg=COLOR_ON)
+        window.after(1000, update_mithril_timer)
+
+    window.after(1000, update_mithril_timer)
 
     def on_close():
         try:

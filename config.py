@@ -138,6 +138,7 @@ QUEST_PENDING_TIMEOUT = 360      # seconds — timeout for quest-pending rally (
 MITHRIL_ENABLED = False
 MITHRIL_INTERVAL = 19        # minutes between refresh cycles
 LAST_MITHRIL_TIME = {}       # {device_id: timestamp} — last mine_mithril run
+MITHRIL_DEPLOY_TIME = {}     # {device_id: timestamp} — when troops were deployed to mines
 
 # Per-device lock — prevents concurrent tasks from controlling the same device
 import threading
