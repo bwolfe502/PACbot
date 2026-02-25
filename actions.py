@@ -116,6 +116,41 @@ def reset_quest_tracking(device=None):
                 del _quest_pending_since[d]
 
 
+# ---- Rally owner blacklist ----
+# When a rally join fails (e.g. "Cannot march across protected zones"),
+# we blacklist the rally owner so we don't keep retrying the same rally.
+# Blacklist is session-scoped (clears on restart).
+
+_rally_owner_blacklist = {}   # {device: {owner_name_lower: failure_count}}
+
+def _blacklist_rally_owner(device, owner):
+    """Add a rally owner to the blacklist for this device."""
+    if not owner:
+        return
+    if device not in _rally_owner_blacklist:
+        _rally_owner_blacklist[device] = {}
+    name = owner.lower().strip()
+    _rally_owner_blacklist[device][name] = _rally_owner_blacklist[device].get(name, 0) + 1
+    _log.warning("Blacklisted rally owner '%s' on %s (failures: %d)",
+                 owner, device, _rally_owner_blacklist[device][name])
+
+def _is_rally_owner_blacklisted(device, owner):
+    """Check if a rally owner is blacklisted for this device."""
+    if not owner:
+        return False
+    return owner.lower().strip() in _rally_owner_blacklist.get(device, {})
+
+def reset_rally_blacklist(device=None):
+    """Clear the rally owner blacklist. If device given, clear only that device."""
+    if device is None:
+        _rally_owner_blacklist.clear()
+        _log.info("Rally owner blacklist cleared (all devices)")
+    else:
+        if device in _rally_owner_blacklist:
+            count = len(_rally_owner_blacklist.pop(device))
+            _log.info("Rally owner blacklist cleared for %s (%d entries)", device, count)
+
+
 # ---- Quest OCR helpers ----
 
 def _classify_quest_text(text):
@@ -801,6 +836,38 @@ def join_rally(rally_types, device, skip_heal=False):
         results = reader.readtext(gray, detail=0)
         return " ".join(results).lower()
 
+    def _ocr_rally_owner(screen, join_y):
+        """OCR the rally owner name from a war screen rally card.
+        The name appears as "{Name}'s Troop" in the upper-right portion of the card,
+        roughly 100-160px above the join/full button.
+        Returns the owner name (without "'s Troop"), or empty string on failure."""
+        h, w = screen.shape[:2]
+        # The owner name is in the right section of the card, above the troop portraits.
+        # join_y is the top-left Y of the join button template match.
+        y_start = max(0, join_y - 160)
+        y_end = max(0, join_y - 80)
+        x_start = 230
+        x_end = min(w, 650)
+        if y_start >= y_end:
+            return ""
+        owner_crop = screen[y_start:y_end, x_start:x_end]
+        gray = cv2.cvtColor(owner_crop, cv2.COLOR_BGR2GRAY)
+        gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+
+        from vision import _get_ocr_reader
+        reader = _get_ocr_reader()
+        results = reader.readtext(gray, detail=0)
+        raw = " ".join(results).strip()
+
+        # Extract owner name from "{Name}'s Troop" pattern
+        match = re.match(r"(.+?)[''\u2019]s\s+[Tt]roop", raw)
+        if match:
+            return match.group(1).strip()
+        # Fallback: if OCR read something but didn't match pattern, return raw
+        # (might still be useful for blacklisting)
+        log.debug("Rally owner OCR raw: '%s' (no pattern match)", raw)
+        return raw
+
     def _text_matches_type(text, expected_type):
         """Check if OCR text contains keywords for the expected rally type."""
         keywords = _rally_verify_keywords.get(expected_type, [])
@@ -870,7 +937,14 @@ def join_rally(rally_types, device, skip_heal=False):
                         log.debug("Icon label mismatch — expected '%s', got: %s", rally_type, icon_label)
                         continue
 
-                    log.info("Found joinable %s rally (icon_y=%d, join_y=%d, dist=%d)", rally_type, label_y, join_y, best_dist)
+                    # OCR the rally owner name and check against blacklist
+                    rally_owner = _ocr_rally_owner(screen, join_y)
+                    if rally_owner and _is_rally_owner_blacklisted(device, rally_owner):
+                        log.info("Skipping %s rally by blacklisted owner '%s'", rally_type, rally_owner)
+                        continue
+
+                    log.info("Found joinable %s rally (icon_y=%d, join_y=%d, dist=%d, owner='%s')",
+                             rally_type, label_y, join_y, best_dist, rally_owner or "unknown")
 
                     h, w = join_btn.shape[:2]
                     log.debug("Clicking join at (%d, %d)", join_x + w // 2, join_y + h // 2)
@@ -985,11 +1059,13 @@ def join_rally(rally_types, device, skip_heal=False):
                         stats.record_action(device, "join_rally", True, elapsed)
                         return rally_type
                     else:
-                        # Same count — genuine failure (rally was full, depart didn't work)
+                        # Same count — genuine failure (e.g. "Cannot march across protected zones")
                         from navigation import _save_debug_screenshot
                         _save_debug_screenshot(device, "join_failed_after_depart")
                         log.warning("Depart clicked but troops unchanged (%d -> %d) — join failed. Screen: %s",
                                     pre_war_troops, new_troops, current_screen)
+                        if rally_owner:
+                            _blacklist_rally_owner(device, rally_owner)
                         navigate("war_screen", device)
                         continue  # Try next match
                 else:

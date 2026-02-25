@@ -20,14 +20,17 @@ def mock_device_b():
 
 @pytest.fixture(autouse=True)
 def reset_quest_state():
-    """Clear quest tracking dicts before each test."""
+    """Clear quest tracking and rally blacklist dicts before each test."""
     from actions import (
-        _quest_rallies_pending, _quest_last_seen, _quest_pending_since
+        _quest_rallies_pending, _quest_last_seen, _quest_pending_since,
+        _rally_owner_blacklist,
     )
     _quest_rallies_pending.clear()
     _quest_last_seen.clear()
     _quest_pending_since.clear()
+    _rally_owner_blacklist.clear()
     yield
     _quest_rallies_pending.clear()
     _quest_last_seen.clear()
     _quest_pending_since.clear()
+    _rally_owner_blacklist.clear()
