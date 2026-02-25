@@ -14,7 +14,7 @@ import config
 from updater import get_current_version
 from config import (set_min_troops, set_auto_heal, set_auto_restore_ap,
                      set_ap_restore_options, set_territory_config, set_eg_rally_own,
-                     running_tasks)
+                     running_tasks, QuestType, RallyType, Screen)
 from devices import get_devices, get_emulator_instances, auto_connect_emulators
 from navigation import check_screen, navigate
 from vision import adb_tap, tap_image, load_screenshot, find_image, wait_for_image_and_tap, read_ap
@@ -87,9 +87,9 @@ def save_settings(settings):
 TASK_FUNCTIONS = {
     "Rally Titan": rally_titan,
     "Rally Evil Guard": rally_eg,
-    "Join Titan Rally": lambda dev: join_rally("titan", dev),
-    "Join Evil Guard Rally": lambda dev: join_rally("eg", dev),
-    "Join Groot Rally": lambda dev: join_rally("groot", dev),
+    "Join Titan Rally": lambda dev: join_rally(QuestType.TITAN, dev),
+    "Join Evil Guard Rally": lambda dev: join_rally(QuestType.EVIL_GUARD, dev),
+    "Join Groot Rally": lambda dev: join_rally(RallyType.GROOT, dev),
     "Heal All": heal_all,
     "Target": target,
     "Attack": attack,
@@ -158,7 +158,7 @@ def run_auto_quest(device, stop_event):
                     break
                 # Ensure we're on map_screen before checking troops
                 # (troop pixel detection only works on map_screen)
-                if not navigate("map_screen", device):
+                if not navigate(Screen.MAP, device):
                     dlog.warning("Cannot reach map screen — retrying in 10s")
                     time.sleep(10)
                     continue
@@ -195,7 +195,7 @@ def run_auto_titan(device, stop_event, interval, variation):
                     break
                 if config.AUTO_HEAL_ENABLED:
                     heal_all(device)
-                if not navigate("map_screen", device):
+                if not navigate(Screen.MAP, device):
                     dlog.warning("Cannot reach map screen — retrying")
                     time.sleep(10)
                     continue
@@ -233,13 +233,13 @@ def run_auto_groot(device, stop_event, interval, variation):
                     break
                 if config.AUTO_HEAL_ENABLED:
                     heal_all(device)
-                if not navigate("map_screen", device):
+                if not navigate(Screen.MAP, device):
                     dlog.warning("Cannot reach map screen — retrying")
                     time.sleep(10)
                     continue
                 troops = troops_avail(device)
                 if troops > config.MIN_TROOPS_AVAILABLE:
-                    join_rally("groot", device)
+                    join_rally(RallyType.GROOT, device)
                 else:
                     dlog.warning("Not enough troops for Rally Groot")
                     if _smart_wait_for_troops(device, stop_check, dlog):

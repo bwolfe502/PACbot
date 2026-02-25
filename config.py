@@ -2,6 +2,46 @@ import platform
 import shutil
 import os
 import glob
+from enum import Enum
+
+# ============================================================
+# ENUMS — quest types, rally types, screen names
+# ============================================================
+
+class _StrEnum(str, Enum):
+    """str-compatible enum — works in ==, dict keys, and f-strings."""
+    def __format__(self, format_spec):
+        return str.__format__(self.value, format_spec)
+
+
+class QuestType(_StrEnum):
+    TITAN = "titan"
+    EVIL_GUARD = "eg"
+    PVP = "pvp"
+    GATHER = "gather"
+    FORTRESS = "fortress"
+    TOWER = "tower"
+
+
+class RallyType(_StrEnum):
+    CASTLE = "castle"
+    PASS = "pass"
+    TOWER = "tower"
+    GROOT = "groot"
+
+
+class Screen(_StrEnum):
+    MAP = "map_screen"
+    BATTLE_LIST = "bl_screen"
+    ALLIANCE_QUEST = "aq_screen"
+    TROOP_DETAIL = "td_screen"
+    TERRITORY = "territory_screen"
+    WAR = "war_screen"
+    PROFILE = "profile_screen"
+    ALLIANCE = "alliance_screen"
+    KINGDOM = "kingdom_screen"
+    UNKNOWN = "unknown"
+    LOGGED_OUT = "logged_out"
 
 # ============================================================
 # ADB PATH - auto-detect per platform

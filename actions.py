@@ -7,6 +7,7 @@ import re
 import subprocess
 
 import config
+from config import QuestType, RallyType, Screen
 from botlog import get_logger, timed_action, stats
 from vision import (tap_image, wait_for_image_and_tap, load_screenshot,
                     find_image, get_last_best, find_all_matches, get_template,
@@ -242,17 +243,17 @@ def _classify_quest_text(text):
     """Classify quest type from OCR text."""
     t = text.lower()
     if "titan" in t:
-        return "titan"
+        return QuestType.TITAN
     if "evil" in t or "guard" in t:
-        return "eg"
+        return QuestType.EVIL_GUARD
     if "pvp" in t or "attack" in t:
-        return "pvp"
+        return QuestType.PVP
     if "gather" in t:
-        return "gather"
+        return QuestType.GATHER
     if "occupy" in t or "fortress" in t:
-        return "fortress"
+        return QuestType.FORTRESS
     if "tower" in t:
-        return "tower"
+        return QuestType.TOWER
     return None
 
 
@@ -302,9 +303,9 @@ def _ocr_quest_rows(device):
         # The game shows partial limits (e.g. "3/5" for titans) but the real daily
         # caps are higher. Trust OCR if it reads 15 or 20 for titans.
         ocr_target = target
-        if quest_type == "titan" and target < 15:
+        if quest_type == QuestType.TITAN and target < 15:
             target = 15
-        elif quest_type == "eg":
+        elif quest_type == QuestType.EVIL_GUARD:
             target = 3
 
         completed = current >= target
@@ -320,7 +321,7 @@ def _ocr_quest_rows(device):
 
         remaining = target - current
         status = "DONE" if completed else f"{remaining} remaining"
-        skip = " (skip)" if quest_type in ("gather", "fortress", "tower", None) else ""
+        skip = " (skip)" if quest_type in (QuestType.GATHER, QuestType.FORTRESS, QuestType.TOWER, None) else ""
         cap_note = f" (OCR showed {ocr_target}, cap overridden)" if target != ocr_target else ""
         log.debug("  %s: %d/%d — %s%s%s", quest_type or "unknown", current, target, status, skip, cap_note)
 
@@ -370,34 +371,155 @@ def _check_quests_legacy(device, stop_check):
         if quest_img in ("eg.png", "titans.png"):
             if has_eg and has_titan:
                 log.info("Both EG and Titan quests active — joining any available rally...")
-                joined = join_rally(["eg", "titan"], device)
+                joined = join_rally([QuestType.EVIL_GUARD, QuestType.TITAN], device)
             elif quest_img == "eg.png":
                 log.info("Attempting to join an Evil Guard rally...")
-                joined = join_rally("eg", device)
+                joined = join_rally(QuestType.EVIL_GUARD, device)
             else:
                 log.info("Attempting to join a Titan rally...")
-                joined = join_rally("titan", device)
+                joined = join_rally(QuestType.TITAN, device)
 
             if not joined:
                 if quest_img == "eg.png":
                     if config.EG_RALLY_OWN_ENABLED:
                         log.info("No rally to join, starting own EG rally")
-                        if navigate("map_screen", device):
+                        if navigate(Screen.MAP, device):
                             rally_eg(device, stop_check=stop_check)
                     else:
                         log.info("No EG rally to join — own rally disabled, skipping")
                 else:
                     log.info("No rally to join, starting own Titan rally")
-                    if navigate("map_screen", device):
+                    if navigate(Screen.MAP, device):
                         rally_titan(device)
             break
         elif quest_img == "pvp.png":
-            if navigate("map_screen", device):
+            if navigate(Screen.MAP, device):
                 target(device)
                 if stop_check and stop_check():
                     return
                 attack(device)
             break
+
+
+def _claim_quest_rewards(device, stop_check=None):
+    """Tap the 'Claim' button on the quest screen until no more are found.
+    Returns the number of rewards claimed, or -1 if stop_check triggered."""
+    log = get_logger("actions", device)
+    rewards_claimed = 0
+    while tap_image("aq_claim.png", device):
+        rewards_claimed += 1
+        if stop_check and stop_check():
+            return -1
+        time.sleep(1)
+    if rewards_claimed:
+        log.info("Claimed %d quest reward(s)", rewards_claimed)
+    return rewards_claimed
+
+
+def _deduplicate_quests(quests):
+    """Deduplicate quest list by type, keeping the entry with the most remaining.
+    Each rally counts toward ALL quests of the same type (alliance + side),
+    so we only need max(remaining) rallies per type.
+    Returns a new list with at most one quest per quest_type."""
+    best_by_type = {}
+    for q in quests:
+        qt = q["quest_type"]
+        remaining = q["target"] - q["current"]
+        prev = best_by_type.get(qt)
+        if prev is None or remaining > (prev["target"] - prev["current"]):
+            best_by_type[qt] = q
+    return list(best_by_type.values())
+
+
+def _get_actionable_quests(device, quests):
+    """Filter quests to those that still need work (not complete, actionable type,
+    and have effective remaining > 0 after accounting for pending rallies).
+    Returns a list of quest dicts."""
+    actionable = []
+    for q in quests:
+        if q["completed"] or q["quest_type"] not in (QuestType.TITAN, QuestType.EVIL_GUARD, QuestType.PVP):
+            continue
+        eff = _effective_remaining(device, q["quest_type"], q["current"], q["target"])
+        if eff > 0:
+            actionable.append(q)
+    return actionable
+
+
+def _run_rally_loop(device, actionable, stop_check=None):
+    """Execute the rally join/start loop for EG and Titan quests.
+    Tries to join rallies first, then starts own rallies if none found.
+    Returns True if stop_check was triggered, False otherwise."""
+    log = get_logger("actions", device)
+
+    # Build a quick lookup: quest_type -> (current, target) with most remaining
+    quest_info = {}
+    for q in actionable:
+        qt = q["quest_type"]
+        if qt in (QuestType.EVIL_GUARD, QuestType.TITAN):
+            existing = quest_info.get(qt)
+            if existing is None or (q["target"] - q["current"]) > (existing[1] - existing[0]):
+                quest_info[qt] = (q["current"], q["target"])
+
+    # Heal once before the rally loop
+    if config.AUTO_HEAL_ENABLED:
+        log.debug("Healing before rally loop...")
+        heal_all(device)
+
+    for attempt in range(config.MAX_RALLY_ATTEMPTS):
+        if stop_check and stop_check():
+            return True
+
+        # Check effective remaining for each type
+        eg_needed = _effective_remaining(device, QuestType.EVIL_GUARD, *quest_info[QuestType.EVIL_GUARD]) if QuestType.EVIL_GUARD in quest_info else 0
+        titan_needed = _effective_remaining(device, QuestType.TITAN, *quest_info[QuestType.TITAN]) if QuestType.TITAN in quest_info else 0
+
+        if eg_needed <= 0 and titan_needed <= 0:
+            log.info("All rally quests covered (pending completion)")
+            break
+
+        # Build list of types to look for
+        types_to_join = []
+        if eg_needed > 0:
+            types_to_join.append(QuestType.EVIL_GUARD)
+        if titan_needed > 0:
+            types_to_join.append(QuestType.TITAN)
+
+        needed_str = ", ".join(f"{t} ({_effective_remaining(device, t, *quest_info[t])})" for t in types_to_join)
+        log.info("Looking for %s rally (%s needed)...", "/".join(types_to_join), needed_str)
+        joined_type = join_rally(types_to_join, device, skip_heal=True)
+        if stop_check and stop_check():
+            return True
+
+        if joined_type:
+            _record_rally_started(device, joined_type)
+            continue
+
+        # No rally to join — start own rally
+        started = False
+        if titan_needed > 0:
+            log.info("No rally to join, starting own Titan rally")
+            if navigate(Screen.MAP, device):
+                if rally_titan(device):
+                    _record_rally_started(device, QuestType.TITAN)
+                    started = True
+            if stop_check and stop_check():
+                return True
+        elif eg_needed > 0:
+            if config.EG_RALLY_OWN_ENABLED:
+                log.info("No rally to join, starting own EG rally")
+                if navigate(Screen.MAP, device):
+                    if rally_eg(device, stop_check=stop_check):
+                        _record_rally_started(device, QuestType.EVIL_GUARD)
+                        started = True
+            else:
+                log.info("No EG rally to join — own rally disabled, skipping")
+            if stop_check and stop_check():
+                return True
+        if not started:
+            log.warning("Rally loop: could not join or start any rally — stopping")
+            break
+
+    return False
 
 
 @timed_action("check_quests")
@@ -411,22 +533,15 @@ def check_quests(device, stop_check=None):
     if stop_check and stop_check():
         return True
 
-    if not navigate("aq_screen", device):
+    if not navigate(Screen.ALLIANCE_QUEST, device):
         log.warning("Failed to navigate to quest screen")
         return False
 
     if stop_check and stop_check():
         return True
 
-    # Claim rewards
-    rewards_claimed = 0
-    while tap_image("aq_claim.png", device):
-        rewards_claimed += 1
-        if stop_check and stop_check():
-            return True
-        time.sleep(1)
-    if rewards_claimed:
-        log.info("Claimed %d quest reward(s)", rewards_claimed)
+    if _claim_quest_rewards(device, stop_check) == -1:
+        return True
 
     if stop_check and stop_check():
         return True
@@ -435,36 +550,19 @@ def check_quests(device, stop_check=None):
     quests = _ocr_quest_rows(device)
 
     if quests is not None:
-        # Deduplicate quest types — each rally counts toward ALL quests of the
-        # same type (alliance + side), so we only need max(remaining) rallies.
-        # e.g. titan 14/15 (alliance) + titan 0/5 (side) → keep 0/5, need 5 not 6.
-        best_by_type = {}
-        for q in quests:
-            qt = q["quest_type"]
-            remaining = q["target"] - q["current"]
-            prev = best_by_type.get(qt)
-            if prev is None or remaining > (prev["target"] - prev["current"]):
-                best_by_type[qt] = q
-        if len(quests) != len(best_by_type):
-            log.debug("Quest dedup: %d raw -> %d unique types (kept max remaining per type)", len(quests), len(best_by_type))
-        quests = list(best_by_type.values())
+        original_count = len(quests)
+        quests = _deduplicate_quests(quests)
+        if original_count != len(quests):
+            log.debug("Quest dedup: %d raw -> %d unique types (kept max remaining per type)", original_count, len(quests))
 
         # Update tracking with latest counter values
         for q in quests:
-            if q["quest_type"] in ("titan", "eg", "pvp"):
+            if q["quest_type"] in (QuestType.TITAN, QuestType.EVIL_GUARD, QuestType.PVP):
                 _track_quest_progress(device, q["quest_type"], q["current"])
 
-        # Filter to quests that still need work (accounting for pending rallies)
-        actionable = []
-        for q in quests:
-            if q["completed"] or q["quest_type"] not in ("titan", "eg", "pvp"):
-                continue
-            eff = _effective_remaining(device, q["quest_type"], q["current"], q["target"])
-            if eff > 0:
-                actionable.append(q)
+        actionable = _get_actionable_quests(device, quests)
 
         if not actionable:
-            # Check if we're truly done or just waiting for pending rallies
             pending_types = [qt for (dev, qt), cnt in _quest_rallies_pending.items() if dev == device and cnt > 0]
             if pending_types:
                 pending_str = ", ".join(f"{qt} ({_quest_rallies_pending[(device, qt)]})" for qt in pending_types)
@@ -479,89 +577,17 @@ def check_quests(device, stop_check=None):
         log.info("Actionable: %s", remaining_str)
 
         types_active = {q["quest_type"] for q in actionable}
-        has_eg = "eg" in types_active
-        has_titan = "titan" in types_active
-        has_pvp = "pvp" in types_active
+        has_eg = QuestType.EVIL_GUARD in types_active
+        has_titan = QuestType.TITAN in types_active
+        has_pvp = QuestType.PVP in types_active
 
-        # Priority: Join EG first > Join Titan > Start own Titan > Start own EG
-        # Loop to join multiple rallies without re-checking the AQ screen each time.
-        # Own rallies only run once per call (they're slower/more expensive).
         if has_eg or has_titan:
-            # Build a quick lookup: quest_type -> (current, target) with most remaining
-            quest_info = {}
-            for q in actionable:
-                qt = q["quest_type"]
-                if qt in ("eg", "titan"):
-                    existing = quest_info.get(qt)
-                    if existing is None or (q["target"] - q["current"]) > (existing[1] - existing[0]):
-                        quest_info[qt] = (q["current"], q["target"])
-
-            # Heal once before the rally loop — titan/eg joins don't damage troops,
-            # but a troop could be injured from previous activity.
-            if config.AUTO_HEAL_ENABLED:
-                log.debug("Healing before rally loop...")
-                heal_all(device)
-
-            any_joined = False
-            for attempt in range(config.MAX_RALLY_ATTEMPTS):  # safety limit
-                if stop_check and stop_check():
-                    return True
-
-                # Check effective remaining for each type
-                eg_needed = _effective_remaining(device, "eg", *quest_info["eg"]) if "eg" in quest_info else 0
-                titan_needed = _effective_remaining(device, "titan", *quest_info["titan"]) if "titan" in quest_info else 0
-
-                if eg_needed <= 0 and titan_needed <= 0:
-                    log.info("All rally quests covered (pending completion)")
-                    break
-
-                # Build list of types to look for and join any in a single war screen pass
-                types_to_join = []
-                if eg_needed > 0:
-                    types_to_join.append("eg")
-                if titan_needed > 0:
-                    types_to_join.append("titan")
-
-                needed_str = ", ".join(f"{t} ({_effective_remaining(device, t, *quest_info[t])})" for t in types_to_join)
-                log.info("Looking for %s rally (%s needed)...", "/".join(types_to_join), needed_str)
-                joined_type = join_rally(types_to_join, device, skip_heal=True)
-                if stop_check and stop_check():
-                    return True
-
-                if joined_type:
-                    _record_rally_started(device, joined_type)
-                    any_joined = True
-                    continue  # Try to join another
-
-                # No rally to join — start own rally, then loop to start more if needed
-                started = False
-                if titan_needed > 0:
-                    log.info("No rally to join, starting own Titan rally")
-                    if navigate("map_screen", device):
-                        if rally_titan(device):
-                            _record_rally_started(device, "titan")
-                            started = True
-                    if stop_check and stop_check():
-                        return True
-                elif eg_needed > 0:
-                    if config.EG_RALLY_OWN_ENABLED:
-                        log.info("No rally to join, starting own EG rally")
-                        if navigate("map_screen", device):
-                            if rally_eg(device, stop_check=stop_check):
-                                _record_rally_started(device, "eg")
-                                started = True
-                    else:
-                        log.info("No EG rally to join — own rally disabled, skipping")
-                    if stop_check and stop_check():
-                        return True
-                if not started:
-                    log.warning("Rally loop: could not join or start any rally — stopping")
-                    break
-
+            if _run_rally_loop(device, actionable, stop_check):
+                return True  # stop_check triggered
             return True
 
         elif has_pvp:
-            if navigate("map_screen", device):
+            if navigate(Screen.MAP, device):
                 target(device)
                 if stop_check and stop_check():
                     return True
@@ -581,9 +607,9 @@ def attack(device):
     if config.AUTO_HEAL_ENABLED:
         heal_all(device)
 
-    if check_screen(device) != "map_screen":
+    if check_screen(device) != Screen.MAP:
         log.debug("Not on map_screen, navigating...")
-        if not navigate("map_screen", device):
+        if not navigate(Screen.MAP, device):
             log.warning("Failed to navigate to map screen")
             return
 
@@ -608,9 +634,9 @@ def reinforce_throne(device):
     if config.AUTO_HEAL_ENABLED:
         heal_all(device)
 
-    if check_screen(device) != "map_screen":
+    if check_screen(device) != Screen.MAP:
         log.debug("Not on map_screen, navigating...")
-        if not navigate("map_screen", device):
+        if not navigate(Screen.MAP, device):
             log.warning("Failed to navigate to map screen")
             return
 
@@ -633,9 +659,9 @@ def target(device):
     if config.AUTO_HEAL_ENABLED:
         heal_all(device)
 
-    if check_screen(device) != "map_screen":
+    if check_screen(device) != Screen.MAP:
         log.debug("Not on map_screen, navigating...")
-        if not navigate("map_screen", device):
+        if not navigate(Screen.MAP, device):
             log.warning("Failed to navigate to map screen")
             return False
 
@@ -714,7 +740,7 @@ def teleport(device):
     if config.AUTO_HEAL_ENABLED:
         heal_all(device)
 
-    if check_screen(device) != "map_screen":
+    if check_screen(device) != Screen.MAP:
         log.warning("Not on map_screen, can't teleport")
         return False
 
@@ -840,7 +866,7 @@ def join_rally(rally_types, device, skip_heal=False):
     pre_war_troops = troops
     log.debug("Troop baseline before war_screen: %d", pre_war_troops)
 
-    if not navigate("war_screen", device):
+    if not navigate(Screen.WAR, device):
         log.warning("Failed to navigate to war screen")
         return False
 
@@ -870,12 +896,12 @@ def join_rally(rally_types, device, skip_heal=False):
 
             # Check where we are before continuing
             current = check_screen(device)
-            if current == "war_screen":
+            if current == Screen.WAR:
                 return True
-            if current == "td_screen":
+            if current == Screen.TROOP_DETAIL:
                 # Overshot past war_screen — navigate forward instead of back
                 log.debug("Backed out to td_screen, re-entering war_screen")
-                return navigate("war_screen", device)
+                return navigate(Screen.WAR, device)
 
             # Still in popup — try back button
             logged_tap(device, 75, 75, "jr_backout")
@@ -890,16 +916,16 @@ def join_rally(rally_types, device, skip_heal=False):
 
     def _exit_war_screen():
         """Navigate back from war screen to map."""
-        navigate("map_screen", device)
+        navigate(Screen.MAP, device)
 
     # Keywords to verify rally type from OCR text on the war screen row
     _rally_verify_keywords = {
-        "titan": ["titan"],
-        "eg": ["evil", "guard"],
-        "pvp": ["pvp", "attack"],
-        "castle": ["castle"],
-        "pass": ["pass"],
-        "tower": ["tower"],
+        QuestType.TITAN: ["titan"],
+        QuestType.EVIL_GUARD: ["evil", "guard"],
+        QuestType.PVP: ["pvp", "attack"],
+        RallyType.CASTLE: ["castle"],
+        RallyType.PASS: ["pass"],
+        RallyType.TOWER: ["tower"],
     }
 
     def _ocr_label_at(screen, y_pos):
@@ -1118,11 +1144,11 @@ def join_rally(rally_types, device, skip_heal=False):
                     # Verify join succeeded — game should transition to map screen
                     time.sleep(2)
                     current_screen = check_screen(device)
-                    if current_screen != "map_screen":
+                    if current_screen != Screen.MAP:
                         log.warning("After depart, expected map_screen but on %s — navigating to map", current_screen)
                         from navigation import _save_debug_screenshot
                         _save_debug_screenshot(device, "depart_wrong_screen")
-                        navigate("map_screen", device)
+                        navigate(Screen.MAP, device)
 
                     new_troops = troops_avail(device)
                     log.debug("Join verification: baseline=%d, post_depart=%d, screen=%s",
@@ -1166,7 +1192,7 @@ def join_rally(rally_types, device, skip_heal=False):
                         elif rally_owner:
                             _record_rally_owner_failure(device, rally_owner)
 
-                        navigate("war_screen", device)
+                        navigate(Screen.WAR, device)
                         continue  # Try next match
                 else:
                     log.warning("Depart button not found — backing out")
@@ -1342,7 +1368,7 @@ def restore_ap(device, needed):
     log.info(">>> restore_ap starting (need %d)...", needed)
 
     # Navigate to map screen
-    if not navigate("map_screen", device):
+    if not navigate(Screen.MAP, device):
         log.warning("<<< restore_ap: failed to navigate to map screen (%.1fs)", time.time() - _ap_start)
         stats.record_action(device, "restore_ap", False, time.time() - _ap_start)
         return False
@@ -1354,7 +1380,7 @@ def restore_ap(device, needed):
             log.debug("AP: retrying menu open sequence (attempt %d/2)", open_attempt + 1)
             _close_ap_menu(device)
             time.sleep(0.5)
-            if not navigate("map_screen", device):
+            if not navigate(Screen.MAP, device):
                 return False
 
         # Tap SEARCH button to open the search/rally menu
@@ -1543,7 +1569,7 @@ def rally_titan(device):
             log.warning("Not enough AP for titan rally (have %d, need %d)", ap[0], config.AP_COST_RALLY_TITAN)
             return False
 
-    if not navigate("map_screen", device):
+    if not navigate(Screen.MAP, device):
         log.warning("Failed to navigate to map screen")
         return False
 
@@ -1598,7 +1624,7 @@ def _search_eg_center(device):
     Returns True if search succeeded, False otherwise."""
     log = get_logger("actions", device)
 
-    if not navigate("map_screen", device):
+    if not navigate(Screen.MAP, device):
         log.warning("Failed to navigate to map screen")
         return False
 
@@ -1652,9 +1678,9 @@ def _probe_priest(device, x, y, label):
 
     # Verify we're on the map screen before probing
     current = check_screen(device)
-    if current != "map_screen":
+    if current != Screen.MAP:
         log.warning("PROBE %s: on %s instead of map_screen, recovering...", label, current)
-        if not navigate("map_screen", device):
+        if not navigate(Screen.MAP, device):
             log.warning("PROBE %s: could not recover to map screen", label)
             return False
 
@@ -1701,7 +1727,7 @@ def _probe_priest(device, x, y, label):
     save_failure_screenshot(device, f"probe_{label}_MISS")
 
     # Only dismiss if not on map screen (tapping 75,75 on map opens profile)
-    if check_screen(device) != "map_screen":
+    if check_screen(device) != Screen.MAP:
         logged_tap(device, 75, 75, f"probe_{label}_dismiss")
         time.sleep(0.5)
     return False
@@ -1749,12 +1775,12 @@ def rally_eg(device, stop_check=None):
     # Wait for search overlay to fully close and camera to settle
     time.sleep(1.5)
     # Verify we're back on map_screen (search overlay dismissed)
-    if check_screen(device) != "map_screen":
+    if check_screen(device) != Screen.MAP:
         log.debug("EG: search overlay may still be open, waiting...")
         time.sleep(1.5)
-        if check_screen(device) != "map_screen":
+        if check_screen(device) != Screen.MAP:
             log.warning("EG: not on map_screen after search — recovering")
-            if not navigate("map_screen", device):
+            if not navigate(Screen.MAP, device):
                 return False
 
     # Tap EG boss on map to enter the priest view
@@ -1909,7 +1935,7 @@ def rally_eg(device, stop_check=None):
             if not dialog_open:
                 # No dialog — verify we're actually on the map screen
                 current = check_screen(device)
-                if current == "map_screen":
+                if current == Screen.MAP:
                     log.debug("P%d: dialog dismissed, map screen ready", priest_num)
                     return True
                 log.debug("P%d: no dialog but on %s, dismissing (attempt %d/5)",
@@ -1923,7 +1949,7 @@ def rally_eg(device, stop_check=None):
 
         # Last resort: navigate to map
         log.warning("P%d: could not dismiss after 5 attempts, navigating to map", priest_num)
-        if navigate("map_screen", device):
+        if navigate(Screen.MAP, device):
             return True
         save_failure_screenshot(device, f"eg_dismiss_fail_p{priest_num}")
         return False
@@ -1972,7 +1998,7 @@ def rally_eg(device, stop_check=None):
         log.warning("P1: PROBE MISS — no dialog after tapping EG boss")
         save_failure_screenshot(device, "probe_P1_MISS")
         priests_dead += 1   # priest is already dead (killed by others)
-        if check_screen(device) != "map_screen":
+        if check_screen(device) != Screen.MAP:
             logged_tap(device, 75, 75, "probe_P1_dismiss")
             time.sleep(0.5)
 
@@ -2102,7 +2128,7 @@ def rally_eg(device, stop_check=None):
         log.warning("P6: dialog not detected after taps (attempt %d/3) — retrying", p6_attempt + 1)
         save_failure_screenshot(device, f"eg_p6_dialog_miss_a{p6_attempt+1}")
         # Dismiss anything that might have opened, return to map
-        if check_screen(device) != "map_screen":
+        if check_screen(device) != Screen.MAP:
             logged_tap(device, 75, 75, "eg_p6_dismiss_retry")
             time.sleep(1)
 
@@ -2240,18 +2266,18 @@ def join_war_rallies(device):
         log.warning("Not enough troops available (have %d, need more than %d)", troops, config.MIN_TROOPS_AVAILABLE)
         return
 
-    if not navigate("war_screen", device):
+    if not navigate(Screen.WAR, device):
         log.warning("Failed to navigate to war screen")
         return
 
-    rally_types = ["castle", "pass", "tower"]
+    rally_types = [RallyType.CASTLE, RallyType.PASS, RallyType.TOWER]
     join_btn = get_template("elements/rally/join.png")
     if join_btn is None:
         log.warning("Missing join button image")
         return
 
     # Rally types we do NOT want to join
-    exclude_types = ["titan", "eg", "groot"]
+    exclude_types = [QuestType.TITAN, QuestType.EVIL_GUARD, RallyType.GROOT]
 
     def _backout_and_retry(reason):
         """Back out with (1010,285), verify we're still on war screen, then retry."""
@@ -2369,7 +2395,7 @@ def join_war_rallies(device):
         should_skip_scroll = max_val > 0.8
 
     if should_skip_scroll:
-        navigate("map_screen", device)
+        navigate(Screen.MAP, device)
         time.sleep(1)
         return
 
@@ -2392,7 +2418,7 @@ def join_war_rallies(device):
 
     # Timed out - navigate back to map properly
     log.info("No war rallies available")
-    navigate("map_screen", device)
+    navigate(Screen.MAP, device)
 
 
 # ============================================================
@@ -2418,7 +2444,7 @@ def mine_mithril(device):
     log = get_logger("actions", device)
 
     # Step 1: Navigate to kingdom_screen
-    if not navigate("kingdom_screen", device):
+    if not navigate(Screen.KINGDOM, device):
         log.warning("Failed to navigate to kingdom screen")
         return False
 
@@ -2494,7 +2520,7 @@ def mine_mithril(device):
     time.sleep(1)
     adb_tap(device, 75, 75)  # Back from Dimensional Treasure
     time.sleep(1)
-    navigate("map_screen", device)
+    navigate(Screen.MAP, device)
 
     # Step 8: Record timestamp
     config.LAST_MITHRIL_TIME[device] = time.time()

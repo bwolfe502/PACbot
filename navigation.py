@@ -5,6 +5,7 @@ from datetime import datetime
 
 from vision import tap_image, tap, load_screenshot, adb_tap, get_template
 import config
+from config import Screen
 from botlog import get_logger, stats
 
 # ============================================================
@@ -52,7 +53,10 @@ def _save_debug_screenshot(device, label, screen=None):
 # SCREEN DETECTION
 # ============================================================
 
-SCREEN_TEMPLATES = ["map_screen", "bl_screen", "aq_screen", "td_screen", "territory_screen", "war_screen", "profile_screen", "alliance_screen", "kingdom_screen"]
+SCREEN_TEMPLATES = [
+    Screen.MAP, Screen.BATTLE_LIST, Screen.ALLIANCE_QUEST, Screen.TROOP_DETAIL,
+    Screen.TERRITORY, Screen.WAR, Screen.PROFILE, Screen.ALLIANCE, Screen.KINGDOM,
+]
 
 # Popup templates that overlay the screen and block taps.
 # Checked by check_screen() before screen matching — auto-dismissed if found.
@@ -72,7 +76,7 @@ def check_screen(device):
         screen = load_screenshot(device)
         if screen is None:
             log.warning("Failed to load screenshot")
-            return "unknown"
+            return Screen.UNKNOWN
 
         # Check for logout/disconnection popup first
         attention_template = get_template("elements/attention.png")
@@ -86,7 +90,7 @@ def check_screen(device):
                 for key, info in list(config.running_tasks.items()):
                     if isinstance(info, dict) and "stop_event" in info:
                         info["stop_event"].set()
-                return "logged_out"
+                return Screen.LOGGED_OUT
 
         # Check for popups that overlay the screen and block all taps.
         for tpl_path, popup_name, threshold in POPUP_DISMISS_TEMPLATES:
@@ -105,7 +109,7 @@ def check_screen(device):
                 screen = load_screenshot(device)
                 if screen is None:
                     log.warning("Screenshot failed after popup dismiss")
-                    return "unknown"
+                    return Screen.UNKNOWN
                 log.debug("Popup dismissed, re-scanning screen...")
                 break  # Only dismiss one popup per check cycle
 
@@ -138,11 +142,11 @@ def check_screen(device):
         # Unknown screen — save debug screenshot automatically
         log.warning("Unknown screen detected (best: %s at %.0f%%)", best_name, best_val * 100)
         _save_debug_screenshot(device, "unknown_screen", screen)
-        return "unknown"
+        return Screen.UNKNOWN
 
     except Exception as e:
         log.error("Exception in check_screen: %s", e, exc_info=True)
-        return "unknown"
+        return Screen.UNKNOWN
 
 # ============================================================
 # NAVIGATION HELPERS
@@ -152,7 +156,7 @@ def _verify_screen(target_screen, device, wait_time=1.5, retries=2):
     """Verify we arrived at the target screen, with retries."""
     log = get_logger("navigation", device)
     time.sleep(wait_time)
-    current = "unknown"
+    current = Screen.UNKNOWN
     for attempt in range(1 + retries):
         current = check_screen(device)
         if current == target_screen:
@@ -186,14 +190,14 @@ def _recover_to_known_screen(device):
         action()
         time.sleep(1.5)
         current = check_screen(device)
-        if current != "unknown":
+        if current != Screen.UNKNOWN:
             log.info("Recovery via %s: now on %s", name, current)
             return current
         log.debug("Recovery via %s: still unknown", name)
 
     log.warning("Recovery FAILED after all strategies")
     _save_debug_screenshot(device, "recovery_fail")
-    return "unknown"
+    return Screen.UNKNOWN
 
 # ============================================================
 # NAVIGATION
@@ -213,9 +217,9 @@ def navigate(target_screen, device, _depth=0):
     log.info("Navigating: %s -> %s", current, target_screen)
 
     # Handle unknown screen at entry — try recovery first
-    if current == "unknown":
+    if current == Screen.UNKNOWN:
         current = _recover_to_known_screen(device)
-        if current == "unknown":
+        if current == Screen.UNKNOWN:
             return False
         if current == target_screen:
             return True
@@ -225,110 +229,110 @@ def navigate(target_screen, device, _depth=0):
         return True
 
     # If on td_screen or alliance_screen, always go to map_screen first
-    if current == "td_screen" and target_screen != "map_screen":
+    if current == Screen.TROOP_DETAIL and target_screen != Screen.MAP:
         log.debug("On td_screen, going to map_screen first...")
         adb_tap(device, 990, 1850)
         time.sleep(1)
         current = check_screen(device)
-    elif current == "alliance_screen" and target_screen != "map_screen" and target_screen != "war_screen":
+    elif current == Screen.ALLIANCE and target_screen != Screen.MAP and target_screen != Screen.WAR:
         log.debug("On alliance_screen, going to map_screen first...")
         adb_tap(device, 75, 75)
         time.sleep(1)
         current = check_screen(device)
 
     # To map_screen - always go back
-    if target_screen == "map_screen":
-        if current == "td_screen":
+    if target_screen == Screen.MAP:
+        if current == Screen.TROOP_DETAIL:
             adb_tap(device, 990, 1850)
             time.sleep(1)
             current = check_screen(device)
-        elif current == "alliance_screen":
+        elif current == Screen.ALLIANCE:
             adb_tap(device, 75, 75)
             time.sleep(1)
             current = check_screen(device)
-        elif current == "kingdom_screen":
+        elif current == Screen.KINGDOM:
             # Bottom-right globe icon takes us back to map
             adb_tap(device, 970, 1880)
             time.sleep(1)
             current = check_screen(device)
-        elif current in ["bl_screen", "aq_screen", "war_screen", "territory_screen", "profile_screen"]:
+        elif current in [Screen.BATTLE_LIST, Screen.ALLIANCE_QUEST, Screen.WAR, Screen.TERRITORY, Screen.PROFILE]:
             adb_tap(device, 75, 75)
             time.sleep(1)
             current = check_screen(device)
-            if current == "alliance_screen":
+            if current == Screen.ALLIANCE:
                 # Went through alliance_screen on the way back from war_screen
                 adb_tap(device, 75, 75)
                 time.sleep(1)
                 current = check_screen(device)
-            if current != "map_screen":
+            if current != Screen.MAP:
                 # Landed on a different screen (e.g. td_screen from profile) —
                 # recurse so the correct handler is used for this screen.
-                return navigate("map_screen", device, _depth=_depth + 1)
+                return navigate(Screen.MAP, device, _depth=_depth + 1)
         else:
             # Unknown or unhandled screen — try recovery
             current = _recover_to_known_screen(device)
-            if current == "map_screen":
+            if current == Screen.MAP:
                 return True
-            if current != "unknown":
-                return navigate("map_screen", device, _depth=_depth + 1)
+            if current != Screen.UNKNOWN:
+                return navigate(Screen.MAP, device, _depth=_depth + 1)
             return False
-        return current == "map_screen"
+        return current == Screen.MAP
 
     # To bl_screen
-    if target_screen == "bl_screen":
-        if current == "map_screen":
+    if target_screen == Screen.BATTLE_LIST:
+        if current == Screen.MAP:
             if not tap_image("bl_button.png", device):
                 _save_debug_screenshot(device, "bl_button_not_found")
-        elif current in ["aq_screen", "territory_screen"]:
+        elif current in [Screen.ALLIANCE_QUEST, Screen.TERRITORY]:
             adb_tap(device, 75, 75)
         else:
-            if not navigate("map_screen", device, _depth=_depth + 1):
+            if not navigate(Screen.MAP, device, _depth=_depth + 1):
                 return False
             if not tap_image("bl_button.png", device):
                 _save_debug_screenshot(device, "bl_button_not_found")
-        return _verify_screen("bl_screen", device)
+        return _verify_screen(Screen.BATTLE_LIST, device)
 
     # To aq_screen
-    if target_screen == "aq_screen":
-        if current != "bl_screen":
-            if not navigate("bl_screen", device, _depth=_depth + 1):
+    if target_screen == Screen.ALLIANCE_QUEST:
+        if current != Screen.BATTLE_LIST:
+            if not navigate(Screen.BATTLE_LIST, device, _depth=_depth + 1):
                 return False
         tap("quest_button", device)
-        return _verify_screen("aq_screen", device)
+        return _verify_screen(Screen.ALLIANCE_QUEST, device)
 
     # To war_screen
-    if target_screen == "war_screen":
-        if current == "alliance_screen":
+    if target_screen == Screen.WAR:
+        if current == Screen.ALLIANCE:
             # Already on the alliance screen — just tap the war button
             if not tap_image("alliance_screen.png", device):
                 log.debug("alliance_screen.png not found, trying blind tap for war button")
                 adb_tap(device, 550, 170)
-            return _verify_screen("war_screen", device)
-        if current != "map_screen":
-            if not navigate("map_screen", device, _depth=_depth + 1):
+            return _verify_screen(Screen.WAR, device)
+        if current != Screen.MAP:
+            if not navigate(Screen.MAP, device, _depth=_depth + 1):
                 return False
         adb_tap(device, 640, 1865)
         time.sleep(1)
         adb_tap(device, 200, 1200)
         time.sleep(1)
         adb_tap(device, 550, 170)
-        return _verify_screen("war_screen", device)
+        return _verify_screen(Screen.WAR, device)
 
     # To territory_screen
-    if target_screen == "territory_screen":
-        if current != "bl_screen":
-            if not navigate("bl_screen", device, _depth=_depth + 1):
+    if target_screen == Screen.TERRITORY:
+        if current != Screen.BATTLE_LIST:
+            if not navigate(Screen.BATTLE_LIST, device, _depth=_depth + 1):
                 return False
         adb_tap(device, 316, 1467)
-        return _verify_screen("territory_screen", device)
+        return _verify_screen(Screen.TERRITORY, device)
 
     # To kingdom_screen
-    if target_screen == "kingdom_screen":
-        if current != "map_screen":
-            if not navigate("map_screen", device, _depth=_depth + 1):
+    if target_screen == Screen.KINGDOM:
+        if current != Screen.MAP:
+            if not navigate(Screen.MAP, device, _depth=_depth + 1):
                 return False
         adb_tap(device, 75, 1880)
-        return _verify_screen("kingdom_screen", device)
+        return _verify_screen(Screen.KINGDOM, device)
 
     log.warning("Unknown target screen: %s", target_screen)
     return False
