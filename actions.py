@@ -1361,12 +1361,10 @@ def restore_ap(device, needed):
         adb_tap(device, 900, 1800)
         time.sleep(1.5)
 
-        # Verify search menu opened before tapping AP Recovery
-        s = load_screenshot(device)
-        if s is not None and check_screen(device) == "map_screen":
-            # Search menu is an overlay, map_screen still detects — check for
-            # rally tab or other search-menu elements as secondary confirmation
-            log.debug("AP: search menu overlay active (map still detected)")
+        # NOTE: Do NOT call check_screen() here — its popup auto-dismiss
+        # detects close_x.png on the search menu and closes it before we
+        # can tap the AP Recovery button.
+        log.debug("AP: search menu tap sent, proceeding to AP Recovery button")
 
         # Tap the blue lightning bolt button (AP Recovery button in search menu)
         adb_tap(device, 315, 1380)
