@@ -1887,7 +1887,7 @@ def rally_eg(device, stop_check=None):
             return False
 
     # P6 uses a two-tap sequence: tap EG boss, then tap attack confirm.
-    # Verify the dialog opened by checking for depart/checked/unchecked.
+    # Verify the dialog opened by checking for depart/checked/unchecked/defending.
     # Retry the sequence up to 3 times if the taps don't register.
     p6_dialog_opened = False
     for p6_attempt in range(3):
@@ -1902,6 +1902,10 @@ def rally_eg(device, stop_check=None):
             if s is not None:
                 if find_image(s, "depart.png", threshold=0.8):
                     p6_dialog_opened = True
+                    break
+                if find_image(s, "defending.png", threshold=0.8):
+                    p6_dialog_opened = True
+                    log.debug("P6: dialog detected via defending.png")
                     break
                 if checked_img is not None:
                     result = cv2.matchTemplate(s, checked_img, cv2.TM_CCOEFF_NORMED)

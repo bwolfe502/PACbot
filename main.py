@@ -1743,5 +1743,11 @@ if __name__ == "__main__":
         validate_license()
     else:
         _main_log.info("Git repo detected — skipping license check (developer mode).")
+    # Auto-update check (skipped automatically for .git clones)
+    from updater import check_and_update
+    if check_and_update():
+        _main_log.info("Update installed — restarting...")
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
     _main_log.info("Running PACbot...")
     create_gui()
