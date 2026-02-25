@@ -23,14 +23,16 @@ def reset_quest_state():
     """Clear quest tracking and rally blacklist dicts before each test."""
     from actions import (
         _quest_rallies_pending, _quest_last_seen, _quest_pending_since,
-        _rally_owner_blacklist,
+        _rally_owner_blacklist, _rally_owner_failures,
     )
     _quest_rallies_pending.clear()
     _quest_last_seen.clear()
     _quest_pending_since.clear()
     _rally_owner_blacklist.clear()
+    _rally_owner_failures.clear()
     yield
     _quest_rallies_pending.clear()
     _quest_last_seen.clear()
     _quest_pending_since.clear()
     _rally_owner_blacklist.clear()
+    _rally_owner_failures.clear()

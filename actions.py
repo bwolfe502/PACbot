@@ -118,37 +118,122 @@ def reset_quest_tracking(device=None):
 
 # ---- Rally owner blacklist ----
 # When a rally join fails (e.g. "Cannot march across protected zones"),
-# we blacklist the rally owner so we don't keep retrying the same rally.
-# Blacklist is session-scoped (clears on restart).
+# we track consecutive failures per rally owner. After RALLY_BLACKLIST_THRESHOLD
+# consecutive failures (or an immediate error message detection), the owner is
+# blacklisted for RALLY_BLACKLIST_EXPIRY_S seconds. Blacklist is also cleared
+# when auto-quest starts a new cycle.
 
-_rally_owner_blacklist = {}   # {device: {owner_name_lower: failure_count}}
+RALLY_BLACKLIST_THRESHOLD = 2        # consecutive failures before blacklisting
+RALLY_BLACKLIST_EXPIRY_S = 30 * 60   # 30 minutes
+
+_rally_owner_blacklist = {}   # {device: {name_lower: blacklisted_timestamp}}
+_rally_owner_failures = {}    # {device: {name_lower: consecutive_failure_count}}
+
+def _record_rally_owner_failure(device, owner):
+    """Record a failed join for a rally owner. Returns True if now blacklisted."""
+    if not owner:
+        return False
+    name = owner.lower().strip()
+    if not name:
+        return False
+    if device not in _rally_owner_failures:
+        _rally_owner_failures[device] = {}
+    _rally_owner_failures[device][name] = _rally_owner_failures[device].get(name, 0) + 1
+    count = _rally_owner_failures[device][name]
+    _log.debug("Rally owner '%s' failure count: %d/%d", owner, count, RALLY_BLACKLIST_THRESHOLD)
+    if count >= RALLY_BLACKLIST_THRESHOLD:
+        _blacklist_rally_owner(device, owner)
+        return True
+    return False
 
 def _blacklist_rally_owner(device, owner):
-    """Add a rally owner to the blacklist for this device."""
+    """Add a rally owner to the blacklist with a timestamp for expiry."""
     if not owner:
+        return
+    name = owner.lower().strip()
+    if not name:
         return
     if device not in _rally_owner_blacklist:
         _rally_owner_blacklist[device] = {}
+    _rally_owner_blacklist[device][name] = time.time()
+    # Clear failure counter since they're now blacklisted
+    if device in _rally_owner_failures:
+        _rally_owner_failures[device].pop(name, None)
+    _log.warning("Blacklisted rally owner '%s' on %s (expires in %d min)",
+                 owner, device, RALLY_BLACKLIST_EXPIRY_S // 60)
+
+def _clear_rally_owner_failures(device, owner):
+    """Clear failure counter for an owner after a successful join."""
+    if not owner:
+        return
     name = owner.lower().strip()
-    _rally_owner_blacklist[device][name] = _rally_owner_blacklist[device].get(name, 0) + 1
-    _log.warning("Blacklisted rally owner '%s' on %s (failures: %d)",
-                 owner, device, _rally_owner_blacklist[device][name])
+    if device in _rally_owner_failures:
+        _rally_owner_failures[device].pop(name, None)
 
 def _is_rally_owner_blacklisted(device, owner):
-    """Check if a rally owner is blacklisted for this device."""
+    """Check if a rally owner is blacklisted (and not expired) for this device."""
     if not owner:
         return False
-    return owner.lower().strip() in _rally_owner_blacklist.get(device, {})
+    name = owner.lower().strip()
+    if not name:
+        return False
+    device_bl = _rally_owner_blacklist.get(device, {})
+    if name not in device_bl:
+        return False
+    # Check expiry
+    elapsed = time.time() - device_bl[name]
+    if elapsed > RALLY_BLACKLIST_EXPIRY_S:
+        del device_bl[name]
+        _log.info("Rally owner '%s' blacklist expired on %s (%.0f min ago)", owner, device, elapsed / 60)
+        return False
+    return True
 
 def reset_rally_blacklist(device=None):
-    """Clear the rally owner blacklist. If device given, clear only that device."""
+    """Clear the rally owner blacklist and failure counters.
+    If device given, clear only that device."""
     if device is None:
         _rally_owner_blacklist.clear()
+        _rally_owner_failures.clear()
         _log.info("Rally owner blacklist cleared (all devices)")
     else:
         if device in _rally_owner_blacklist:
             count = len(_rally_owner_blacklist.pop(device))
             _log.info("Rally owner blacklist cleared for %s (%d entries)", device, count)
+        _rally_owner_failures.pop(device, None)
+
+
+# ---- In-game error detection ----
+
+# Error messages flash briefly in a banner across the upper-center of the screen.
+# Known error patterns that indicate a permanent/zone-based failure:
+_RALLY_ERROR_KEYWORDS = ["cannot", "protected", "march", "zone"]
+
+def _ocr_error_banner(screen):
+    """OCR the error banner area (upper-center of the map screen).
+    Returns the error text if it matches known error patterns, else empty string."""
+    if screen is None:
+        return ""
+    h, w = screen.shape[:2]
+    # Error banners appear in roughly the top 30% of the screen, center area
+    y_start = int(h * 0.15)
+    y_end = int(h * 0.35)
+    x_start = int(w * 0.05)
+    x_end = int(w * 0.95)
+    crop = screen[y_start:y_end, x_start:x_end]
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+
+    from vision import _get_ocr_reader
+    reader = _get_ocr_reader()
+    results = reader.readtext(gray, detail=0)
+    text = " ".join(results).strip().lower()
+    if not text:
+        return ""
+
+    # Check if text matches known error patterns
+    if any(kw in text for kw in _RALLY_ERROR_KEYWORDS):
+        return text
+    return ""
 
 
 # ---- Quest OCR helpers ----
@@ -1045,6 +1130,7 @@ def join_rally(rally_types, device, skip_heal=False):
 
                     if new_troops < pre_war_troops:
                         # Clear success: fewer troops than before
+                        _clear_rally_owner_failures(device, rally_owner)
                         elapsed = time.time() - _jr_start
                         log.info("<<< join_rally: %s rally joined in %.1fs (troops %d -> %d)", rally_type, elapsed, pre_war_troops, new_troops)
                         stats.record_action(device, "join_rally", True, elapsed)
@@ -1053,19 +1139,33 @@ def join_rally(rally_types, device, skip_heal=False):
                         # Troop(s) returned during the join attempt — ambiguous.
                         # We sent 1 out but got back more than we lost. Join probably
                         # succeeded AND a previous rally completed simultaneously.
+                        _clear_rally_owner_failures(device, rally_owner)
                         elapsed = time.time() - _jr_start
                         log.info("<<< join_rally: %s rally LIKELY joined in %.1fs (troops %d -> %d, troop(s) returned during join)",
                                  rally_type, elapsed, pre_war_troops, new_troops)
                         stats.record_action(device, "join_rally", True, elapsed)
                         return rally_type
                     else:
-                        # Same count — genuine failure (e.g. "Cannot march across protected zones")
+                        # Same count — join likely failed
                         from navigation import _save_debug_screenshot
                         _save_debug_screenshot(device, "join_failed_after_depart")
                         log.warning("Depart clicked but troops unchanged (%d -> %d) — join failed. Screen: %s",
                                     pre_war_troops, new_troops, current_screen)
-                        if rally_owner:
-                            _blacklist_rally_owner(device, rally_owner)
+
+                        # Check for in-game error message on screen (e.g. "Cannot march
+                        # across protected zones"). These flash briefly after failed actions.
+                        error_screen = load_screenshot(device)
+                        if error_screen is not None and rally_owner:
+                            error_text = _ocr_error_banner(error_screen)
+                            if error_text:
+                                log.warning("In-game error detected: '%s' — blacklisting '%s' immediately",
+                                            error_text, rally_owner)
+                                _blacklist_rally_owner(device, rally_owner)
+                            else:
+                                _record_rally_owner_failure(device, rally_owner)
+                        elif rally_owner:
+                            _record_rally_owner_failure(device, rally_owner)
+
                         navigate("war_screen", device)
                         continue  # Try next match
                 else:

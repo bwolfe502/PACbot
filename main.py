@@ -21,8 +21,8 @@ from vision import adb_tap, tap_image, load_screenshot, find_image, wait_for_ima
 from troops import troops_avail, heal_all, read_panel_statuses
 from actions import (attack, reinforce_throne, target, check_quests, teleport,
                      rally_titan, rally_eg, search_eg_reset, join_rally,
-                     join_war_rallies, reset_quest_tracking, test_eg_positions,
-                     mine_mithril, mine_mithril_if_due)
+                     join_war_rallies, reset_quest_tracking, reset_rally_blacklist,
+                     test_eg_positions, mine_mithril, mine_mithril_if_due)
 from territory import (attack_territory, auto_occupy_loop,
                        open_territory_manager, sample_specific_squares)
 from botlog import get_logger
@@ -147,6 +147,7 @@ def run_auto_quest(device, stop_event):
     dlog = get_logger("main", device)
     dlog.info("Auto Quest started")
     reset_quest_tracking(device)
+    reset_rally_blacklist(device)
     stop_check = stop_event.is_set
     lock = config.get_device_lock(device)
     try:
