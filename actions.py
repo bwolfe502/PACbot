@@ -2087,8 +2087,9 @@ def rally_eg(device, stop_check=None):
             time.sleep(0.5)
 
     # =====================================================
-    # PRIESTS 2–5 — probe each, skip misses
+    # PRIESTS 2–5 — probe each, collect misses for retry
     # =====================================================
+    missed_priests = []
     for i in range(1, 5):  # EG_PRIEST_POSITIONS[1] through [4]
         pnum = i + 1
         x, y = EG_PRIEST_POSITIONS[i]
@@ -2117,7 +2118,79 @@ def rally_eg(device, stop_check=None):
             attacks_completed += 1
             priests_dead += 1
         else:
-            log.info("P%d: MISS — priest already dead, skipping", pnum)
+            log.info("P%d: MISS — will retry with camera nudge", pnum)
+            missed_priests.append((i, pnum, x, y))
+
+    # =====================================================
+    # RETRY MISSED PRIESTS — nudge camera to clear UI occlusion
+    # =====================================================
+    # Priests near screen edges can be occluded by troop march panels
+    # or other UI.  Re-center on the EG, apply a slow camera drag to
+    # shift the priest toward screen center, then re-probe.
+    if missed_priests:
+        log.info("Retrying %d missed priest(s) with camera nudge...", len(missed_priests))
+
+    for (i, pnum, x, y) in missed_priests:
+        if stop_check and stop_check():
+            log.info("Retry aborted (stop requested)")
+            return False
+
+        # Dismiss any open dialog before re-centering
+        if attacks_completed > 0:
+            dismiss_and_verify_map(pnum)
+
+        # Re-center camera on EG via search
+        if not _search_eg_center(device):
+            log.warning("P%d retry: re-center failed, assuming dead", pnum)
+            priests_dead += 1
+            continue
+
+        # Wait for search overlay to close, verify map screen
+        time.sleep(1.5)
+        if check_screen(device) != Screen.MAP:
+            time.sleep(1.5)
+            if check_screen(device) != Screen.MAP:
+                if not navigate(Screen.MAP, device):
+                    log.warning("P%d retry: can't reach map, assuming dead", pnum)
+                    priests_dead += 1
+                    continue
+
+        # Calculate nudge to bring priest ~60% toward screen center
+        center_x, center_y = 540, 960
+        nudge_dx = int((center_x - x) * 0.6)
+        nudge_dy = int((center_y - y) * 0.6)
+        end_x = max(50, min(1030, center_x + nudge_dx))
+        end_y = max(50, min(1870, center_y + nudge_dy))
+
+        log.info("P%d retry: nudging camera by (%+d, %+d)", pnum, nudge_dx, nudge_dy)
+        adb_swipe(device, center_x, center_y, end_x, end_y, 1000)
+        time.sleep(0.5)
+
+        # Probe at adjusted position
+        adj_x = x + nudge_dx
+        adj_y = y + nudge_dy
+        log.info("P%d retry: probing at adjusted (%d, %d)", pnum, adj_x, adj_y)
+
+        if _probe_priest(device, adj_x, adj_y, f"P{pnum}_retry"):
+            # HIT on retry — full attack sequence
+            log.info("P%d retry: HIT — attacking", pnum)
+            if not check_and_proceed(pnum):
+                log.warning("P%d retry: check_and_proceed failed — skipping", pnum)
+                priests_dead += 1
+                continue
+            try_stationed_before_depart(pnum)
+            if not click_depart_with_fallback(pnum):
+                log.warning("P%d retry: depart failed — skipping", pnum)
+                priests_dead += 1
+                continue
+            time.sleep(1)
+            if not poll_troop_ready(60, pnum):
+                log.warning("P%d retry: stationed timeout — continuing anyway", pnum)
+            log.info("P%d retry: rally completed", pnum)
+            attacks_completed += 1
+            priests_dead += 1
+        else:
+            log.info("P%d retry: still MISS — priest truly dead", pnum)
             priests_dead += 1
 
     if attacks_completed == 0 and not p1_hit:
@@ -2142,6 +2215,19 @@ def rally_eg(device, stop_check=None):
     pnum = 6
     x6, y6 = EG_PRIEST_POSITIONS[5]
     log.info("P6: starting final EG rally at (%d,%d)", x6, y6)
+
+    # If retries shifted the camera, re-center before P6
+    if missed_priests:
+        log.info("P6: re-centering camera after retry nudge(s)")
+        if not _search_eg_center(device):
+            log.warning("P6: re-center failed after retries")
+            return False
+        time.sleep(1.5)
+        if check_screen(device) != Screen.MAP:
+            time.sleep(1.5)
+            if check_screen(device) != Screen.MAP:
+                if not navigate(Screen.MAP, device):
+                    return False
 
     # Dismiss dialog from previous priest
     if not dismiss_and_verify_map(6):
