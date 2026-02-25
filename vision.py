@@ -50,6 +50,7 @@ os.makedirs(CLICKS_DIR, exist_ok=True)
 os.makedirs(FAILURES_DIR, exist_ok=True)
 
 _click_seq = 0
+_click_seq_lock = threading.Lock()
 
 def _cleanup_clicks_dir(max_files=50):
     try:
@@ -59,8 +60,8 @@ def _cleanup_clicks_dir(max_files=50):
         )
         while len(files) > max_files:
             os.remove(files.pop(0))
-    except Exception:
-        pass
+    except Exception as e:
+        get_logger("vision").warning("Click trail cleanup failed: %s", e)
 
 def _save_click_trail(screen, device, x, y, label="tap"):
     """Save a screenshot with a marker at the tap point for debugging."""
@@ -68,30 +69,33 @@ def _save_click_trail(screen, device, x, y, label="tap"):
     if not config.CLICK_TRAIL_ENABLED:
         return
     try:
-        _click_seq += 1
+        with _click_seq_lock:
+            _click_seq += 1
+            seq = _click_seq
         annotated = screen.copy()
         cv2.circle(annotated, (int(x), int(y)), 30, (0, 0, 255), 3)
         cv2.circle(annotated, (int(x), int(y)), 5, (0, 0, 255), -1)
         cv2.putText(annotated, label, (int(x) + 35, int(y) - 10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-        timestamp = datetime.now().strftime("%H%M%S")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_device = device.replace(":", "_")
-        filename = f"{_click_seq:03d}_{timestamp}_{safe_device}_{label}.png"
+        filename = f"{seq:03d}_{timestamp}_{safe_device}_{label}.png"
         cv2.imwrite(os.path.join(CLICKS_DIR, filename), annotated)
         _cleanup_clicks_dir()
-    except Exception:
-        pass
+    except Exception as e:
+        get_logger("vision", device).warning("Click trail save failed: %s", e)
 
 def clear_click_trail():
     """Clear all click trail images. Call at the start of an action run."""
     global _click_seq
-    _click_seq = 0
+    with _click_seq_lock:
+        _click_seq = 0
     try:
         for f in os.listdir(CLICKS_DIR):
             if f.endswith(".png"):
                 os.remove(os.path.join(CLICKS_DIR, f))
-    except Exception:
-        pass
+    except Exception as e:
+        get_logger("vision").warning("Click trail clear failed: %s", e)
 
 # ============================================================
 # FAILURE SCREENSHOTS (persistent — never auto-deleted)
@@ -108,8 +112,8 @@ def _cleanup_failures_dir(max_files=200):
         )
         while len(files) > max_files:
             os.remove(files.pop(0))
-    except Exception:
-        pass
+    except Exception as e:
+        get_logger("vision").warning("Failure screenshot cleanup failed: %s", e)
 
 def save_failure_screenshot(device, label, screen=None):
     """Save a persistent failure screenshot for post-mortem diagnosis.
@@ -152,7 +156,11 @@ def get_template(image_path):
     """Load a template image, caching it for reuse."""
     if image_path not in _template_cache:
         img = cv2.imread(image_path)
+        if img is None:
+            get_logger("vision").warning("Template not found: %s", image_path)
         _template_cache[image_path] = img
+        if len(_template_cache) % 25 == 0:
+            get_logger("vision").debug("Template cache size: %d entries", len(_template_cache))
     return _template_cache[image_path]
 
 # ============================================================
@@ -162,32 +170,42 @@ def get_template(image_path):
 def load_screenshot(device):
     """Take a screenshot and return the image directly in memory (no disk I/O)."""
     log = get_logger("vision", device)
+    t0 = time.time()
     try:
         result = subprocess.run(
             [adb_path, "-s", device, "exec-out", "screencap", "-p"],
             capture_output=True, timeout=10
         )
     except subprocess.TimeoutExpired:
-        log.warning("Screenshot timed out (ADB hung?)")
+        log.warning("Screenshot timed out after 10s (ADB hung?)")
+        stats.record_adb_timing(device, "screenshot", 10.0, success=False)
         return None
+    elapsed = time.time() - t0
     if result.returncode != 0 or not result.stdout:
-        log.warning("Screenshot failed (returncode=%d)", result.returncode)
+        log.warning("Screenshot failed (returncode=%d, %.2fs)", result.returncode, elapsed)
+        stats.record_adb_timing(device, "screenshot", elapsed, success=False)
         return None
     img_array = np.frombuffer(result.stdout, dtype=np.uint8)
     image = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
     if image is None:
-        log.warning("Failed to decode screenshot")
+        log.warning("Failed to decode screenshot (%.2fs)", elapsed)
+        stats.record_adb_timing(device, "screenshot", elapsed, success=False)
+        return image
+    stats.record_adb_timing(device, "screenshot", elapsed)
+    if elapsed > 3.0:
+        log.warning("Screenshot slow: %.2fs (ADB may be degrading)", elapsed)
     return image
 
 # ============================================================
 # OCR (Optical Character Recognition)
 # ============================================================
 
-def read_text(screen, region=None, allowlist=None):
+def read_text(screen, region=None, allowlist=None, device=None):
     """Read text from a screenshot using OCR.
     screen: CV2 image (BGR).
     region: optional (x1, y1, x2, y2) to read only a portion of the screen.
     allowlist: optional string of allowed characters (e.g. '0123456789' for numbers only).
+    device: optional device ID for logging context.
     Returns the recognized text string (stripped of leading/trailing whitespace).
     """
     if screen is None:
@@ -203,8 +221,21 @@ def read_text(screen, region=None, allowlist=None):
     gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
 
     reader = _get_ocr_reader()
-    results = reader.readtext(gray, allowlist=allowlist, detail=0)
-    return " ".join(results).strip()
+    results = reader.readtext(gray, allowlist=allowlist, detail=1)
+    # Extract text and confidence from detail=1 results
+    texts = [entry[1] for entry in results]
+    if results:
+        confidences = [entry[2] for entry in results]
+        avg_conf = sum(confidences) / len(confidences)
+        min_conf = min(confidences)
+        log = get_logger("vision", device)
+        if min_conf < 0.5:
+            log.warning("OCR low confidence: avg=%.0f%%, min=%.0f%%, text='%s'",
+                        avg_conf * 100, min_conf * 100, " ".join(texts).strip())
+        elif avg_conf < 0.7:
+            log.debug("OCR moderate confidence: avg=%.0f%%, min=%.0f%%, text='%s'",
+                       avg_conf * 100, min_conf * 100, " ".join(texts).strip())
+    return " ".join(texts).strip()
 
 
 def read_number(screen, region=None):
@@ -220,7 +251,7 @@ def read_number(screen, region=None):
 def read_text_from_device(device, region=None, allowlist=None):
     """Convenience: take a screenshot from a device and read text from it."""
     screen = load_screenshot(device)
-    return read_text(screen, region=region, allowlist=allowlist)
+    return read_text(screen, region=region, allowlist=allowlist, device=device)
 
 
 def read_number_from_device(device, region=None):
@@ -310,7 +341,7 @@ def find_image(screen, image_name, threshold=0.8, region=None):
         return max_val, max_loc, h, w
     return None
 
-def find_all_matches(screen, image_name, threshold=0.8, min_distance=50):
+def find_all_matches(screen, image_name, threshold=0.8, min_distance=50, device=None):
     """Find all non-overlapping matches of a template on screen."""
     template = get_template(f"elements/{image_name}")
     if screen is None or template is None:
@@ -331,6 +362,9 @@ def find_all_matches(screen, image_name, threshold=0.8, min_distance=50):
             for u in unique
         ):
             unique.append(pt)
+    log = get_logger("vision", device)
+    log.debug("find_all_matches(%s): %d raw hits, %d unique (threshold=%.0f%%)",
+              image_name, len(points), len(unique), threshold * 100)
     return unique
 
 # ============================================================
@@ -339,20 +373,34 @@ def find_all_matches(screen, image_name, threshold=0.8, min_distance=50):
 
 def adb_tap(device, x, y):
     """Send a tap command via ADB."""
+    t0 = time.time()
     try:
         subprocess.run([adb_path, "-s", device, "shell", "input", "tap", str(x), str(y)],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
     except subprocess.TimeoutExpired:
-        get_logger("vision", device).warning("adb_tap timed out (ADB hung?)")
+        get_logger("vision", device).warning("adb_tap timed out after 10s (ADB hung?)")
+        stats.record_adb_timing(device, "tap", 10.0, success=False)
+        return
+    elapsed = time.time() - t0
+    stats.record_adb_timing(device, "tap", elapsed)
+    if elapsed > 3.0:
+        get_logger("vision", device).warning("adb_tap slow: %.2fs", elapsed)
 
 def adb_swipe(device, x1, y1, x2, y2, duration_ms=300):
     """Send a swipe command via ADB."""
+    t0 = time.time()
     try:
         subprocess.run([adb_path, "-s", device, "shell", "input", "swipe",
                         str(x1), str(y1), str(x2), str(y2), str(duration_ms)],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
     except subprocess.TimeoutExpired:
-        get_logger("vision", device).warning("adb_swipe timed out (ADB hung?)")
+        get_logger("vision", device).warning("adb_swipe timed out after 10s (ADB hung?)")
+        stats.record_adb_timing(device, "swipe", 10.0, success=False)
+        return
+    elapsed = time.time() - t0
+    stats.record_adb_timing(device, "swipe", elapsed)
+    if elapsed > 3.0:
+        get_logger("vision", device).warning("adb_swipe slow: %.2fs", elapsed)
 
 def tap(button_name, device):
     """Tap a button by its name from the BUTTONS dictionary"""

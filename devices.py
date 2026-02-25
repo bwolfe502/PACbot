@@ -61,9 +61,11 @@ def get_devices():
             if ":" in d and not d.startswith("emulator-"):
                 port = int(d.split(":")[1])
                 if port in emulator_ports:
+                    _log.debug("Dedup: %s (duplicate of emulator port %d)", d, port)
                     continue
             deduped.append(d)
 
+        _log.info("Found %d device(s): %s", len(deduped), ", ".join(deduped) if deduped else "(none)")
         return deduped
     except Exception as e:
         _log.error("Failed to get devices: %s", e)

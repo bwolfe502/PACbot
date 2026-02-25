@@ -55,14 +55,17 @@ def _track_quest_progress(device, quest_type, current):
         completed = current - last
         pending = _quest_rallies_pending.get(key, 0)
         _quest_rallies_pending[key] = max(0, pending - completed)
-        if completed > 0 and pending > 0:
-            _log.debug("[%s] %d rally(s) completed, %d still pending", quest_type, completed, _quest_rallies_pending[key])
+        if completed > 0:
+            _log.info("[%s] %d rally(s) completed (%d->%d), %d still pending",
+                      quest_type, completed, last, current, _quest_rallies_pending[key])
         if _quest_rallies_pending.get(key, 0) == 0:
             _quest_pending_since.pop(key, None)
         else:
             _quest_pending_since[key] = time.time()  # Reset timer for remaining
     elif last is not None and current < last:
         # Counter went backwards (quest reset / new day) — clear tracking
+        _log.warning("[%s] Counter went backwards (%d->%d) — quest reset/new day, clearing tracking",
+                     quest_type, last, current)
         _quest_rallies_pending[key] = 0
         _quest_pending_since.pop(key, None)
     _quest_last_seen[key] = current
@@ -83,7 +86,7 @@ def _record_rally_started(device, quest_type):
     # Only set timestamp on first pending (don't reset on subsequent)
     if key not in _quest_pending_since:
         _quest_pending_since[key] = time.time()
-    _log.debug("[%s] Rally started — %d pending", quest_type, _quest_rallies_pending[key])
+    _log.info("[%s] Rally started — %d pending", quest_type, _quest_rallies_pending[key])
 
 
 def _effective_remaining(device, quest_type, current, target):
@@ -296,10 +299,14 @@ def check_quests(device, stop_check=None):
         return True
 
     # Claim rewards
+    rewards_claimed = 0
     while tap_image("aq_claim.png", device):
+        rewards_claimed += 1
         if stop_check and stop_check():
             return True
         time.sleep(1)
+    if rewards_claimed:
+        log.info("Claimed %d quest reward(s)", rewards_claimed)
 
     if stop_check and stop_check():
         return True
@@ -318,6 +325,8 @@ def check_quests(device, stop_check=None):
             prev = best_by_type.get(qt)
             if prev is None or remaining > (prev["target"] - prev["current"]):
                 best_by_type[qt] = q
+        if len(quests) != len(best_by_type):
+            log.debug("Quest dedup: %d raw -> %d unique types (kept max remaining per type)", len(quests), len(best_by_type))
         quests = list(best_by_type.values())
 
         # Update tracking with latest counter values
@@ -370,6 +379,7 @@ def check_quests(device, stop_check=None):
             # Heal once before the rally loop — titan/eg joins don't damage troops,
             # but a troop could be injured from previous activity.
             if config.AUTO_HEAL_ENABLED:
+                log.debug("Healing before rally loop...")
                 heal_all(device)
 
             any_joined = False
@@ -462,8 +472,11 @@ def attack(device):
     if troops > config.MIN_TROOPS_AVAILABLE:
         logged_tap(device, 560, 675, "attack_selection")
         wait_for_image_and_tap("attack_button.png", device, timeout=5)
-        time.sleep(1)
-        tap_image("depart.png", device)
+        time.sleep(1)  # Wait for attack dialog
+        if tap_image("depart.png", device):
+            log.info("Attack departed with %d troops available", troops)
+        else:
+            log.warning("Depart button not found after attack sequence")
     else:
         log.warning("Not enough troops available (have %d, need more than %d)", troops, config.MIN_TROOPS_AVAILABLE)
 
@@ -673,7 +686,7 @@ def teleport(device):
         elapsed = time.time() - start_time
         log.debug("Time elapsed: %.1fs / 90s", elapsed)
 
-    log.warning("Teleport failed after %d attempts", attempt_count)
+    log.error("Teleport failed after %d attempts", attempt_count)
     save_failure_screenshot(device, "teleport_timeout")
     return False
 
@@ -692,6 +705,7 @@ def join_rally(rally_types, device, skip_heal=False):
     _jr_start = time.time()
     if isinstance(rally_types, str):
         rally_types = [rally_types]
+    log.info(">>> join_rally starting (types: %s)", "/".join(rally_types))
 
     if config.AUTO_HEAL_ENABLED and not skip_heal:
         heal_all(device)
@@ -750,7 +764,7 @@ def join_rally(rally_types, device, skip_heal=False):
                 return True
 
             log.debug("Back-out attempt %d — not on war screen yet", attempt + 1)
-        log.warning("Back-out failed after 3 attempts — stuck on %s", check_screen(device))
+        log.error("Back-out failed after 3 attempts — stuck on %s", check_screen(device))
         save_failure_screenshot(device, "backout_stuck")
         return False
 
@@ -768,7 +782,7 @@ def join_rally(rally_types, device, skip_heal=False):
         "tower": ["tower"],
     }
 
-    def _ocr_label_at(screen, y_pos, debug_name="rally_label_ocr"):
+    def _ocr_label_at(screen, y_pos):
         """OCR the monster name label on the left side of the screen at a given Y position.
         The label is on a dark banner on the monster card. Returns lowercase text."""
         h, w = screen.shape[:2]
@@ -781,9 +795,6 @@ def join_rally(rally_types, device, skip_heal=False):
         label_crop = screen[y_start:y_end, x_start:x_end]
         gray = cv2.cvtColor(label_crop, cv2.COLOR_BGR2GRAY)
         gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-
-        # Save debug crop
-        cv2.imwrite(os.path.join(DEBUG_DIR, f"{debug_name}.png"), gray)
 
         from vision import _get_ocr_reader
         reader = _get_ocr_reader()
@@ -808,7 +819,16 @@ def join_rally(rally_types, device, skip_heal=False):
         while retries_left >= 0:
             join_locs = find_all_matches(screen, "rally/join.png")
             if not join_locs:
+                log.debug("No join buttons visible on war screen")
                 return False
+
+            # Pre-scan all icon matches and log counts
+            icon_matches = {}
+            for rt in rally_types:
+                if rt in rally_icons:
+                    icon_matches[rt] = find_all_matches(screen, f"rally/{rt}.png", threshold=0.9)
+            counts_str = ", ".join(f"{rt}={len(locs)}" for rt, locs in icon_matches.items())
+            log.debug("War screen scan: %d join buttons, icon matches: %s", len(join_locs), counts_str)
 
             should_rescan = False  # set True when we need fresh screenshot + rematch
 
@@ -818,8 +838,12 @@ def join_rally(rally_types, device, skip_heal=False):
                 if rally_type not in rally_icons:
                     continue
                 icon_h, icon_w = rally_icons[rally_type].shape[:2]
-                rally_locs = find_all_matches(screen, f"rally/{rally_type}.png", threshold=0.9)
+                rally_locs = icon_matches.get(rally_type, [])
 
+                if not rally_locs:
+                    continue  # No icon matches for this type — try next
+
+                slot_found = False  # Track across rally_locs loop iterations
                 for rally_x, rally_y in rally_locs:
                     # The monster name label is at the bottom of the card,
                     # approximately at rally_y + icon_h (just below the matched icon).
@@ -840,17 +864,10 @@ def join_rally(rally_types, device, skip_heal=False):
                     join_x, join_y = best_join
 
                     # Verify the icon's label says the expected type
-                    icon_label = _ocr_label_at(screen, label_y, "rally_icon_label")
+                    icon_label = _ocr_label_at(screen, label_y)
                     log.debug("Icon label OCR (y=%d): %s", label_y, icon_label)
                     if not _text_matches_type(icon_label, rally_type):
                         log.debug("Icon label mismatch — expected '%s', got: %s", rally_type, icon_label)
-                        continue
-
-                    # Verify what the join button is actually on (label at join button's Y)
-                    join_label = _ocr_label_at(screen, join_y, "rally_join_target")
-                    log.debug("Join target OCR (y=%d): %s", join_y, join_label)
-                    if not _text_matches_type(join_label, rally_type):
-                        log.debug("Join button is on '%s', not '%s' — skipping", join_label, rally_type)
                         continue
 
                     log.info("Found joinable %s rally (icon_y=%d, join_y=%d, dist=%d)", rally_type, label_y, join_y, best_dist)
@@ -926,6 +943,17 @@ def join_rally(rally_types, device, skip_heal=False):
                         should_rescan = True
                         break  # Break rally_locs loop, rescan in while loop
 
+                    # Slot found — break rally_locs loop and proceed to depart
+                    if slot_found:
+                        break
+
+                # After rally_locs loop: only attempt depart if we found a slot
+                if should_rescan:
+                    break  # Break rally_types loop → rescan check below
+
+                if not slot_found:
+                    continue  # No slot for this type → try next rally_type
+
                 time.sleep(1)
                 if tap_image("depart.png", device):
                     # Verify join succeeded — game should transition to map screen
@@ -943,23 +971,18 @@ def join_rally(rally_types, device, skip_heal=False):
 
                     if new_troops < pre_war_troops:
                         # Clear success: fewer troops than before
-                        log.info("%s rally joined! (troops %d -> %d)", rally_type, pre_war_troops, new_troops)
-                        stats.record_action(device, "join_rally", True, time.time() - _jr_start)
+                        elapsed = time.time() - _jr_start
+                        log.info("<<< join_rally: %s rally joined in %.1fs (troops %d -> %d)", rally_type, elapsed, pre_war_troops, new_troops)
+                        stats.record_action(device, "join_rally", True, elapsed)
                         return rally_type
                     elif new_troops > pre_war_troops:
                         # Troop(s) returned during the join attempt — ambiguous.
                         # We sent 1 out but got back more than we lost. Join probably
                         # succeeded AND a previous rally completed simultaneously.
-                        log.info("%s rally LIKELY joined (troops %d -> %d, troop(s) returned during join)",
-                                 rally_type, pre_war_troops, new_troops)
-                        # Do a second read after a short delay to check stability
-                        time.sleep(1)
-                        recheck_troops = troops_avail(device)
-                        log.debug("Recheck troops after 1s: %d", recheck_troops)
-                        from navigation import _save_debug_screenshot
-                        _save_debug_screenshot(device, "join_ambiguous_troop_increase")
-                        # Treat as success — we tapped depart and landed on map_screen
-                        stats.record_action(device, "join_rally", True, time.time() - _jr_start)
+                        elapsed = time.time() - _jr_start
+                        log.info("<<< join_rally: %s rally LIKELY joined in %.1fs (troops %d -> %d, troop(s) returned during join)",
+                                 rally_type, elapsed, pre_war_troops, new_troops)
+                        stats.record_action(device, "join_rally", True, elapsed)
                         return rally_type
                     else:
                         # Same count — genuine failure (rally was full, depart didn't work)
@@ -1023,6 +1046,7 @@ def join_rally(rally_types, device, skip_heal=False):
         if not _on_war_screen(device):
             log.warning("No longer on war screen — aborting scroll loop")
             return False
+        log.debug("Scroll down attempt %d/5", attempt + 1)
         adb_swipe(device, 560, 948, 560, 245, 500)
         time.sleep(1.5)  # Wait for scroll momentum to settle
         result = check_for_joinable_rally()
@@ -1033,9 +1057,10 @@ def join_rally(rally_types, device, skip_heal=False):
             return False
 
     # No rally found - exit war screen cleanly
-    log.info("No %s rally found after scrolling", types_str)
+    elapsed = time.time() - _jr_start
+    log.info("<<< join_rally: no %s rally found after scrolling (%.1fs)", types_str, elapsed)
     _exit_war_screen()
-    stats.record_action(device, "join_rally", False, time.time() - _jr_start)
+    stats.record_action(device, "join_rally", False, elapsed)
     return False
 
 # ============================================================
@@ -1137,11 +1162,13 @@ def restore_ap(device, needed):
     Returns True if AP >= needed after restoring, False otherwise.
     """
     log = get_logger("actions", device)
-    log.info("Attempting to restore AP (need %d)...", needed)
+    _ap_start = time.time()
+    log.info(">>> restore_ap starting (need %d)...", needed)
 
     # Navigate to map screen
     if not navigate("map_screen", device):
-        log.warning("Failed to navigate to map screen for AP restore")
+        log.warning("<<< restore_ap: failed to navigate to map screen (%.1fs)", time.time() - _ap_start)
+        stats.record_action(device, "restore_ap", False, time.time() - _ap_start)
         return False
 
     # Open AP Recovery menu — retry the entire open sequence if it fails
@@ -1186,7 +1213,7 @@ def restore_ap(device, needed):
             break
 
     if not menu_opened:
-        log.warning("AP Recovery menu did not open after all attempts")
+        log.error("AP Recovery menu did not open after all attempts")
         save_failure_screenshot(device, "ap_menu_failed")
         _close_ap_menu(device)
         return False
@@ -1268,7 +1295,9 @@ def restore_ap(device, needed):
     # When exhausted, button still shows 3500 but confirmation won't open.
     if config.AP_USE_GEMS and config.AP_GEM_LIMIT > 0 and current < needed:
         gems_spent = 0
-        while current < needed:
+        gem_attempts = 0
+        while current < needed and gem_attempts < 50:  # safety limit
+            gem_attempts += 1
             # Tap gem button — opens confirmation dialog (unless exhausted)
             adb_tap(device, *_AP_GEM_BUTTON)
             time.sleep(1.5)
@@ -1307,11 +1336,14 @@ def restore_ap(device, needed):
     # Close AP Recovery menu and search menu
     _close_ap_menu(device)
 
+    elapsed = time.time() - _ap_start
     if current >= needed:
-        log.info("AP restored successfully (%d >= %d)", current, needed)
+        log.info("<<< restore_ap completed in %.1fs (%d >= %d)", elapsed, current, needed)
+        stats.record_action(device, "restore_ap", True, elapsed)
         return True
     else:
-        log.warning("Could not restore enough AP (%d < %d)", current, needed)
+        log.warning("<<< restore_ap failed after %.1fs (%d < %d)", elapsed, current, needed)
+        stats.record_action(device, "restore_ap", False, elapsed)
         return False
 
 @timed_action("rally_titan")
@@ -1584,7 +1616,7 @@ def rally_eg(device, stop_check=None):
                               priest_num, attempt + 1, max_val * 100)
                     tap_image("unchecked.png", device)
                     time.sleep(2)
-        log.warning("P%d: check_and_proceed FAILED after 10 attempts", priest_num)
+        log.error("P%d: check_and_proceed FAILED after 10 attempts", priest_num)
         save_failure_screenshot(device, f"eg_check_fail_p{priest_num}")
         return False
 
@@ -1630,7 +1662,7 @@ def rally_eg(device, stop_check=None):
             if attempt < 4:
                 log.debug("P%d: depart not found, retry %d/5...", priest_num, attempt + 1)
                 time.sleep(2)
-        log.warning("P%d: click_depart FAILED after 5 attempts", priest_num)
+        log.error("P%d: click_depart FAILED after 5 attempts", priest_num)
         save_failure_screenshot(device, f"eg_depart_fail_p{priest_num}")
         return False
 
@@ -1805,7 +1837,7 @@ def rally_eg(device, stop_check=None):
             priests_dead += 1
 
     if attacks_completed == 0 and not p1_hit:
-        log.warning("No priests found at any position — aborting")
+        log.error("No priests found at any position — aborting")
         save_failure_screenshot(device, "eg_no_priests_found")
         return False
 
@@ -1897,7 +1929,7 @@ def rally_eg(device, stop_check=None):
             time.sleep(1)
 
     if not p6_dialog_opened:
-        log.warning("P6: attack dialog never opened after 3 attempts — aborting")
+        log.error("P6: attack dialog never opened after 3 attempts — aborting")
         save_failure_screenshot(device, "eg_p6_dialog_failed")
         return False
 
@@ -1907,7 +1939,7 @@ def rally_eg(device, stop_check=None):
     if not poll_troop_ready(240, 6):
         return False
     if not tap_image("stationed.png", device):
-        log.warning("P6: final stationed tap failed")
+        log.error("P6: final stationed tap failed")
         save_failure_screenshot(device, "eg_final_stationed_fail")
         return False
 
@@ -2183,3 +2215,123 @@ def join_war_rallies(device):
     # Timed out - navigate back to map properly
     log.info("No war rallies available")
     navigate("map_screen", device)
+
+
+# ============================================================
+# MITHRIL MINING
+# ============================================================
+
+# Fixed coordinates for the Advanced Mithril screen
+_MITHRIL_SLOT_Y = 1760
+_MITHRIL_SLOTS_X = [138, 339, 540, 741, 942]
+
+_MITHRIL_MINES = [
+    (240, 720),   # Mine 1
+    (540, 820),   # Mine 2
+    (850, 730),   # Mine 3
+    (230, 1080),  # Mine 4
+    (540, 1200),  # Mine 5
+]
+
+
+@timed_action("mine_mithril")
+def mine_mithril(device):
+    """Navigate to Advanced Mithril, recall all troops, redeploy to all 5 mines."""
+    log = get_logger("actions", device)
+
+    # Step 1: Navigate to kingdom_screen
+    if not navigate("kingdom_screen", device):
+        log.warning("Failed to navigate to kingdom screen")
+        return False
+
+    # Step 2: Scroll kingdom screen to bottom (multiple swipes for reliability)
+    for _ in range(3):
+        adb_swipe(device, 540, 960, 540, 400, duration_ms=300)
+        time.sleep(0.5)
+    time.sleep(1)
+
+    # Step 3: Tap Dimensional Tunnel
+    logged_tap(device, 280, 880, "dimensional_tunnel")
+    time.sleep(2)
+
+    # Step 4: Tap Advanced Mithril (center of screen)
+    logged_tap(device, 540, 960, "advanced_mithril")
+    time.sleep(2)
+
+    # Step 5: Recall occupied slots — troops are always left-aligned, so
+    # returning slot 1 causes the rest to shift left.  Just tap slot 1
+    # up to 5 times; stop early when it's empty.
+    recalled_count = 0
+    slot_x = _MITHRIL_SLOTS_X[0]
+    for i in range(5):
+        adb_tap(device, slot_x, _MITHRIL_SLOT_Y)
+        time.sleep(1)
+        if wait_for_image_and_tap("mithril_return.png", device, timeout=2, threshold=0.7):
+            log.debug("Recall %d: RETURN found, recalled", i + 1)
+            recalled_count += 1
+            time.sleep(1.5)
+        else:
+            log.debug("Recall %d: slot empty, all troops recalled", i + 1)
+            break
+
+    if recalled_count > 0:
+        log.info("Recalled %d troops from mithril mines", recalled_count)
+        time.sleep(1)
+
+    # Step 6: Deploy to all 5 mines
+    deployed_count = 0
+    for i, (mine_x, mine_y) in enumerate(_MITHRIL_MINES):
+        log.debug("Deploying to mine %d at (%d, %d)", i + 1, mine_x, mine_y)
+        adb_tap(device, mine_x, mine_y)  # Tap mine
+        time.sleep(2)
+
+        # Look for ATTACK button in the mine popup
+        if not wait_for_image_and_tap("mithril_attack.png", device, timeout=2, threshold=0.7):
+            log.warning("Mine %d: no ATTACK button (occupied or missed)", i + 1)
+            save_failure_screenshot(device, f"mithril_no_attack_mine{i+1}")
+            adb_tap(device, 900, 500)  # dismiss popup
+            time.sleep(1)
+            continue
+        time.sleep(2)
+
+        # Wait for troop selection screen and tap DEPART
+        if wait_for_image_and_tap("mithril_depart.png", device, timeout=4, threshold=0.7):
+            deployed_count += 1
+            time.sleep(2)  # Wait for deploy animation to return to overview
+        else:
+            log.warning("Mine %d: depart button not found after ATTACK", i + 1)
+            save_failure_screenshot(device, f"mithril_depart_fail_mine{i+1}")
+            adb_tap(device, 900, 500)  # dismiss overlay
+            time.sleep(1)
+
+    log.info("Deployed %d/%d troops to mithril mines", deployed_count, len(_MITHRIL_MINES))
+
+    # Step 7: Navigate back to map screen
+    adb_tap(device, 75, 75)  # Back from Advanced Mithril
+    time.sleep(1)
+    adb_tap(device, 75, 75)  # Back from Dimensional Treasure
+    time.sleep(1)
+    navigate("map_screen", device)
+
+    # Step 8: Record timestamp
+    config.LAST_MITHRIL_TIME[device] = time.time()
+
+    return deployed_count > 0
+
+
+def mine_mithril_if_due(device):
+    """Run mithril mining if enabled and interval has elapsed.
+
+    Safe to call frequently — returns immediately if not due.
+    Designed to be called from other auto task runners between action cycles.
+    """
+    if not config.MITHRIL_ENABLED:
+        return
+    last = config.LAST_MITHRIL_TIME.get(device, 0)
+    elapsed = time.time() - last
+    if elapsed < config.MITHRIL_INTERVAL * 60:
+        return
+    log = get_logger("actions", device)
+    log.info("Mithril mining due (%.0f min since last) — running between actions",
+             elapsed / 60)
+    mine_mithril(device)

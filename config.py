@@ -69,11 +69,18 @@ def _find_adb():
             return mumu_mac
 
     # Last resort
-    print("WARNING: Could not find ADB. Install Android SDK platform-tools and make sure 'adb' is on your PATH.")
+    import logging
+    logging.getLogger("config").warning("Could not find ADB. Install Android SDK platform-tools and make sure 'adb' is on your PATH.")
     return "adb"  # Hope it's on PATH
 
 adb_path = _find_adb()
+# Log after setup_logging is called; print for immediate visibility during import
 print(f"Using ADB: {adb_path}")
+
+def log_adb_path():
+    """Log the ADB path after logging is initialized. Call from main."""
+    from botlog import get_logger
+    get_logger("config").info("ADB path: %s", adb_path)
 
 # ============================================================
 # KNOWN EMULATOR ADB PORTS (for auto-connect)
@@ -112,6 +119,24 @@ AP_GEM_LIMIT = 0             # Max gems to spend per restore session (0 = disabl
 AP_COST_RALLY_TITAN = 20
 AP_COST_EVIL_GUARD = 70
 CLICK_TRAIL_ENABLED = True
+
+# Mithril mining
+MITHRIL_ENABLED = False
+MITHRIL_INTERVAL = 19        # minutes between refresh cycles
+LAST_MITHRIL_TIME = {}       # {device_id: timestamp} — last mine_mithril run
+
+# Per-device lock — prevents concurrent tasks from controlling the same device
+import threading
+_device_locks = {}
+_device_locks_guard = threading.Lock()
+
+def get_device_lock(device):
+    """Return a Lock for the given device, creating it on first use."""
+    with _device_locks_guard:
+        if device not in _device_locks:
+            _device_locks[device] = threading.Lock()
+        return _device_locks[device]
+
 MY_TEAM_COLOR = "yellow"
 ENEMY_TEAMS = ["green"]
 running_tasks = {}

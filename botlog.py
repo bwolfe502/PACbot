@@ -138,6 +138,7 @@ class StatsTracker:
                 "template_misses": {},
                 "nav_failures": {},
                 "errors": [],
+                "adb_timing": {},
             }
 
     def record_action(self, device, action_name, success, duration_s, error_msg=None):
@@ -191,6 +192,48 @@ class StatsTracker:
             nav = self._data[device]["nav_failures"]
             nav[key] = nav.get(key, 0) + 1
 
+    def record_adb_timing(self, device, command, elapsed_s, success=True):
+        """Record ADB command timing for latency tracking."""
+        with self._lock:
+            self._ensure_device(device)
+            timings = self._data[device]["adb_timing"]
+            if command not in timings:
+                timings[command] = {
+                    "count": 0, "total_s": 0.0, "max_s": 0.0,
+                    "slow_count": 0, "failures": 0,
+                }
+            entry = timings[command]
+            entry["count"] += 1
+            entry["total_s"] = round(entry["total_s"] + elapsed_s, 2)
+            entry["max_s"] = round(max(entry["max_s"], elapsed_s), 2)
+            if elapsed_s > 3.0:
+                entry["slow_count"] += 1
+            if not success:
+                entry["failures"] += 1
+
+    def _check_template_trends_unlocked(self, device, template_name):
+        """Check if a template's best scores are trending toward failure (no lock).
+        Returns a warning string if scores are drifting down, or None."""
+        misses = self._data.get(device, {}).get("template_misses", {})
+        entry = misses.get(template_name)
+        if entry is None or len(entry["best_scores"]) < 5:
+            return None
+        scores = entry["best_scores"]
+        # Compare recent half vs older half
+        mid = len(scores) // 2
+        old_avg = sum(scores[:mid]) / mid
+        new_avg = sum(scores[mid:]) / (len(scores) - mid)
+        if new_avg < old_avg - 0.05 and new_avg < 0.75:
+            return (f"{template_name}: score trending down "
+                    f"({old_avg:.0%} -> {new_avg:.0%}, {entry['count']} misses)")
+        return None
+
+    def check_template_trends(self, device, template_name):
+        """Check if a template's best scores are trending toward failure.
+        Returns a warning string if scores are drifting down, or None."""
+        with self._lock:
+            return self._check_template_trends_unlocked(device, template_name)
+
     def save(self):
         """Save stats to a timestamped JSON file. Auto-cleans old sessions."""
         os.makedirs(STATS_DIR, exist_ok=True)
@@ -206,7 +249,14 @@ class StatsTracker:
                     "template_misses": data["template_misses"],
                     "nav_failures": data["nav_failures"],
                     "errors": data["errors"],
+                    "adb_timing": {},
                 }
+                for cmd, info in data.get("adb_timing", {}).items():
+                    entry = dict(info)
+                    entry["avg_s"] = round(
+                        entry["total_s"] / max(1, entry["count"]), 3
+                    )
+                    device_copy["adb_timing"][cmd] = entry
                 for action_name, info in data["actions"].items():
                     entry = dict(info)
                     entry["avg_time_s"] = round(
@@ -227,8 +277,9 @@ class StatsTracker:
             try:
                 with open(filepath, "w") as f:
                     json.dump(output, f, indent=2)
-            except Exception:
-                pass
+            except Exception as e:
+                _log = logging.getLogger("botlog")
+                _log.warning("Failed to save session stats: %s", e)
 
         # Clean old session files (keep last 30)
         try:
@@ -239,8 +290,9 @@ class StatsTracker:
             )
             while len(files) > 30:
                 os.remove(files.pop(0))
-        except Exception:
-            pass
+        except Exception as e:
+            _log = logging.getLogger("botlog")
+            _log.warning("Failed to clean old session files: %s", e)
 
     def summary(self):
         """Return a human/AI-readable summary of the session."""
@@ -279,6 +331,24 @@ class StatsTracker:
                                  sorted(data["nav_failures"].items(),
                                         key=lambda x: x[1], reverse=True)[:3]]
                     lines.append(f"  Nav failures: {', '.join(nav_parts)}")
+
+                if data.get("adb_timing"):
+                    adb_parts = []
+                    for cmd, info in sorted(data["adb_timing"].items()):
+                        avg = info["total_s"] / max(1, info["count"])
+                        part = f"{cmd}: {info['count']}x, avg {avg:.2f}s, max {info['max_s']:.2f}s"
+                        if info["slow_count"]:
+                            part += f", {info['slow_count']} slow"
+                        if info["failures"]:
+                            part += f", {info['failures']} failed"
+                        adb_parts.append(part)
+                    lines.append(f"  ADB timing: {'; '.join(adb_parts)}")
+
+                # Template score trend warnings
+                for tpl_name in list(data.get("template_misses", {})):
+                    warning = self._check_template_trends_unlocked(device, tpl_name)
+                    if warning:
+                        lines.append(f"  TREND WARNING: {warning}")
 
             return "\n".join(lines)
 

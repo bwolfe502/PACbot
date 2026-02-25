@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 import threading
 import queue
 import time
@@ -10,6 +10,8 @@ import subprocess
 import random
 import json
 import logging
+import zipfile
+import platform
 
 import config
 from updater import get_current_version
@@ -22,7 +24,8 @@ from vision import adb_tap, tap_image, load_screenshot, find_image, wait_for_ima
 from troops import troops_avail, heal_all, read_panel_statuses
 from actions import (attack, reinforce_throne, target, check_quests, teleport,
                      rally_titan, rally_eg, search_eg_reset, join_rally,
-                     join_war_rallies, reset_quest_tracking, test_eg_positions)
+                     join_war_rallies, reset_quest_tracking, test_eg_positions,
+                     mine_mithril, mine_mithril_if_due)
 from territory import (attack_territory, auto_occupy_loop,
                        open_territory_manager, sample_specific_squares)
 from botlog import get_logger
@@ -53,22 +56,32 @@ DEFAULTS = {
     "mode": "bl",
     "verbose_logging": False,
     "eg_rally_own": True,
+    "mithril_interval": 19,
 }
 
 def load_settings():
+    _log = get_logger("main")
     try:
         with open(SETTINGS_FILE, "r") as f:
             saved = json.load(f)
-        return {**DEFAULTS, **saved}
-    except (FileNotFoundError, json.JSONDecodeError):
+        merged = {**DEFAULTS, **saved}
+        _log.info("Settings loaded (%d keys, %d from file)", len(merged), len(saved))
+        return merged
+    except FileNotFoundError:
+        _log.info("No settings file found, using defaults (%d keys)", len(DEFAULTS))
+        return dict(DEFAULTS)
+    except json.JSONDecodeError as e:
+        _log.warning("Settings file corrupted (%s), using defaults", e)
         return dict(DEFAULTS)
 
 def save_settings(settings):
+    _log = get_logger("main")
     try:
         with open(SETTINGS_FILE, "w") as f:
             json.dump(settings, f, indent=2)
+        _log.debug("Settings saved (%d keys)", len(settings))
     except Exception as e:
-        get_logger("main").error("Failed to save settings: %s", e)
+        _log.error("Failed to save settings: %s", e)
 
 # ============================================================
 # FUNCTION LOOKUP
@@ -91,6 +104,7 @@ TASK_FUNCTIONS = {
     "Check Troops": troops_avail,
     "Check Screen": check_screen,
     "Sample Specific Squares": sample_specific_squares,
+    "Mine Mithril": mine_mithril,
 }
 
 # ============================================================
@@ -137,21 +151,26 @@ def run_auto_quest(device, stop_event):
     dlog.info("Auto Quest started")
     reset_quest_tracking(device)
     stop_check = stop_event.is_set
+    lock = config.get_device_lock(device)
     try:
         while not stop_check():
-            # Ensure we're on map_screen before checking troops
-            # (troop pixel detection only works on map_screen)
-            if not navigate("map_screen", device):
-                dlog.warning("Cannot reach map screen — retrying in 10s")
-                time.sleep(10)
-                continue
-            troops = troops_avail(device)
-            if troops > config.MIN_TROOPS_AVAILABLE:
-                check_quests(device, stop_check=stop_check)
-            else:
-                dlog.warning("Not enough troops for quests")
-                if _smart_wait_for_troops(device, stop_check, dlog):
-                    continue  # Troop freed up — retry immediately
+            with lock:
+                mine_mithril_if_due(device)
+                if stop_check():
+                    break
+                # Ensure we're on map_screen before checking troops
+                # (troop pixel detection only works on map_screen)
+                if not navigate("map_screen", device):
+                    dlog.warning("Cannot reach map screen — retrying in 10s")
+                    time.sleep(10)
+                    continue
+                troops = troops_avail(device)
+                if troops > config.MIN_TROOPS_AVAILABLE:
+                    check_quests(device, stop_check=stop_check)
+                else:
+                    dlog.warning("Not enough troops for quests")
+                    if _smart_wait_for_troops(device, stop_check, dlog):
+                        continue  # Troop freed up — retry immediately
             if stop_check():
                 break
             for _ in range(10):
@@ -168,28 +187,33 @@ def run_auto_titan(device, stop_event, interval, variation):
     dlog = get_logger("main", device)
     dlog.info("Rally Titan started (interval: %ss +/-%ss)", interval, variation)
     stop_check = stop_event.is_set
+    lock = config.get_device_lock(device)
     rally_count = 0
     try:
         while not stop_check():
-            if config.AUTO_HEAL_ENABLED:
-                heal_all(device)
-            if not navigate("map_screen", device):
-                dlog.warning("Cannot reach map screen — retrying")
-                time.sleep(10)
-                continue
-            troops = troops_avail(device)
-            if troops > config.MIN_TROOPS_AVAILABLE:
-                # Reset titan distance every 5 rallies by searching for EG
-                if rally_count > 0 and rally_count % 5 == 0:
-                    search_eg_reset(device)
-                    if stop_check():
-                        break
-                rally_titan(device)
-                rally_count += 1
-            else:
-                dlog.warning("Not enough troops for Rally Titan")
-                if _smart_wait_for_troops(device, stop_check, dlog):
-                    continue  # Troop freed up — retry immediately
+            with lock:
+                mine_mithril_if_due(device)
+                if stop_check():
+                    break
+                if config.AUTO_HEAL_ENABLED:
+                    heal_all(device)
+                if not navigate("map_screen", device):
+                    dlog.warning("Cannot reach map screen — retrying")
+                    time.sleep(10)
+                    continue
+                troops = troops_avail(device)
+                if troops > config.MIN_TROOPS_AVAILABLE:
+                    # Reset titan distance every 5 rallies by searching for EG
+                    if rally_count > 0 and rally_count % 5 == 0:
+                        search_eg_reset(device)
+                        if stop_check():
+                            break
+                    rally_titan(device)
+                    rally_count += 1
+                else:
+                    dlog.warning("Not enough troops for Rally Titan")
+                    if _smart_wait_for_troops(device, stop_check, dlog):
+                        continue  # Troop freed up — retry immediately
             if stop_check():
                 break
             sleep_interval(interval, variation, stop_check)
@@ -202,21 +226,26 @@ def run_auto_groot(device, stop_event, interval, variation):
     dlog = get_logger("main", device)
     dlog.info("Rally Groot started (interval: %ss +/-%ss)", interval, variation)
     stop_check = stop_event.is_set
+    lock = config.get_device_lock(device)
     try:
         while not stop_check():
-            if config.AUTO_HEAL_ENABLED:
-                heal_all(device)
-            if not navigate("map_screen", device):
-                dlog.warning("Cannot reach map screen — retrying")
-                time.sleep(10)
-                continue
-            troops = troops_avail(device)
-            if troops > config.MIN_TROOPS_AVAILABLE:
-                join_rally("groot", device)
-            else:
-                dlog.warning("Not enough troops for Rally Groot")
-                if _smart_wait_for_troops(device, stop_check, dlog):
-                    continue  # Troop freed up — retry immediately
+            with lock:
+                mine_mithril_if_due(device)
+                if stop_check():
+                    break
+                if config.AUTO_HEAL_ENABLED:
+                    heal_all(device)
+                if not navigate("map_screen", device):
+                    dlog.warning("Cannot reach map screen — retrying")
+                    time.sleep(10)
+                    continue
+                troops = troops_avail(device)
+                if troops > config.MIN_TROOPS_AVAILABLE:
+                    join_rally("groot", device)
+                else:
+                    dlog.warning("Not enough troops for Rally Groot")
+                    if _smart_wait_for_troops(device, stop_check, dlog):
+                        continue  # Troop freed up — retry immediately
             if stop_check():
                 break
             sleep_interval(interval, variation, stop_check)
@@ -287,21 +316,26 @@ def run_auto_pass(device, stop_event, pass_mode, pass_interval, variation):
         return False
 
     dlog.info("Auto Pass Battle started (mode: %s)", pass_mode)
+    lock = config.get_device_lock(device)
     try:
         while not stop_check():
-            result = target(device)
-            if result == "no_marker":
-                dlog.warning("*** TARGET NOT SET! ***")
-                dlog.warning("Please mark the pass or tower with a Personal 'Enemy' marker.")
-                dlog.warning("Auto Pass Battle stopping.")
-                alert_queue.put("no_marker")
-                break
-            if stop_check():
-                break
-            if not result:
-                break
+            with lock:
+                mine_mithril_if_due(device)
+                if stop_check():
+                    break
+                result = target(device)
+                if result == "no_marker":
+                    dlog.warning("*** TARGET NOT SET! ***")
+                    dlog.warning("Please mark the pass or tower with a Personal 'Enemy' marker.")
+                    dlog.warning("Auto Pass Battle stopping.")
+                    alert_queue.put("no_marker")
+                    break
+                if stop_check():
+                    break
+                if not result:
+                    break
 
-            action = _pass_attack(device)
+                action = _pass_attack(device)
             if stop_check():
                 break
 
@@ -311,12 +345,13 @@ def run_auto_pass(device, stop_event, pass_mode, pass_interval, variation):
             elif action == "attack":
                 dlog.info("Enemy owns pass - joining war rallies continuously")
                 while not stop_check():
-                    troops = troops_avail(device)
-                    if troops <= config.MIN_TROOPS_AVAILABLE:
-                        dlog.warning("Not enough troops, waiting...")
-                        time.sleep(5)
-                        continue
-                    join_war_rallies(device)
+                    with lock:
+                        troops = troops_avail(device)
+                        if troops <= config.MIN_TROOPS_AVAILABLE:
+                            dlog.warning("Not enough troops, waiting...")
+                            time.sleep(5)
+                            continue
+                        join_war_rallies(device)
                     if stop_check():
                         break
                     time.sleep(2)
@@ -333,9 +368,14 @@ def run_auto_reinforce(device, stop_event, interval, variation):
     dlog = get_logger("main", device)
     dlog.info("Auto Reinforce Throne started (interval: %ss +/-%ss)", interval, variation)
     stop_check = stop_event.is_set
+    lock = config.get_device_lock(device)
     try:
         while not stop_check():
-            reinforce_throne(device)
+            with lock:
+                mine_mithril_if_due(device)
+                if stop_check():
+                    break
+                reinforce_throne(device)
             if stop_check():
                 break
             sleep_interval(interval, variation, stop_check)
@@ -343,14 +383,34 @@ def run_auto_reinforce(device, stop_event, interval, variation):
         dlog.error("ERROR in Auto Reinforce Throne: %s", e, exc_info=True)
     dlog.info("Auto Reinforce Throne stopped")
 
+def run_auto_mithril(device, stop_event):
+    """Standalone mithril mining loop — checks every 60s if mining is due.
+    Also useful as fallback when no other auto tasks are running."""
+    dlog = get_logger("main", device)
+    dlog.info("Auto Mithril started (interval: %d min)", config.MITHRIL_INTERVAL)
+    stop_check = stop_event.is_set
+    lock = config.get_device_lock(device)
+    try:
+        while not stop_check():
+            with lock:
+                mine_mithril_if_due(device)
+            if stop_check():
+                break
+            sleep_interval(60, 0, stop_check)  # Check every 60s
+    except Exception as e:
+        dlog.error("ERROR in Auto Mithril: %s", e, exc_info=True)
+    dlog.info("Auto Mithril stopped")
+
 def run_repeat(device, task_name, function, interval, variation, stop_event):
     dlog = get_logger("main", device)
     stop_check = stop_event.is_set
+    lock = config.get_device_lock(device)
     dlog.info("Starting repeating task: %s", task_name)
     try:
         while not stop_check():
             dlog.info("Running %s...", task_name)
-            function(device)
+            with lock:
+                function(device)
             dlog.debug("%s completed, waiting %ss...", task_name, interval)
             sleep_interval(interval, variation, stop_check)
     except Exception as e:
@@ -359,9 +419,11 @@ def run_repeat(device, task_name, function, interval, variation, stop_event):
 
 def run_once(device, task_name, function):
     dlog = get_logger("main", device)
+    lock = config.get_device_lock(device)
     dlog.info("Running %s...", task_name)
     try:
-        function(device)
+        with lock:
+            function(device)
         dlog.info("%s completed", task_name)
     except Exception as e:
         dlog.error("ERROR in %s: %s", task_name, e, exc_info=True)
@@ -400,16 +462,18 @@ def stop_all_tasks_matching(suffix):
 # ============================================================
 
 COLOR_ON = "#2e7d32"
-COLOR_OFF = "#c0392b"
+COLOR_OFF = "#6c757d"
 COLOR_BG = "#f0f0f0"
 COLOR_SECTION_BG = "#e8e8e8"
 WIN_WIDTH = 520
 
+FONT_TOGGLE = ("Segoe UI", 10, "bold")
+
 def make_toggle_bar(parent, text, font_spec, on_click):
-    """Create a clean full-width toggle bar."""
+    """Create a compact toggle bar."""
     frame = tk.Frame(parent, bg=COLOR_OFF, cursor="hand2")
     label = tk.Label(frame, text=text, font=font_spec,
-                     bg=COLOR_OFF, fg="white", pady=10)
+                     bg=COLOR_OFF, fg="white", pady=5, padx=8)
     label.pack(fill=tk.X)
     frame.bind("<Button-1>", lambda e: on_click())
     label.bind("<Button-1>", lambda e: on_click())
@@ -569,8 +633,15 @@ def create_gui():
     bl_mode_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(2, 0))
 
     # ============================================================
-    # AUTO MODES — split into BL and Rest Week groups
+    # AUTO MODES — Two layouts swapped by mode toggle
     # ============================================================
+    #
+    # BL:   ▼ Combat (Pass, Occupy, Reinforce)  ▼ Farming (Quest, Titans)
+    # Home: ▼ Events (Groot)  ▼ Farming (Titans)  ▼ Combat (Reinforce)
+    #
+    # Toggle bars are created with auto_frame as parent so they can
+    # be re-packed into different section containers via in_=.
+    # Auto Mithril lives below the settings area, separate from modes.
 
     auto_frame = tk.Frame(window, bg=COLOR_BG)
     auto_frame.pack(fill=tk.X, padx=PAD_X, pady=(4, 0))
@@ -582,16 +653,15 @@ def create_gui():
     auto_pass_var = tk.BooleanVar(value=False)
     auto_occupy_var = tk.BooleanVar(value=False)
     auto_reinforce_var = tk.BooleanVar(value=False)
+    auto_mithril_var = tk.BooleanVar(value=False)
 
     titan_interval_var = tk.StringVar(value=str(settings["titan_interval"]))
     groot_interval_var = tk.StringVar(value=str(settings["groot_interval"]))
     reinforce_interval_var = tk.StringVar(value=str(settings["reinforce_interval"]))
     pass_mode_var = tk.StringVar(value=settings["pass_mode"])
     pass_interval_var = tk.StringVar(value=str(settings["pass_interval"]))
-
-    # -- Sub-frames for each mode's toggles --
-    bl_toggles_frame = tk.Frame(auto_frame, bg=COLOR_BG)
-    rw_toggles_frame = tk.Frame(auto_frame, bg=COLOR_BG)
+    mithril_interval_var = tk.StringVar(value=str(settings.get("mithril_interval", 19)))
+    config.MITHRIL_INTERVAL = settings.get("mithril_interval", 19)
 
     # -- helpers to turn each off --
     def _stop_quest():
@@ -606,44 +676,154 @@ def create_gui():
         if auto_titan_var.get():
             auto_titan_var.set(False)
             titan_frame.config(bg=COLOR_OFF)
-            titan_label.config(text="Auto Rally Titans: OFF", bg=COLOR_OFF)
+            titan_label.config(text="Rally Titans: OFF", bg=COLOR_OFF)
             stop_all_tasks_matching("_auto_titan")
-            log.info("Stopping Auto Rally Titans on all devices")
+            log.info("Stopping Rally Titans on all devices")
 
     def _stop_groot():
         if auto_groot_var.get():
             auto_groot_var.set(False)
             groot_frame.config(bg=COLOR_OFF)
-            groot_label.config(text="Auto Join Groot Rallies: OFF", bg=COLOR_OFF)
+            groot_label.config(text="Join Groot: OFF", bg=COLOR_OFF)
             stop_all_tasks_matching("_auto_groot")
-            log.info("Stopping Auto Join Groot Rallies on all devices")
+            log.info("Stopping Join Groot on all devices")
 
     def _stop_pass_battle():
         if auto_pass_var.get():
             auto_pass_var.set(False)
             pass_frame.config(bg=COLOR_OFF)
-            pass_label.config(text="Auto Pass Battle: OFF", bg=COLOR_OFF)
+            pass_label.config(text="Pass Battle: OFF", bg=COLOR_OFF)
             stop_all_tasks_matching("_auto_pass")
-            log.info("Stopping Auto Pass Battle on all devices")
+            log.info("Stopping Pass Battle on all devices")
 
     def _stop_occupy():
         if auto_occupy_var.get():
             auto_occupy_var.set(False)
             occupy_frame.config(bg=COLOR_OFF)
-            occupy_label.config(text="Auto Occupy: OFF", bg=COLOR_OFF)
+            occupy_label.config(text="Occupy Towers: OFF", bg=COLOR_OFF)
             config.auto_occupy_running = False
             stop_all_tasks_matching("_auto_occupy")
-            log.info("Stopping Auto Occupy on all devices")
+            log.info("Stopping Occupy Towers on all devices")
 
     def _stop_reinforce_throne():
         if auto_reinforce_var.get():
             auto_reinforce_var.set(False)
             reinforce_frame.config(bg=COLOR_OFF)
-            reinforce_label.config(text="Auto Reinforce Throne: OFF", bg=COLOR_OFF)
+            reinforce_label.config(text="Reinforce Throne: OFF", bg=COLOR_OFF)
             stop_all_tasks_matching("_auto_reinforce")
-            log.info("Stopping Auto Reinforce Throne on all devices")
+            log.info("Stopping Reinforce Throne on all devices")
 
-    # ── Broken Lands toggles ──
+    def _stop_mithril():
+        config.MITHRIL_ENABLED = False
+        if auto_mithril_var.get():
+            auto_mithril_var.set(False)
+            mithril_frame.config(bg=COLOR_OFF)
+            mithril_label.config(text="Mine Mithril: OFF", bg=COLOR_OFF)
+            stop_all_tasks_matching("_auto_mithril")
+            log.info("Stopping Mine Mithril on all devices")
+
+    # ── Collapsible section helper ──
+    def _make_section(parent, title, expanded=True):
+        """Create a collapsible section with clickable header. Returns (container, inner)."""
+        container = tk.Frame(parent, bg=COLOR_BG)
+        inner = tk.Frame(container, bg=COLOR_BG, pady=3)
+        vis = tk.BooleanVar(value=expanded)
+        arrow = "\u25BC" if expanded else "\u25B6"
+        btn = tk.Button(container, text=f"  {arrow}  {title.upper()}",
+                         font=("Segoe UI", 8, "bold"), relief=tk.FLAT,
+                         bg=COLOR_SECTION_BG, activebackground="#ddd", anchor=tk.W,
+                         fg="#555")
+        def toggle_section():
+            if vis.get():
+                inner.pack_forget()
+                vis.set(False)
+                btn.config(text=f"  \u25B6  {title.upper()}")
+            else:
+                inner.pack(fill=tk.X)
+                vis.set(True)
+                btn.config(text=f"  \u25BC  {title.upper()}")
+            window.update_idletasks()
+            window.geometry(f"{WIN_WIDTH}x{window.winfo_reqheight()}")
+        btn.config(command=toggle_section)
+        btn.pack(fill=tk.X)
+        if expanded:
+            inner.pack(fill=tk.X)
+        return container, inner
+
+    # ── Section containers (BL has 2, Home has 3) ──
+    bl_combat_ctr, bl_combat_inner = _make_section(auto_frame, "Combat")
+    bl_farming_ctr, bl_farming_inner = _make_section(auto_frame, "Farming")
+    rw_events_ctr, rw_events_inner = _make_section(auto_frame, "Events")
+    rw_farming_ctr, rw_farming_inner = _make_section(auto_frame, "Farming")
+    rw_combat_ctr, rw_combat_inner = _make_section(auto_frame, "Combat")
+
+    # ── Toggle bars (all parented to auto_frame, re-packed into sections) ──
+
+    def toggle_auto_pass():
+        active_devices = get_active_devices()
+        if not auto_pass_var.get():
+            _stop_quest()
+            _stop_occupy()
+            auto_pass_var.set(True)
+            pass_frame.config(bg=COLOR_ON)
+            pass_label.config(text="Pass Battle: ON", bg=COLOR_ON)
+            for device in active_devices:
+                task_key = f"{device}_auto_pass"
+                if task_key not in running_tasks:
+                    stop_event = threading.Event()
+                    mode = pass_mode_var.get()
+                    interval = int(pass_interval_var.get())
+                    variation = int(variation_var.get())
+                    launch_task(device, "auto_pass",
+                                run_auto_pass, stop_event, args=(device, stop_event, mode, interval, variation))
+                    log.info("Started Auto Pass Battle on %s", device)
+        else:
+            _stop_pass_battle()
+
+    pass_frame, pass_label = make_toggle_bar(
+        auto_frame, "Pass Battle: OFF", FONT_TOGGLE, toggle_auto_pass)
+
+    def toggle_auto_occupy():
+        active_devices = get_active_devices()
+        if not auto_occupy_var.get():
+            _stop_quest()
+            _stop_pass_battle()
+            auto_occupy_var.set(True)
+            occupy_frame.config(bg=COLOR_ON)
+            occupy_label.config(text="Occupy Towers: ON", bg=COLOR_ON)
+            for device in active_devices:
+                task_key = f"{device}_auto_occupy"
+                if task_key not in running_tasks:
+                    stop_event = threading.Event()
+                    launch_task(device, "auto_occupy",
+                                run_auto_occupy, stop_event, args=(device, stop_event))
+                    log.info("Started Auto Occupy on %s", device)
+        else:
+            _stop_occupy()
+
+    occupy_frame, occupy_label = make_toggle_bar(
+        auto_frame, "Occupy Towers: OFF", FONT_TOGGLE, toggle_auto_occupy)
+
+    def toggle_auto_reinforce():
+        active_devices = get_active_devices()
+        if not auto_reinforce_var.get():
+            auto_reinforce_var.set(True)
+            reinforce_frame.config(bg=COLOR_ON)
+            reinforce_label.config(text="Reinforce Throne: ON", bg=COLOR_ON)
+            for device in active_devices:
+                task_key = f"{device}_auto_reinforce"
+                if task_key not in running_tasks:
+                    stop_event = threading.Event()
+                    interval = int(reinforce_interval_var.get())
+                    variation = int(variation_var.get())
+                    launch_task(device, "auto_reinforce",
+                                run_auto_reinforce, stop_event, args=(device, stop_event, interval, variation))
+                    log.info("Started Auto Reinforce Throne on %s", device)
+        else:
+            _stop_reinforce_throne()
+
+    reinforce_frame, reinforce_label = make_toggle_bar(
+        auto_frame, "Reinforce Throne: OFF", FONT_TOGGLE, toggle_auto_reinforce)
 
     def toggle_auto_quest():
         active_devices = get_active_devices()
@@ -664,57 +844,7 @@ def create_gui():
             _stop_quest()
 
     quest_frame, quest_label = make_toggle_bar(
-        bl_toggles_frame, "Auto Quest: OFF", ("Segoe UI", 12, "bold"), toggle_auto_quest)
-    quest_frame.pack(fill=tk.X, pady=(0, 3))
-
-    def toggle_auto_pass():
-        active_devices = get_active_devices()
-        if not auto_pass_var.get():
-            _stop_quest()
-            _stop_occupy()
-            auto_pass_var.set(True)
-            pass_frame.config(bg=COLOR_ON)
-            pass_label.config(text="Auto Pass Battle: ON", bg=COLOR_ON)
-            for device in active_devices:
-                task_key = f"{device}_auto_pass"
-                if task_key not in running_tasks:
-                    stop_event = threading.Event()
-                    mode = pass_mode_var.get()
-                    interval = int(pass_interval_var.get())
-                    variation = int(variation_var.get())
-                    launch_task(device, "auto_pass",
-                                run_auto_pass, stop_event, args=(device, stop_event, mode, interval, variation))
-                    log.info("Started Auto Pass Battle on %s", device)
-        else:
-            _stop_pass_battle()
-
-    pass_frame, pass_label = make_toggle_bar(
-        bl_toggles_frame, "Auto Pass Battle: OFF", ("Segoe UI", 12, "bold"), toggle_auto_pass)
-    pass_frame.pack(fill=tk.X, pady=(0, 3))
-
-    def toggle_auto_occupy():
-        active_devices = get_active_devices()
-        if not auto_occupy_var.get():
-            _stop_quest()
-            _stop_pass_battle()
-            auto_occupy_var.set(True)
-            occupy_frame.config(bg=COLOR_ON)
-            occupy_label.config(text="Auto Occupy: ON", bg=COLOR_ON)
-            for device in active_devices:
-                task_key = f"{device}_auto_occupy"
-                if task_key not in running_tasks:
-                    stop_event = threading.Event()
-                    launch_task(device, "auto_occupy",
-                                run_auto_occupy, stop_event, args=(device, stop_event))
-                    log.info("Started Auto Occupy on %s", device)
-        else:
-            _stop_occupy()
-
-    occupy_frame, occupy_label = make_toggle_bar(
-        bl_toggles_frame, "Auto Occupy: OFF", ("Segoe UI", 12, "bold"), toggle_auto_occupy)
-    occupy_frame.pack(fill=tk.X)
-
-    # ── Rest Week toggles ──
+        auto_frame, "Auto Quest: OFF", FONT_TOGGLE, toggle_auto_quest)
 
     def toggle_auto_titan():
         active_devices = get_active_devices()
@@ -722,7 +852,7 @@ def create_gui():
             _stop_groot()
             auto_titan_var.set(True)
             titan_frame.config(bg=COLOR_ON)
-            titan_label.config(text="Auto Rally Titans: ON", bg=COLOR_ON)
+            titan_label.config(text="Rally Titans: ON", bg=COLOR_ON)
             for device in active_devices:
                 task_key = f"{device}_auto_titan"
                 if task_key not in running_tasks:
@@ -736,8 +866,7 @@ def create_gui():
             _stop_titan()
 
     titan_frame, titan_label = make_toggle_bar(
-        rw_toggles_frame, "Auto Rally Titans: OFF", ("Segoe UI", 12, "bold"), toggle_auto_titan)
-    titan_frame.pack(fill=tk.X, pady=(0, 3))
+        auto_frame, "Rally Titans: OFF", FONT_TOGGLE, toggle_auto_titan)
 
     def toggle_auto_groot():
         active_devices = get_active_devices()
@@ -745,7 +874,7 @@ def create_gui():
             _stop_titan()
             auto_groot_var.set(True)
             groot_frame.config(bg=COLOR_ON)
-            groot_label.config(text="Auto Join Groot Rallies: ON", bg=COLOR_ON)
+            groot_label.config(text="Join Groot: ON", bg=COLOR_ON)
             for device in active_devices:
                 task_key = f"{device}_auto_groot"
                 if task_key not in running_tasks:
@@ -759,30 +888,70 @@ def create_gui():
             _stop_groot()
 
     groot_frame, groot_label = make_toggle_bar(
-        rw_toggles_frame, "Auto Join Groot Rallies: OFF", ("Segoe UI", 12, "bold"), toggle_auto_groot)
-    groot_frame.pack(fill=tk.X, pady=(0, 3))
+        auto_frame, "Join Groot: OFF", FONT_TOGGLE, toggle_auto_groot)
 
-    def toggle_auto_reinforce():
+    def toggle_auto_mithril():
         active_devices = get_active_devices()
-        if not auto_reinforce_var.get():
-            auto_reinforce_var.set(True)
-            reinforce_frame.config(bg=COLOR_ON)
-            reinforce_label.config(text="Auto Reinforce Throne: ON", bg=COLOR_ON)
+        if not auto_mithril_var.get():
+            auto_mithril_var.set(True)
+            mithril_frame.config(bg=COLOR_ON)
+            mithril_label.config(text="Mine Mithril: ON", bg=COLOR_ON)
+            config.MITHRIL_ENABLED = True
+            config.MITHRIL_INTERVAL = int(mithril_interval_var.get())
             for device in active_devices:
-                task_key = f"{device}_auto_reinforce"
+                task_key = f"{device}_auto_mithril"
                 if task_key not in running_tasks:
                     stop_event = threading.Event()
-                    interval = int(reinforce_interval_var.get())
-                    variation = int(variation_var.get())
-                    launch_task(device, "auto_reinforce",
-                                run_auto_reinforce, stop_event, args=(device, stop_event, interval, variation))
-                    log.info("Started Auto Reinforce Throne on %s", device)
+                    launch_task(device, "auto_mithril",
+                                run_auto_mithril, stop_event, args=(device, stop_event))
+                    log.info("Started Mine Mithril on %s", device)
         else:
-            _stop_reinforce_throne()
+            _stop_mithril()
 
-    reinforce_frame, reinforce_label = make_toggle_bar(
-        rw_toggles_frame, "Auto Reinforce Throne: OFF", ("Segoe UI", 12, "bold"), toggle_auto_reinforce)
-    reinforce_frame.pack(fill=tk.X)
+    mithril_frame, mithril_label = make_toggle_bar(
+        auto_frame, "Mine Mithril: OFF", FONT_TOGGLE, toggle_auto_mithril)
+
+    # ── Row frames for side-by-side layout (children of their section inners) ──
+    bl_combat_row1 = tk.Frame(bl_combat_inner, bg=COLOR_BG)     # Pass + Occupy
+    bl_combat_row1.pack(fill=tk.X, pady=(0, 3))
+    bl_farming_row1 = tk.Frame(bl_farming_inner, bg=COLOR_BG)   # Quest + Titans
+    bl_farming_row1.pack(fill=tk.X, pady=(0, 3))
+    rw_farming_row1 = tk.Frame(rw_farming_inner, bg=COLOR_BG)   # Titans + Mithril
+    rw_farming_row1.pack(fill=tk.X)
+
+    # ── Layout helpers — pack toggle bars into the right sections ──
+
+    def _layout_bl():
+        """Pack BL mode: Combat (Pass+Occupy, Reinforce) then Farming (Quest+Titans, Mithril)."""
+        bl_combat_ctr.pack(fill=tk.X, in_=auto_frame)
+        pass_frame.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=(0, 2), in_=bl_combat_row1)
+        occupy_frame.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=(2, 0), in_=bl_combat_row1)
+        reinforce_frame.pack(fill=tk.X, in_=bl_combat_inner)
+
+        bl_farming_ctr.pack(fill=tk.X, pady=(4, 0), in_=auto_frame)
+        quest_frame.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=(0, 2), in_=bl_farming_row1)
+        titan_frame.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=(2, 0), in_=bl_farming_row1)
+        mithril_frame.pack(fill=tk.X, in_=bl_farming_inner)
+
+    def _layout_rw():
+        """Pack Home Server mode: Events (Groot), Farming (Titans+Mithril), Combat (Reinforce)."""
+        rw_events_ctr.pack(fill=tk.X, in_=auto_frame)
+        groot_frame.pack(fill=tk.X, in_=rw_events_inner)
+
+        rw_farming_ctr.pack(fill=tk.X, pady=(4, 0), in_=auto_frame)
+        titan_frame.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=(0, 2), in_=rw_farming_row1)
+        mithril_frame.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=(2, 0), in_=rw_farming_row1)
+
+        rw_combat_ctr.pack(fill=tk.X, pady=(4, 0), in_=auto_frame)
+        reinforce_frame.pack(fill=tk.X, in_=rw_combat_inner)
+
+    def _forget_all_toggles():
+        """Forget all toggle bars and section containers from layout."""
+        for w in [pass_frame, occupy_frame, reinforce_frame, quest_frame,
+                  titan_frame, groot_frame, mithril_frame,
+                  bl_combat_ctr, bl_farming_ctr,
+                  rw_events_ctr, rw_farming_ctr, rw_combat_ctr]:
+            w.pack_forget()
 
     # ── Mode switching ──
 
@@ -790,36 +959,31 @@ def create_gui():
         if mode_var.get() == new_mode:
             return
 
-        # Stop all running tasks when switching modes
-        _stop_quest()
-        _stop_titan()
-        _stop_groot()
-        _stop_pass_battle()
-        _stop_occupy()
-        _stop_reinforce_throne()
+        # Stop tasks that don't exist in the target mode
+        if new_mode == "rw":
+            _stop_quest()
+            _stop_pass_battle()
+            _stop_occupy()
+        else:
+            _stop_groot()
 
         mode_var.set(new_mode)
+        _forget_all_toggles()
 
         if new_mode == "rw":
-            bl_toggles_frame.pack_forget()
-            rw_toggles_frame.pack(fill=tk.X)
+            _layout_rw()
+            bl_settings_row.pack_forget()
             rw_mode_btn.config(bg=COLOR_MODE_ACTIVE, fg="white",
                                activebackground=COLOR_MODE_ACTIVE)
             bl_mode_btn.config(bg=COLOR_MODE_INACTIVE, fg="#555",
                                activebackground=COLOR_MODE_INACTIVE)
-            # Swap settings row 2
-            bl_settings_row.pack_forget()
-            rw_settings_row.pack(fill=tk.X, pady=(4, 0))
         else:
-            rw_toggles_frame.pack_forget()
-            bl_toggles_frame.pack(fill=tk.X)
+            _layout_bl()
+            bl_settings_row.pack(fill=tk.X, pady=(4, 0), in_=settings_frame, before=rw_settings_row)
             bl_mode_btn.config(bg=COLOR_MODE_ACTIVE, fg="white",
                                activebackground=COLOR_MODE_ACTIVE)
             rw_mode_btn.config(bg=COLOR_MODE_INACTIVE, fg="#555",
                                activebackground=COLOR_MODE_INACTIVE)
-            # Swap settings row 2
-            rw_settings_row.pack_forget()
-            bl_settings_row.pack(fill=tk.X, pady=(4, 0))
 
         window.update_idletasks()
         window.geometry(f"{WIN_WIDTH}x{window.winfo_reqheight()}")
@@ -827,8 +991,8 @@ def create_gui():
     rw_mode_btn.config(command=lambda: switch_mode("rw"))
     bl_mode_btn.config(command=lambda: switch_mode("bl"))
 
-    # Start in BL mode
-    bl_toggles_frame.pack(fill=tk.X)
+    # Pack initial layout (BL default)
+    _layout_bl()
 
     # ============================================================
     # SETTINGS BAR (compact, mode-aware)
@@ -837,7 +1001,10 @@ def create_gui():
     settings_frame = tk.Frame(window, bg=COLOR_SECTION_BG, padx=10, pady=6)
     settings_frame.pack(fill=tk.X, padx=PAD_X, pady=(6, 4))
 
-    # Row 1: Auto Heal + Min Troops (always visible)
+    tk.Label(settings_frame, text="\u2699  Settings", font=("Segoe UI", 9, "bold"),
+             bg=COLOR_SECTION_BG, fg="#444", anchor=tk.W).pack(fill=tk.X, pady=(0, 4))
+
+    # Row 1: Auto Heal + Restore AP + EG Rally Own + Verbose
     row1 = tk.Frame(settings_frame, bg=COLOR_SECTION_BG)
     row1.pack(fill=tk.X)
 
@@ -973,6 +1140,8 @@ def create_gui():
     tk.Label(row1b, text="s", font=("Segoe UI", 9),
              bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
 
+    tk.Frame(settings_frame, height=1, bg="#ccc").pack(fill=tk.X, pady=(4, 4))
+
     # Row 2 (BL): Pass mode & interval
     bl_settings_row = tk.Frame(settings_frame, bg=COLOR_SECTION_BG)
 
@@ -986,10 +1155,10 @@ def create_gui():
     tk.Label(bl_settings_row, text="s", font=("Segoe UI", 9),
              bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
 
-    # Row 2 (Rest Week): Titan interval + Groot interval
+    # Row 2: Titan / Groot / Reinforce intervals (always visible)
     rw_settings_row = tk.Frame(settings_frame, bg=COLOR_SECTION_BG)
 
-    tk.Label(rw_settings_row, text="Titan every", font=("Segoe UI", 9),
+    tk.Label(rw_settings_row, text="Titan", font=("Segoe UI", 9),
              bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
     tk.Entry(rw_settings_row, textvariable=titan_interval_var, width=4, justify="center",
              font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(4, 1))
@@ -998,7 +1167,7 @@ def create_gui():
 
     tk.Frame(rw_settings_row, width=16, bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
 
-    tk.Label(rw_settings_row, text="Groot every", font=("Segoe UI", 9),
+    tk.Label(rw_settings_row, text="Groot", font=("Segoe UI", 9),
              bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
     tk.Entry(rw_settings_row, textvariable=groot_interval_var, width=4, justify="center",
              font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(4, 1))
@@ -1007,15 +1176,27 @@ def create_gui():
 
     tk.Frame(rw_settings_row, width=16, bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
 
-    tk.Label(rw_settings_row, text="Reinforce every", font=("Segoe UI", 9),
+    tk.Label(rw_settings_row, text="Reinf", font=("Segoe UI", 9),
              bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
     tk.Entry(rw_settings_row, textvariable=reinforce_interval_var, width=4, justify="center",
              font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(4, 1))
     tk.Label(rw_settings_row, text="s", font=("Segoe UI", 9),
              bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
 
-    # Start with BL mode, then switch if saved mode was different
+    tk.Frame(rw_settings_row, width=16, bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
+
+    tk.Label(rw_settings_row, text="Mithril", font=("Segoe UI", 9),
+             bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
+    tk.Entry(rw_settings_row, textvariable=mithril_interval_var, width=4, justify="center",
+             font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(4, 1))
+    tk.Label(rw_settings_row, text="m", font=("Segoe UI", 9),
+             bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
+
+    # Pack settings rows (intervals always visible, BL pass row only in BL mode)
     bl_settings_row.pack(fill=tk.X, pady=(4, 0))
+    rw_settings_row.pack(fill=tk.X, pady=(4, 0))
+
+    # Apply saved mode (hides BL-only widgets if Home Server)
     if settings["mode"] == "rw":
         switch_mode("rw")
 
@@ -1114,6 +1295,7 @@ def create_gui():
             "mode": mode_var.get(),
             "verbose_logging": verbose_var.get(),
             "eg_rally_own": eg_rally_own_var.get(),
+            "mithril_interval": int(mithril_interval_var.get()) if mithril_interval_var.get().isdigit() else 19,
             "device_troops": dt,
         })
 
@@ -1273,6 +1455,7 @@ def create_gui():
     add_debug_button(debug_tab, "Test EG Positions", test_eg_positions)
     add_debug_button(debug_tab, "Attack Territory (Debug)", lambda dev: attack_territory(dev, debug=True))
     add_debug_button(debug_tab, "Sample Specific Squares", sample_specific_squares)
+    add_debug_button(debug_tab, "Mine Mithril", mine_mithril)
 
     tk.Frame(debug_tab, height=1, bg="gray80").pack(fill=tk.X, pady=6)
 
@@ -1307,6 +1490,7 @@ def create_gui():
         _stop_pass_battle()
         _stop_occupy()
         _stop_reinforce_throne()
+        _stop_mithril()
         for var in task_row_enabled_vars:
             var.set(False)
         for key in list(running_tasks.keys()):
@@ -1334,7 +1518,81 @@ def create_gui():
         subprocess.Popen([sys.executable] + sys.argv)
         sys.exit(0)
 
+    def export_bug_report():
+        """Collect logs, failure screenshots, stats, and settings into a zip file."""
+        from botlog import stats, SCRIPT_DIR, LOG_DIR, STATS_DIR
+        from datetime import datetime
+        log = get_logger("main")
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        default_name = f"pacbot_bugreport_{timestamp}.zip"
+
+        save_path = filedialog.asksaveasfilename(
+            defaultextension=".zip",
+            filetypes=[("ZIP files", "*.zip")],
+            initialfile=default_name,
+            title="Save Bug Report",
+        )
+        if not save_path:
+            return  # User cancelled
+
+        try:
+            with zipfile.ZipFile(save_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                # Logs (current + rotated backups)
+                for suffix in ["", ".1", ".2", ".3"]:
+                    logfile = os.path.join(LOG_DIR, f"pacbot.log{suffix}")
+                    if os.path.isfile(logfile):
+                        zf.write(logfile, f"logs/pacbot.log{suffix}")
+
+                # Failure screenshots
+                failures_dir = os.path.join(SCRIPT_DIR, "debug", "failures")
+                if os.path.isdir(failures_dir):
+                    for f in os.listdir(failures_dir):
+                        if f.endswith(".png"):
+                            zf.write(os.path.join(failures_dir, f), f"debug/failures/{f}")
+
+                # Session stats
+                if os.path.isdir(STATS_DIR):
+                    for f in os.listdir(STATS_DIR):
+                        if f.endswith(".json"):
+                            zf.write(os.path.join(STATS_DIR, f), f"stats/{f}")
+
+                # Settings
+                settings_path = os.path.join(SCRIPT_DIR, "settings.json")
+                if os.path.isfile(settings_path):
+                    zf.write(settings_path, "settings.json")
+
+                # System info report
+                try:
+                    from devices import get_devices
+                    device_list = get_devices()
+                except Exception:
+                    device_list = ["(could not detect)"]
+
+                info_lines = [
+                    f"PACbot Bug Report",
+                    f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                    f"",
+                    f"Version: {version}",
+                    f"Python: {sys.version}",
+                    f"OS: {platform.system()} {platform.release()} ({platform.version()})",
+                    f"ADB: {config.adb_path}",
+                    f"Devices: {', '.join(device_list) if device_list else '(none)'}",
+                    f"",
+                    f"=== Session Summary ===",
+                    stats.summary(),
+                ]
+                zf.writestr("report_info.txt", "\n".join(info_lines))
+
+            log.info("Bug report exported to %s", save_path)
+            messagebox.showinfo("Bug Report", f"Bug report saved to:\n{save_path}")
+        except Exception as e:
+            log.error("Failed to export bug report: %s", e)
+            messagebox.showerror("Bug Report", f"Failed to export bug report:\n{e}")
+
     tk.Button(quit_row, text="Restart", command=restart,
+              font=("Segoe UI", 9), bg=COLOR_BG).pack(side=tk.LEFT, padx=(0, 8))
+    tk.Button(quit_row, text="Bug Report", command=export_bug_report,
               font=("Segoe UI", 9), bg=COLOR_BG).pack(side=tk.LEFT, padx=(0, 8))
     tk.Button(quit_row, text="Quit", command=lambda: on_close(),
               font=("Segoe UI", 9), bg=COLOR_BG).pack(side=tk.LEFT)
@@ -1361,27 +1619,33 @@ def create_gui():
         if auto_titan_var.get() and not any(k.endswith("_auto_titan") for k in running_tasks):
             auto_titan_var.set(False)
             titan_frame.config(bg=COLOR_OFF)
-            titan_label.config(text="Auto Rally Titans: OFF", bg=COLOR_OFF)
+            titan_label.config(text="Rally Titans: OFF", bg=COLOR_OFF)
 
         if auto_groot_var.get() and not any(k.endswith("_auto_groot") for k in running_tasks):
             auto_groot_var.set(False)
             groot_frame.config(bg=COLOR_OFF)
-            groot_label.config(text="Auto Join Groot Rallies: OFF", bg=COLOR_OFF)
+            groot_label.config(text="Join Groot: OFF", bg=COLOR_OFF)
 
         if auto_pass_var.get() and not any(k.endswith("_auto_pass") for k in running_tasks):
             auto_pass_var.set(False)
             pass_frame.config(bg=COLOR_OFF)
-            pass_label.config(text="Auto Pass Battle: OFF", bg=COLOR_OFF)
+            pass_label.config(text="Pass Battle: OFF", bg=COLOR_OFF)
 
         if auto_occupy_var.get() and not any(k.endswith("_auto_occupy") for k in running_tasks):
             auto_occupy_var.set(False)
             occupy_frame.config(bg=COLOR_OFF)
-            occupy_label.config(text="Auto Occupy: OFF", bg=COLOR_OFF)
+            occupy_label.config(text="Occupy Towers: OFF", bg=COLOR_OFF)
 
         if auto_reinforce_var.get() and not any(k.endswith("_auto_reinforce") for k in running_tasks):
             auto_reinforce_var.set(False)
             reinforce_frame.config(bg=COLOR_OFF)
-            reinforce_label.config(text="Auto Reinforce Throne: OFF", bg=COLOR_OFF)
+            reinforce_label.config(text="Reinforce Throne: OFF", bg=COLOR_OFF)
+
+        if auto_mithril_var.get() and not any(k.endswith("_auto_mithril") for k in running_tasks):
+            auto_mithril_var.set(False)
+            mithril_frame.config(bg=COLOR_OFF)
+            mithril_label.config(text="Mine Mithril: OFF", bg=COLOR_OFF)
+            config.MITHRIL_ENABLED = False
 
         try:
             while True:
@@ -1443,6 +1707,7 @@ if __name__ == "__main__":
     # Set up structured logging (rotating file + console)
     from botlog import setup_logging, stats, get_logger
     setup_logging()
+    config.log_adb_path()
 
     # Compatibility bridge: capture any remaining print() calls to legacy log file
     _log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pacbot.log")
@@ -1472,7 +1737,11 @@ if __name__ == "__main__":
 
     _main_log = get_logger("main")
 
-    from license import validate_license
-    validate_license()
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    if not os.path.isdir(os.path.join(app_dir, ".git")):
+        from license import validate_license
+        validate_license()
+    else:
+        _main_log.info("Git repo detected — skipping license check (developer mode).")
     _main_log.info("Running PACbot...")
     create_gui()

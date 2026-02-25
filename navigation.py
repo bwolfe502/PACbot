@@ -24,8 +24,8 @@ def _cleanup_debug_dir(max_files=50):
         )
         while len(files) > max_files:
             os.remove(files.pop(0))
-    except Exception:
-        pass
+    except Exception as e:
+        get_logger("navigation").warning("Debug dir cleanup failed: %s", e)
 
 def _save_debug_screenshot(device, label, screen=None):
     """Save a screenshot to the debug/ folder with a timestamp and label."""
@@ -34,7 +34,7 @@ def _save_debug_screenshot(device, label, screen=None):
             screen = load_screenshot(device)
         if screen is None:
             return None
-        timestamp = datetime.now().strftime("%H%M%S")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_device = device.replace(":", "_")
         filename = f"{timestamp}_{safe_device}_{label}.png"
         filepath = os.path.join(DEBUG_DIR, filename)
@@ -52,7 +52,7 @@ def _save_debug_screenshot(device, label, screen=None):
 # SCREEN DETECTION
 # ============================================================
 
-SCREEN_TEMPLATES = ["map_screen", "bl_screen", "aq_screen", "td_screen", "territory_screen", "war_screen", "profile_screen", "alliance_screen"]
+SCREEN_TEMPLATES = ["map_screen", "bl_screen", "aq_screen", "td_screen", "territory_screen", "war_screen", "profile_screen", "alliance_screen", "kingdom_screen"]
 
 # Popup templates that overlay the screen and block taps.
 # Checked by check_screen() before screen matching — auto-dismissed if found.
@@ -104,7 +104,9 @@ def check_screen(device):
                 time.sleep(1.5)
                 screen = load_screenshot(device)
                 if screen is None:
+                    log.warning("Screenshot failed after popup dismiss")
                     return "unknown"
+                log.debug("Popup dismissed, re-scanning screen...")
                 break  # Only dismiss one popup per check cycle
 
         scores = {}
@@ -130,6 +132,7 @@ def check_screen(device):
         log.debug("Screen scores: %s", score_str)
 
         if best_val > 0.8 and best_name is not None:
+            log.debug("Screen identified: %s (%.0f%%)", best_name, best_val * 100)
             return best_name
 
         # Unknown screen — save debug screenshot automatically
@@ -207,7 +210,7 @@ def navigate(target_screen, device, _depth=0):
         return False
 
     current = check_screen(device)
-    log.debug("Currently on %s, navigating to %s...", current, target_screen)
+    log.info("Navigating: %s -> %s", current, target_screen)
 
     # Handle unknown screen at entry — try recovery first
     if current == "unknown":
@@ -241,6 +244,11 @@ def navigate(target_screen, device, _depth=0):
             current = check_screen(device)
         elif current == "alliance_screen":
             adb_tap(device, 75, 75)
+            time.sleep(1)
+            current = check_screen(device)
+        elif current == "kingdom_screen":
+            # Bottom-right globe icon takes us back to map
+            adb_tap(device, 970, 1880)
             time.sleep(1)
             current = check_screen(device)
         elif current in ["bl_screen", "aq_screen", "war_screen", "territory_screen", "profile_screen"]:
@@ -313,6 +321,14 @@ def navigate(target_screen, device, _depth=0):
                 return False
         adb_tap(device, 316, 1467)
         return _verify_screen("territory_screen", device)
+
+    # To kingdom_screen
+    if target_screen == "kingdom_screen":
+        if current != "map_screen":
+            if not navigate("map_screen", device, _depth=_depth + 1):
+                return False
+        adb_tap(device, 75, 1880)
+        return _verify_screen("kingdom_screen", device)
 
     log.warning("Unknown target screen: %s", target_screen)
     return False
