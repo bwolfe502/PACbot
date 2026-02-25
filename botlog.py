@@ -136,6 +136,7 @@ class StatsTracker:
             self._data[device] = {
                 "actions": {},
                 "template_misses": {},
+                "template_hits": {},
                 "nav_failures": {},
                 "errors": [],
                 "adb_timing": {},
@@ -183,6 +184,32 @@ class StatsTracker:
             entry["best_scores"].append(round(best_score, 3))
             if len(entry["best_scores"]) > 10:
                 entry["best_scores"] = entry["best_scores"][-10:]
+
+    def record_template_hit(self, device, template_name, x, y, confidence):
+        """Record a successful template match with its position.
+
+        Tracks min/max bounding box per template so regions can be
+        tightened with real data from live sessions.
+        """
+        with self._lock:
+            self._ensure_device(device)
+            hits = self._data[device]["template_hits"]
+            if template_name not in hits:
+                hits[template_name] = {
+                    "count": 0,
+                    "min_x": x, "max_x": x,
+                    "min_y": y, "max_y": y,
+                    "recent": [],
+                }
+            entry = hits[template_name]
+            entry["count"] += 1
+            entry["min_x"] = min(entry["min_x"], x)
+            entry["max_x"] = max(entry["max_x"], x)
+            entry["min_y"] = min(entry["min_y"], y)
+            entry["max_y"] = max(entry["max_y"], y)
+            entry["recent"].append([x, y, round(confidence, 3)])
+            if len(entry["recent"]) > 20:
+                entry["recent"] = entry["recent"][-20:]
 
     def record_nav_failure(self, device, from_screen, to_screen):
         """Record a navigation failure."""
@@ -247,6 +274,7 @@ class StatsTracker:
                 device_copy = {
                     "actions": {},
                     "template_misses": data["template_misses"],
+                    "template_hits": data.get("template_hits", {}),
                     "nav_failures": data["nav_failures"],
                     "errors": data["errors"],
                     "adb_timing": {},
@@ -325,6 +353,18 @@ class StatsTracker:
                         avg_score = sum(info["best_scores"]) / max(1, len(info["best_scores"]))
                         miss_parts.append(f"{name}({info['count']}x, avg best {avg_score:.0%})")
                     lines.append(f"  Top template misses: {', '.join(miss_parts)}")
+
+                if data.get("template_hits"):
+                    top_hits = sorted(data["template_hits"].items(),
+                                      key=lambda x: x[1]["count"], reverse=True)[:10]
+                    hit_parts = []
+                    for name, info in top_hits:
+                        hit_parts.append(
+                            f"{name}({info['count']}x, "
+                            f"x:{info['min_x']}-{info['max_x']} "
+                            f"y:{info['min_y']}-{info['max_y']})"
+                        )
+                    lines.append(f"  Template hit regions: {', '.join(hit_parts)}")
 
                 if data["nav_failures"]:
                     nav_parts = [f"{k}({v})" for k, v in

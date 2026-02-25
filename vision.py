@@ -311,14 +311,17 @@ def get_last_best():
     """Get the best match score from the last find_image call on this thread."""
     return getattr(_thread_local, 'last_best', 0.0)
 
-def find_image(screen, image_name, threshold=0.8, region=None):
+def find_image(screen, image_name, threshold=0.8, region=None, device=None):
     """Find an image template on screen.
     Returns (max_val, max_loc, h, w) on match, or None on failure.
-    On failure, the best score is stored per-thread via get_last_best()."""
+    On failure, the best score is stored per-thread via get_last_best().
+    If device is provided, records hit position to stats for region analysis."""
     _thread_local.last_best = 0.0
     button = get_template(f"elements/{image_name}")
     if screen is None or button is None:
         return None
+
+    h, w = button.shape[:2]
 
     if region:
         x1, y1, x2, y2 = region
@@ -327,9 +330,12 @@ def find_image(screen, image_name, threshold=0.8, region=None):
         min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
         _thread_local.last_best = max_val
         if max_val > threshold:
-            h, w = button.shape[:2]
             # Translate back to full-screen coordinates
-            return max_val, (max_loc[0] + x1, max_loc[1] + y1), h, w
+            loc = (max_loc[0] + x1, max_loc[1] + y1)
+            if device:
+                stats.record_template_hit(
+                    device, image_name, loc[0] + w // 2, loc[1] + h // 2, max_val)
+            return max_val, loc, h, w
         return None
 
     result = cv2.matchTemplate(screen, button, cv2.TM_CCOEFF_NORMED)
@@ -337,7 +343,9 @@ def find_image(screen, image_name, threshold=0.8, region=None):
     _thread_local.last_best = max_val
 
     if max_val > threshold:
-        h, w = button.shape[:2]
+        if device:
+            stats.record_template_hit(
+                device, image_name, max_loc[0] + w // 2, max_loc[1] + h // 2, max_val)
         return max_val, max_loc, h, w
     return None
 
@@ -414,7 +422,36 @@ def tap(button_name, device):
 # Values are (x1, y1, x2, y2) defining the search region.
 # Screen is 1080x1920 — lower-left quadrant = (0, 960, 540, 1920)
 IMAGE_REGIONS = {
-    "heal.png": (0, 960, 540, 1920),
+    # Existing
+    "heal.png":                   (0, 960, 540, 1920),     # lower-left quadrant
+
+    # Map screen buttons
+    "bl_button.png":              (540, 0, 1080, 960),     # top-right quadrant
+
+    # Rally screen
+    "search.png":                 (0, 960, 1080, 1920),    # lower half
+    "scroll_or_not.png":          (0, 960, 1080, 1920),    # lower half
+
+    # Rally type icons (war screen list)
+    "rally/castle.png":           (0, 0, 540, 1920),       # left half
+    "rally/pass.png":             (0, 0, 540, 1920),       # left half
+    "rally/tower.png":            (0, 0, 540, 1920),       # left half
+    "rally/groot.png":            (0, 0, 540, 1920),       # left half
+    "rally/join.png":             (540, 0, 1080, 1920),    # right half
+
+    # Rally detail
+    "slot.png":                   (0, 0, 360, 1920),       # left third
+
+    # Quest screen
+    "aq_claim.png":               (540, 640, 1080, 1920),  # right half, lower 2/3
+
+    # Troop status icons (left-side list)
+    "statuses/stationing.png":    (0, 0, 360, 1920),       # left third
+    "statuses/battling.png":      (0, 0, 360, 1920),       # left third
+    "statuses/marching.png":      (0, 0, 360, 1920),       # left third
+    "statuses/returning.png":     (0, 0, 360, 1920),       # left third
+    "stationed.png":              (0, 0, 360, 1920),       # left third
+    "defending.png":              (0, 0, 360, 1920),       # left third
 }
 
 def tap_image(image_name, device, threshold=0.8):
@@ -422,7 +459,7 @@ def tap_image(image_name, device, threshold=0.8):
     log = get_logger("vision", device)
     screen = load_screenshot(device)
     region = IMAGE_REGIONS.get(image_name)
-    match = find_image(screen, image_name, threshold=threshold, region=region)
+    match = find_image(screen, image_name, threshold=threshold, region=region, device=device)
 
     if match:
         max_val, max_loc, h, w = match

@@ -146,12 +146,15 @@ def check_screen(device):
                 search_area = screen
 
             result = cv2.matchTemplate(search_area, element, cv2.TM_CCOEFF_NORMED)
-            _, max_val, _, _ = cv2.minMaxLoc(result)
+            _, max_val, _, max_loc = cv2.minMaxLoc(result)
             scores[screen_name] = max_val
 
             if max_val > best_val:
                 best_val = max_val
                 best_name = screen_name
+                best_loc = max_loc
+                best_region = region
+                best_hw = element.shape[:2]
 
         # Log scores sorted by confidence
         score_str = " | ".join(f"{name}: {val*100:.0f}%" for name, val in
@@ -159,6 +162,14 @@ def check_screen(device):
         log.debug("Screen scores: %s", score_str)
 
         if best_val > config.SCREEN_MATCH_THRESHOLD and best_name is not None:
+            # Record hit position for region analysis
+            h, w = best_hw
+            cx, cy = best_loc[0] + w // 2, best_loc[1] + h // 2
+            if best_region:
+                cx += best_region[0]
+                cy += best_region[1]
+            stats.record_template_hit(
+                device, f"{best_name}.png", cx, cy, best_val)
             log.debug("Screen identified: %s (%.0f%%)", best_name, best_val * 100)
             return best_name
 
