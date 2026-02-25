@@ -30,8 +30,6 @@ if not exist ".venv\Scripts\python.exe" (
 echo.
 echo Activating venv...
 call ".venv\Scripts\activate.bat"
-echo.
-py -m pip install --upgrade pip -qq 2>nul
 
 REM Check if first-time setup (easyocr not installed yet)
 set FIRST_RUN=0
@@ -39,19 +37,39 @@ py -c "import easyocr" >nul 2>&1
 if errorlevel 1 set FIRST_RUN=1
 
 if %FIRST_RUN%==1 (
+  echo.
   echo First-time setup: downloading OCR engine.
   echo This only happens once and may take a few minutes.
   echo.
+  py -m pip install --upgrade pip -qq 2>nul
   py -m pip install -r requirements.txt
+  if errorlevel 1 (
+    echo.
+    echo ERROR: Failed to install requirements.
+    pause
+    exit /b 1
+  )
 ) else (
-  echo Installing requirements...
-  py -m pip install -r requirements.txt -qq
-)
-if errorlevel 1 (
-  echo.
-  echo ERROR: Failed to install requirements.
-  pause
-  exit /b 1
+  REM Only install if requirements.txt changed since last install
+  set NEEDS_INSTALL=0
+  if not exist ".venv\.req_hash" set NEEDS_INSTALL=1
+  if !NEEDS_INSTALL!==0 (
+    certutil -hashfile requirements.txt MD5 2>nul | findstr /v ":" > "%TEMP%\req_hash_new.txt"
+    fc /b ".venv\.req_hash" "%TEMP%\req_hash_new.txt" >nul 2>&1
+    if errorlevel 1 set NEEDS_INSTALL=1
+  )
+  if !NEEDS_INSTALL!==1 (
+    echo Installing requirements...
+    py -m pip install --upgrade pip -qq 2>nul
+    py -m pip install -r requirements.txt -qq
+    if errorlevel 1 (
+      echo.
+      echo ERROR: Failed to install requirements.
+      pause
+      exit /b 1
+    )
+    certutil -hashfile requirements.txt MD5 2>nul | findstr /v ":" > ".venv\.req_hash"
+  )
 )
 echo Done!
 
