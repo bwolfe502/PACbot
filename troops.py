@@ -251,7 +251,7 @@ def heal_all(device):
         logged_tap(device, 1000, 200, "heal_close")
         timed_wait(device, lambda: False, 2, "heal_close_settle")
     else:
-        log.warning("Heal loop hit safety cap (%d iterations) — possible stuck UI", max_heals)
+        log.warning("Heal loop hit safety cap (%d iterations) — possible stuck UI", config.MAX_HEAL_ITERATIONS)
         save_failure_screenshot(device, "heal_stuck_ui")
 
     if healed_any:
