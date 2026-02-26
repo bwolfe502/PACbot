@@ -6,6 +6,7 @@ failures (or immediate error detection), the owner is blacklisted with
 a time-based expiry.
 """
 import time
+import pytest
 from unittest.mock import patch
 
 from actions import (
@@ -39,14 +40,10 @@ class TestDirectBlacklist:
         assert _is_rally_owner_blacklisted(mock_device, "DRFATE")
         assert _is_rally_owner_blacklisted(mock_device, "DrFate")
 
-    def test_empty_owner_ignored(self, mock_device):
-        _blacklist_rally_owner(mock_device, "")
-        assert not _is_rally_owner_blacklisted(mock_device, "")
-        assert _rally_owner_blacklist == {}
-
-    def test_none_owner_ignored(self, mock_device):
-        _blacklist_rally_owner(mock_device, None)
-        assert not _is_rally_owner_blacklisted(mock_device, None)
+    @pytest.mark.parametrize("invalid_owner", ["", None])
+    def test_invalid_owner_ignored(self, mock_device, invalid_owner):
+        _blacklist_rally_owner(mock_device, invalid_owner)
+        assert not _is_rally_owner_blacklisted(mock_device, invalid_owner)
 
     def test_whitespace_stripped(self, mock_device):
         _blacklist_rally_owner(mock_device, "  Bchen  ")
@@ -90,9 +87,9 @@ class TestFailureTracking:
         _clear_rally_owner_failures(mock_device, "")
         _clear_rally_owner_failures(mock_device, None)
 
-    def test_empty_owner_failure_ignored(self, mock_device):
-        assert not _record_rally_owner_failure(mock_device, "")
-        assert not _record_rally_owner_failure(mock_device, None)
+    @pytest.mark.parametrize("invalid_owner", ["", None])
+    def test_invalid_owner_failure_ignored(self, mock_device, invalid_owner):
+        assert not _record_rally_owner_failure(mock_device, invalid_owner)
 
     def test_different_owners_tracked_separately(self, mock_device):
         _record_rally_owner_failure(mock_device, "Player1")

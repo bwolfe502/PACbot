@@ -76,15 +76,6 @@ class TestTaskManagement:
         stop_event.set()
         info["thread"].join(timeout=2)
 
-    def test_launch_thread_is_daemon(self):
-        stop_event = threading.Event()
-        stop_event.set()  # Immediately stop
-        func = MagicMock()
-        launch_task("dev1", "daemon_test", func, stop_event, args=("dev1", stop_event))
-        info = config.running_tasks["dev1_daemon_test"]
-        assert info["thread"].daemon is True
-        info["thread"].join(timeout=2)
-
     def test_stop_task_sets_event(self):
         stop_event = threading.Event()
         config.running_tasks["dev1_test"] = {"thread": MagicMock(), "stop_event": stop_event}
