@@ -502,9 +502,17 @@ def create_gui():
     window.configure(bg=COLOR_BG)
 
     # Set window icon (title bar + taskbar)
-    icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.ico")
-    if os.path.isfile(icon_path):
-        window.iconbitmap(icon_path)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    if platform.system() == "Darwin":
+        # macOS: iconbitmap doesn't support .ico; use iconphoto with PNG instead
+        icon_png = os.path.join(script_dir, "icon.png")
+        if os.path.isfile(icon_png):
+            icon_img = tk.PhotoImage(file=icon_png)
+            window.iconphoto(True, icon_img)
+    else:
+        icon_path = os.path.join(script_dir, "icon.ico")
+        if os.path.isfile(icon_path):
+            window.iconbitmap(icon_path)
 
     PAD_X = 16
 
