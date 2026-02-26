@@ -92,6 +92,7 @@ class TestStatsTrackerNavFailure:
 class TestStatsTrackerSummary:
     def test_empty(self):
         tracker = StatsTracker()
+        tracker._data.clear()  # clear any seeded data from previous sessions
         assert "No activity" in tracker.summary()
 
     def test_with_data(self):

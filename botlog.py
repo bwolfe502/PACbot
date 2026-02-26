@@ -22,6 +22,19 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_DIR = os.path.join(SCRIPT_DIR, "logs")
 STATS_DIR = os.path.join(SCRIPT_DIR, "stats")
 
+# ============================================================
+# ADAPTIVE BUDGET CONFIGURATION
+# ============================================================
+# Controls how timed_wait() dynamically shortens sleep budgets
+# based on observed transition times per device.  Starts at full
+# budgets and gradually tightens as the bot learns each machine.
+
+MIN_ADAPTIVE_SAMPLES = 8            # successful samples before adapting
+MIN_ADAPTIVE_SUCCESS_RATE = 0.8     # condition-met rate to trust data
+ADAPTIVE_HEADROOM = 1.3             # safety multiplier above P90
+ADAPTIVE_FLOOR_FRACTION = 0.4       # never below 40% of original budget
+ADAPTIVE_MIN_BUDGET_S = 0.3         # absolute floor in seconds
+
 # Reference to the console handler so set_console_verbose() can adjust it
 _console_handler = None
 
@@ -132,7 +145,50 @@ class StatsTracker:
         self._lock = Lock()
         self._session_start = datetime.now()
         self._data = {}
+        self._load_previous_session()
         self._start_auto_save()
+
+    def _load_previous_session(self):
+        """Seed transition_times from the most recent session file.
+
+        Enables adaptive budgets to work immediately on session 2+
+        using timing data accumulated in prior sessions.  Only loads
+        transition_times — other metrics start fresh each session.
+        """
+        _log = logging.getLogger("botlog")
+        try:
+            if not os.path.isdir(STATS_DIR):
+                return
+            files = sorted(
+                [f for f in os.listdir(STATS_DIR)
+                 if f.startswith("session_") and f.endswith(".json")],
+                key=lambda f: os.path.getmtime(os.path.join(STATS_DIR, f)),
+                reverse=True,
+            )
+            if not files:
+                return
+            filepath = os.path.join(STATS_DIR, files[0])
+            with open(filepath, "r") as f:
+                prev = json.load(f)
+            with self._lock:
+                for device, device_data in prev.get("devices", {}).items():
+                    prev_tt = device_data.get("transition_times", {})
+                    if not prev_tt:
+                        continue
+                    self._ensure_device(device)
+                    transitions = self._data[device]["transition_times"]
+                    for label, info in prev_tt.items():
+                        if label in transitions:
+                            continue  # current session already has data
+                        transitions[label] = {
+                            "count": info.get("count", 0),
+                            "met_count": info.get("met_count", 0),
+                            "budgeted_s": info.get("budgeted_s", 0),
+                            "samples": list(info.get("samples", [])),
+                        }
+            _log.info("Loaded transition data from previous session: %s", files[0])
+        except Exception as e:
+            _log.debug("Could not load previous session data: %s", e)
 
     def _start_auto_save(self):
         """Periodically save stats to disk so data isn't lost on crash/kill."""
@@ -244,6 +300,42 @@ class StatsTracker:
                 return None
             return (entry["min_x"], entry["min_y"],
                     entry["max_x"], entry["max_y"], entry["count"])
+
+    def get_adaptive_budget(self, device, label, original_budget_s):
+        """Return an adaptive budget for a timed_wait label based on history.
+
+        Uses P90 of observed times × headroom.  Returns the original budget
+        when there isn't enough data, the success rate is too low, or the
+        label is a pure delay (lambda: False — met_count stays 0).
+        """
+        with self._lock:
+            if device not in self._data:
+                return original_budget_s
+            entry = self._data[device].get("transition_times", {}).get(label)
+            if entry is None:
+                return original_budget_s
+            # Pure delays never have met_count > 0 — leave them alone
+            if entry.get("met_count", 0) == 0:
+                return original_budget_s
+            samples = entry.get("samples", [])
+            if len(samples) < MIN_ADAPTIVE_SAMPLES:
+                return original_budget_s
+            # Success rate gate — don't tighten if conditions are failing
+            success_rate = entry["met_count"] / max(1, entry["count"])
+            if success_rate < MIN_ADAPTIVE_SUCCESS_RATE:
+                return original_budget_s
+            # P90 + headroom
+            sorted_s = sorted(samples)
+            p90_idx = int(len(sorted_s) * 0.9)
+            p90 = sorted_s[min(p90_idx, len(sorted_s) - 1)]
+            adaptive = p90 * ADAPTIVE_HEADROOM
+            # Floors
+            floor = max(original_budget_s * ADAPTIVE_FLOOR_FRACTION,
+                        ADAPTIVE_MIN_BUDGET_S)
+            adaptive = max(adaptive, floor)
+            # Cap — never exceed original
+            adaptive = min(adaptive, original_budget_s)
+            return round(adaptive, 3)
 
     def record_nav_failure(self, device, from_screen, to_screen):
         """Record a navigation failure."""
