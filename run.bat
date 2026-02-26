@@ -7,6 +7,26 @@ set PYTHONIOENCODING=utf-8
 echo ============================
 echo PACbot - Setup + Run
 echo ============================
+
+REM Download ADB if missing (fallback for source installs without bundled binaries)
+if not exist "platform-tools\adb.exe" (
+  echo.
+  echo Downloading ADB platform-tools...
+  powershell -Command "Invoke-WebRequest -Uri 'https://dl.google.com/android/repository/platform-tools-latest-windows.zip' -OutFile '%TEMP%\platform-tools.zip'"
+  if errorlevel 1 (
+    echo WARNING: Failed to download platform-tools. ADB may not work.
+  ) else (
+    powershell -Command "Expand-Archive -Path '%TEMP%\platform-tools.zip' -DestinationPath '%TEMP%\pt-extract' -Force"
+    if not exist "platform-tools" mkdir "platform-tools"
+    copy /Y "%TEMP%\pt-extract\platform-tools\adb.exe" "platform-tools\" >nul
+    copy /Y "%TEMP%\pt-extract\platform-tools\AdbWinApi.dll" "platform-tools\" >nul
+    copy /Y "%TEMP%\pt-extract\platform-tools\AdbWinUsbApi.dll" "platform-tools\" >nul
+    rd /s /q "%TEMP%\pt-extract" 2>nul
+    del "%TEMP%\platform-tools.zip" 2>nul
+    echo Done!
+  )
+)
+
 REM Check Python
 py -V >nul 2>&1
 if errorlevel 1 (

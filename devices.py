@@ -11,21 +11,84 @@ _log = get_logger("devices")
 # ============================================================
 
 def auto_connect_emulators():
-    """Try to adb-connect known emulator ports so they show up in 'adb devices'.
+    """Try to adb-connect emulator ports so they show up in 'adb devices'.
 
-    Only runs on macOS/Linux — Windows emulators register with ADB automatically,
-    and forcing adb connect there creates duplicate device entries.
+    On Windows: inspects running emulator processes to discover their real ADB
+    ports (BlueStacks assigns non-sequential ports like 5635 that aren't in
+    any predictable range).  Only connects ports that ADB doesn't already see.
+
+    On macOS/Linux: probes the well-known ports in EMULATOR_PORTS.
     """
     if platform.system() == "Windows":
-        _log.debug("Auto-connect skipped on Windows (emulators self-register)")
+        return _auto_connect_windows()
+
+    return _auto_connect_by_ports()
+
+
+def _auto_connect_windows():
+    """Windows: find emulator ADB ports from running processes via psutil."""
+    try:
+        import psutil
+    except ImportError:
+        _log.debug("psutil not available — falling back to port scan")
+        return _auto_connect_by_ports()
+
+    # Collect ADB ports already known to the server
+    existing = get_devices()
+    known_ports = set()
+    for d in existing:
+        if d.startswith("emulator-"):
+            try:
+                known_ports.add(int(d.split("-")[1]) + 1)
+            except (IndexError, ValueError):
+                pass
+        elif ":" in d:
+            try:
+                known_ports.add(int(d.split(":")[1]))
+            except (IndexError, ValueError):
+                pass
+
+    # Process name patterns for supported emulators
+    emu_names = ["hd-player", "bluestacks", "mumuplayer",
+                 "mumuvmmheadless", "nemuheadless", "nemuplayer"]
+
+    discovered_ports = set()
+    for proc in psutil.process_iter(["pid", "name"]):
+        pname = (proc.info["name"] or "").lower()
+        if not any(n in pname for n in emu_names):
+            continue
+        try:
+            for conn in proc.net_connections(kind="tcp4"):
+                if conn.status == "LISTEN" and conn.laddr.ip == "127.0.0.1":
+                    discovered_ports.add(conn.laddr.port)
+        except (psutil.AccessDenied, psutil.NoSuchProcess):
+            pass
+
+    new_ports = discovered_ports - known_ports
+    if not new_ports:
+        if existing:
+            _log.debug("Auto-connect: all %d emulator(s) already visible", len(existing))
+        else:
+            _log.info("Auto-connect: no running emulator processes found")
         return []
 
+    _log.info("Discovered %d new emulator port(s): %s", len(new_ports),
+              ", ".join(str(p) for p in sorted(new_ports)))
+    return _connect_ports(new_ports)
+
+
+def _auto_connect_by_ports():
+    """macOS/Linux: probe well-known emulator ports from EMULATOR_PORTS."""
     all_ports = set()
     for ports in EMULATOR_PORTS.values():
         all_ports.update(ports)
+    return _connect_ports(all_ports)
 
+
+def _connect_ports(ports):
+    """Try ``adb connect`` on each port, return list of successfully connected addresses."""
     connected = []
-    for port in sorted(all_ports):
+    for port in sorted(ports):
         addr = f"127.0.0.1:{port}"
         try:
             result = subprocess.run(
@@ -33,25 +96,52 @@ def auto_connect_emulators():
                 capture_output=True, text=True, timeout=3
             )
             output = result.stdout.strip()
-            # "connected to" or "already connected" means success
             if "connected" in output.lower():
                 connected.append(addr)
                 _log.debug("Connected: %s", addr)
         except (subprocess.TimeoutExpired, Exception):
-            pass  # Port not listening, skip silently
+            pass
 
     if connected:
         _log.info("Auto-connect found %d emulator(s)", len(connected))
     else:
-        _log.info("Auto-connect: no emulators found on known ports")
+        _log.info("Auto-connect: no emulators found on probed ports")
     return connected
 
 def get_devices():
-    """Get list of all connected ADB devices."""
+    """Get list of all connected ADB devices, with duplicates removed.
+
+    ADB can show the same emulator twice — e.g. ``emulator-5554`` (auto-registered)
+    and ``127.0.0.1:5555`` (from ``adb connect``).  The convention is that
+    ``emulator-N`` uses ADB port ``N+1``, so we drop any ``127.0.0.1:<port>``
+    entry whose port matches an existing ``emulator-<port-1>`` entry.
+    """
     try:
         result = subprocess.run([adb_path, "devices"], capture_output=True, text=True, timeout=10)
         lines = result.stdout.strip().split('\n')[1:]  # Skip "List of devices attached"
-        devices = [line.split()[0] for line in lines if line.strip() and 'device' in line]
+        raw = [line.split()[0] for line in lines if line.strip() and 'device' in line]
+
+        # Build set of ADB ports claimed by emulator-N entries (port = N+1)
+        emulator_ports = set()
+        for d in raw:
+            if d.startswith("emulator-"):
+                try:
+                    emulator_ports.add(int(d.split("-")[1]) + 1)
+                except (IndexError, ValueError):
+                    pass
+
+        # Filter out 127.0.0.1:<port> duplicates
+        devices = []
+        for d in raw:
+            if ":" in d and d.startswith("127.0.0.1:"):
+                try:
+                    port = int(d.split(":")[1])
+                    if port in emulator_ports:
+                        _log.debug("Dropping duplicate %s (same as emulator-%d)", d, port - 1)
+                        continue
+                except (IndexError, ValueError):
+                    pass
+            devices.append(d)
 
         _log.info("Found %d device(s): %s", len(devices), ", ".join(devices) if devices else "(none)")
         return devices

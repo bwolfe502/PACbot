@@ -5,8 +5,11 @@
 __pycache__/
 *.pyc
 
-# Android platform tools (large binaries)
-platform-tools/
+# Platform tools — keep adb binaries, ignore the rest
+platform-tools/*
+!platform-tools/adb.exe
+!platform-tools/AdbWinApi.dll
+!platform-tools/AdbWinUsbApi.dll
 
 # macOS
 .DS_Store
