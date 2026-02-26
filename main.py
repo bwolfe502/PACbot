@@ -664,10 +664,6 @@ def create_gui():
     btn_row.pack(pady=(2, 0))
     tk.Button(btn_row, text="Refresh", command=lambda: (auto_connect_emulators(), refresh_device_list()),
               font=(_FONT_FAMILY, 8)).pack(side=tk.LEFT, padx=4)
-    # Auto-Connect button hidden (crashes on click) but function still available
-    # tk.Button(btn_row, text="Auto-Connect",
-    #           command=lambda: (auto_connect_emulators(), refresh_device_list()),
-    #           font=(_FONT_FAMILY, 8)).pack(side=tk.LEFT, padx=4)
 
     def get_active_devices():
         return [d for d in devices if device_checkboxes.get(d, tk.BooleanVar(value=False)).get()]
@@ -1460,7 +1456,7 @@ def create_gui():
         tk.Button(parent, text=name, command=do_run_once,
                   font=(_FONT_FAMILY, 9)).pack(pady=2, fill=tk.X)
 
-    # Farm tab (Rally Titan removed — now a top-level toggle)
+    # Farm tab (Rally Titan is a top-level toggle, not listed here)
     add_task_row(farm_tab, "Rally Evil Guard", 30)
     add_task_row(farm_tab, "Join Titan Rally", 30)
     add_task_row(farm_tab, "Join Evil Guard Rally", 30)
