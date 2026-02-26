@@ -75,16 +75,20 @@ SCREEN_REGIONS = {
 }
 
 # Popup templates that overlay the screen and block taps.
-# Checked by check_screen() before screen matching — auto-dismissed if found.
 # Format: (template_path, log_name, match_threshold)
 #
-# NOTE: close_x.png is intentionally NOT here — it appears on too many
-# legitimate screens (rally dialog, search overlay, troop detail) and
-# auto-dismissing it disrupts normal flows.  When the bot is truly stuck
-# on an unknown screen, _recover_to_known_screen() will try close_x as
-# its first recovery strategy instead.
-POPUP_DISMISS_TEMPLATES = [
+# Two lists with different timing:
+# - CRITICAL: checked BEFORE screen matching (blocks everything — must dismiss immediately)
+# - SOFT:    checked AFTER screen matching, skipped on MAP screen.
+#            close_x.png lives here because on MAP it appears as part of normal
+#            flows (rally dialog, AP window, search overlay) that must NOT be
+#            dismissed.  On other screens (td_screen overlays, unexpected popups,
+#            unknown screens) it's safe and often necessary to dismiss.
+_POPUP_CRITICAL = [
     ("elements/cancel.png", "QUIT DIALOG", 0.8),
+]
+_POPUP_SOFT = [
+    ("elements/close_x.png", "POPUP (red X)", 0.85),
 ]
 
 def check_screen(device):
@@ -113,8 +117,8 @@ def check_screen(device):
                         info["stop_event"].set()
                 return Screen.LOGGED_OUT
 
-        # Check for popups that overlay the screen and block all taps.
-        for tpl_path, popup_name, threshold in POPUP_DISMISS_TEMPLATES:
+        # Check for critical popups that block everything (dismiss immediately).
+        for tpl_path, popup_name, threshold in _POPUP_CRITICAL:
             tpl = get_template(tpl_path)
             if tpl is None:
                 continue
@@ -166,6 +170,7 @@ def check_screen(device):
                                sorted(scores.items(), key=lambda x: x[1], reverse=True))
         log.debug("Screen scores: %s", score_str)
 
+        identified = None
         if best_val > config.SCREEN_MATCH_THRESHOLD and best_name is not None:
             # Record hit position for region analysis
             h, w = best_hw
@@ -176,9 +181,49 @@ def check_screen(device):
             stats.record_template_hit(
                 device, f"{best_name}.png", cx, cy, best_val)
             log.debug("Screen identified: %s (%.0f%%)", best_name, best_val * 100)
-            return best_name
+            identified = best_name
 
-        # Unknown screen — save debug screenshot automatically
+        # Soft popup dismiss (close_x) — try on any screen EXCEPT map_screen.
+        # On MAP, close_x appears as part of normal flows (rally dialog, AP
+        # window, search overlay) and must NOT be auto-dismissed.
+        # On other screens (td_screen overlays, unknown popups) it's safe.
+        if identified != Screen.MAP:
+            for tpl_path, popup_name, threshold in _POPUP_SOFT:
+                tpl = get_template(tpl_path)
+                if tpl is None:
+                    continue
+                result = cv2.matchTemplate(screen, tpl, cv2.TM_CCOEFF_NORMED)
+                _, tpl_val, _, tpl_loc = cv2.minMaxLoc(result)
+                if tpl_val > threshold:
+                    h, w = tpl.shape[:2]
+                    cx = tpl_loc[0] + w // 2
+                    cy = tpl_loc[1] + h // 2
+                    log.info("*** %s detected (%.0f%%) on %s — dismissing ***",
+                             popup_name, tpl_val * 100,
+                             identified or "unknown screen")
+                    adb_tap(device, cx, cy)
+                    time.sleep(1.5)
+                    # Re-check screen after dismissal
+                    screen = load_screenshot(device)
+                    if screen is None:
+                        return identified or Screen.UNKNOWN
+                    # Re-run screen identification on the new screenshot
+                    for sn in SCREEN_TEMPLATES:
+                        el = get_template(f"elements/{sn}.png")
+                        if el is None:
+                            continue
+                        region = SCREEN_REGIONS.get(sn)
+                        sa = screen[region[1]:region[3], region[0]:region[2]] if region else screen
+                        res = cv2.matchTemplate(sa, el, cv2.TM_CCOEFF_NORMED)
+                        _, mv, _, _ = cv2.minMaxLoc(res)
+                        if mv > config.SCREEN_MATCH_THRESHOLD:
+                            log.info("After popup dismiss: now on %s (%.0f%%)", sn, mv * 100)
+                            return sn
+                    break  # Only try one soft popup per cycle
+
+        if identified:
+            return identified
+
         log.warning("Unknown screen detected (best: %s at %.0f%%)", best_name, best_val * 100)
         _save_debug_screenshot(device, "unknown_screen", screen)
         return Screen.UNKNOWN
