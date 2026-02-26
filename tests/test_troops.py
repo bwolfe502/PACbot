@@ -711,9 +711,13 @@ class TestCaptureDepartingPortrait:
         for y in range(center_y - 15, center_y + 15):
             for x in range(_DEPART_TRIANGLE_X1 + 5, _DEPART_TRIANGLE_X2 - 5):
                 screen[y, x] = (255, 255, 255)
-        # Distinctive portrait in the portrait zone
+        # Distinctive portrait in the portrait zone — use a non-uniform
+        # pattern so TM_CCOEFF_NORMED can match it (uniform patches have
+        # zero variance and give NaN/0 scores).
         card_top = center_y - _CARD_HEIGHT // 2
-        screen[card_top + 5:card_top + 65, 45:120] = (50, 100, 150)
+        rng = np.random.RandomState(42)
+        portrait_data = rng.randint(0, 256, (60, 75, 3), dtype=np.uint8)
+        screen[card_top + 5:card_top + 65, 45:120] = portrait_data
         mock_ss.return_value = screen
 
         result = capture_departing_portrait("test_dev", screen=screen)
@@ -721,7 +725,7 @@ class TestCaptureDepartingPortrait:
         slot_id, portrait = result
         assert slot_id == 1
         assert portrait.shape == (60, 75, 3)
-        assert np.all(portrait == (50, 100, 150))
+        assert np.all(portrait == portrait_data)
         # Verify it was stored
         stored = identify_troop("test_dev", portrait)
         assert stored == 1

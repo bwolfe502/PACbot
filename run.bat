@@ -88,4 +88,4 @@ if errorlevel 1 (
 )
 echo.
 echo PACbot exited.
-pause
+exit /b 0

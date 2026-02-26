@@ -225,9 +225,8 @@ def _ocr_error_banner(screen):
     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
     gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
 
-    from vision import _get_ocr_reader
-    reader = _get_ocr_reader()
-    results = reader.readtext(gray, detail=0)
+    from vision import ocr_read
+    results = ocr_read(gray, detail=0)
     text = " ".join(results).strip().lower()
     if not text:
         return ""
@@ -276,9 +275,8 @@ def _ocr_quest_rows(device):
     # Save debug crop
     cv2.imwrite(os.path.join(DEBUG_DIR, "aq_ocr_crop.png"), gray)
 
-    from vision import _get_ocr_reader
-    reader = _get_ocr_reader()
-    results = reader.readtext(gray, detail=0)
+    from vision import ocr_read
+    results = ocr_read(gray, detail=0)
     raw_text = " ".join(results)
     log.debug("Quest OCR raw: %s", raw_text)
 
@@ -1055,9 +1053,8 @@ def join_rally(rally_types, device, skip_heal=False):
         gray = cv2.cvtColor(label_crop, cv2.COLOR_BGR2GRAY)
         gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
 
-        from vision import _get_ocr_reader
-        reader = _get_ocr_reader()
-        results = reader.readtext(gray, detail=0)
+        from vision import ocr_read
+        results = ocr_read(gray, detail=0)
         return " ".join(results).lower()
 
     def _ocr_rally_owner(screen, join_y):
@@ -1078,9 +1075,8 @@ def join_rally(rally_types, device, skip_heal=False):
         gray = cv2.cvtColor(owner_crop, cv2.COLOR_BGR2GRAY)
         gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
 
-        from vision import _get_ocr_reader
-        reader = _get_ocr_reader()
-        results = reader.readtext(gray, detail=0)
+        from vision import ocr_read
+        results = ocr_read(gray, detail=0)
         raw = " ".join(results).strip()
 
         # Extract owner name from "{Name}'s Troop" pattern
@@ -1429,9 +1425,8 @@ def _read_ap_from_menu(device):
     cv2.imwrite(os.path.join(DEBUG_DIR, "ap_menu_crop.png"), thresh)
     log.debug("AP menu OCR: saved debug/ap_menu_crop.png (region %s)", _AP_MENU_REGION)
 
-    from vision import _get_ocr_reader
-    reader = _get_ocr_reader()
-    results = reader.readtext(thresh, allowlist="0123456789/", detail=0)
+    from vision import ocr_read
+    results = ocr_read(thresh, allowlist="0123456789/", detail=0)
     raw = " ".join(results).strip()
     log.debug("AP menu OCR raw: '%s'", raw)
 
@@ -1452,9 +1447,8 @@ def _read_gem_cost(device):
     img = screen[y1:y2, x1:x2]
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-    from vision import _get_ocr_reader
-    reader = _get_ocr_reader()
-    results = reader.readtext(gray, detail=0)
+    from vision import ocr_read
+    results = ocr_read(gray, detail=0)
     raw = " ".join(results).strip()
     log.debug("Gem confirmation OCR: '%s'", raw)
     # Look for "Spend X Gem" pattern
@@ -1684,29 +1678,49 @@ def rally_titan(device):
 
     # Tap SEARCH button to open rally menu
     logged_tap(device, 900, 1800, "titan_search_btn")
-    timed_wait(device, lambda: False, 1, "titan_search_menu_open")
 
-    # Tap RALLY tab (rightmost tab in the search menu)
-    logged_tap(device, 850, 560, "titan_rally_tab")
-    timed_wait(device, lambda: False, 1, "titan_rally_tab_load")
+    # Wait for rally menu to open — check if titan select is already visible
+    # (may already be on rally tab from a previous search)
+    found_select = timed_wait(
+        device,
+        lambda: find_image(load_screenshot(device), "rally_titan_select.png", threshold=0.5) is not None,
+        1.5, "titan_search_menu_open")
+
+    if not found_select:
+        # Titan select not visible yet — need to tap rally tab
+        logged_tap(device, 850, 560, "titan_rally_tab")
+        timed_wait(
+            device,
+            lambda: find_image(load_screenshot(device), "rally_titan_select.png", threshold=0.5) is not None,
+            1.5, "titan_rally_tab_load")
 
     if not wait_for_image_and_tap("rally_titan_select.png", device, timeout=5, threshold=0.65):
         log.warning("Failed to find Titan select")
         return False
-    timed_wait(device, lambda: False, 1, "titan_select_to_search")
+    timed_wait(
+        device,
+        lambda: find_image(load_screenshot(device), "search.png", threshold=0.6) is not None,
+        1, "titan_select_to_search")
 
     if not wait_for_image_and_tap("search.png", device, timeout=5, threshold=0.65):
         log.warning("Failed to find Search button")
         return False
-    timed_wait(device, lambda: False, 1, "titan_search_complete")
+    timed_wait(
+        device,
+        lambda: check_screen(device) == Screen.MAP,
+        1, "titan_search_complete")
 
     # Select titan on map and confirm
     logged_tap(device, 540, 900, "titan_on_map")
-    timed_wait(device, lambda: False, 1, "titan_on_map_select")
+    timed_wait(
+        device,
+        lambda: find_image(load_screenshot(device), "depart.png", threshold=0.6) is not None,
+        1.5, "titan_on_map_select")
     logged_tap(device, 420, 1400, "titan_confirm")
-    timed_wait(device, lambda: False, 1, "titan_confirm_to_depart")
 
-    if tap_image("depart.png", device):
+    # Wait for deployment panel — poll for depart button rather than single check,
+    # because the panel can take a moment to fully render
+    if wait_for_image_and_tap("depart.png", device, timeout=5):
         log.info("Titan rally started!")
         return True
     else:
@@ -1738,12 +1752,20 @@ def _search_eg_center(device):
         return False
 
     logged_tap(device, 900, 1800, "eg_search_btn")
-    timed_wait(device, lambda: find_image(load_screenshot(device), "rally_eg_select.png", threshold=0.5) is not None,
-               1, "eg_search_menu_open")
 
-    logged_tap(device, 850, 560, "eg_rally_tab")
-    timed_wait(device, lambda: find_image(load_screenshot(device), "rally_eg_select.png", threshold=0.6) is not None,
-               1, "eg_rally_tab_load")
+    # Wait for rally menu — check if EG select is already visible
+    found_select = timed_wait(
+        device,
+        lambda: find_image(load_screenshot(device), "rally_eg_select.png", threshold=0.5) is not None,
+        1.5, "eg_search_menu_open")
+
+    if not found_select:
+        # EG select not visible yet — tap rally tab
+        logged_tap(device, 850, 560, "eg_rally_tab")
+        timed_wait(
+            device,
+            lambda: find_image(load_screenshot(device), "rally_eg_select.png", threshold=0.6) is not None,
+            1.5, "eg_rally_tab_load")
 
     if not wait_for_image_and_tap("rally_eg_select.png", device, timeout=5, threshold=0.65):
         log.warning("Failed to find Evil Guard select")
