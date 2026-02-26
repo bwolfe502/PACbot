@@ -77,9 +77,14 @@ SCREEN_REGIONS = {
 # Popup templates that overlay the screen and block taps.
 # Checked by check_screen() before screen matching — auto-dismissed if found.
 # Format: (template_path, log_name, match_threshold)
+#
+# NOTE: close_x.png is intentionally NOT here — it appears on too many
+# legitimate screens (rally dialog, search overlay, troop detail) and
+# auto-dismissing it disrupts normal flows.  When the bot is truly stuck
+# on an unknown screen, _recover_to_known_screen() will try close_x as
+# its first recovery strategy instead.
 POPUP_DISMISS_TEMPLATES = [
-    ("elements/cancel.png", "QUIT DIALOG", 0.8),    # "Are you sure you want to leave?"
-    ("elements/close_x.png", "POPUP (red X)", 0.85), # review popups, misc dialogs
+    ("elements/cancel.png", "QUIT DIALOG", 0.8),
 ]
 
 def check_screen(device):
