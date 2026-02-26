@@ -1004,7 +1004,7 @@ def join_rally(rally_types, device, skip_heal=False):
             # Try close button first
             tap_image("close_x.png", device)
             timed_wait(device, lambda: check_screen(device) == Screen.WAR,
-                       0.5, "jr_backout_close_x")
+                       1.5, "jr_backout_close_x")
 
             # Check where we are before continuing
             current = check_screen(device)

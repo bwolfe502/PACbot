@@ -375,7 +375,7 @@ def navigate(target_screen, device, _depth=0):
                 return False
             if not tap_image("bl_button.png", device):
                 _save_debug_screenshot(device, "bl_button_not_found")
-        return _verify_screen(Screen.BATTLE_LIST, device)
+        return _verify_screen(Screen.BATTLE_LIST, device, wait_time=2.5)
 
     # To aq_screen
     if target_screen == Screen.ALLIANCE_QUEST:
@@ -383,7 +383,7 @@ def navigate(target_screen, device, _depth=0):
             if not navigate(Screen.BATTLE_LIST, device, _depth=_depth + 1):
                 return False
         tap("quest_button", device)
-        return _verify_screen(Screen.ALLIANCE_QUEST, device)
+        return _verify_screen(Screen.ALLIANCE_QUEST, device, wait_time=2.0)
 
     # To war_screen
     if target_screen == Screen.WAR:
