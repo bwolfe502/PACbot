@@ -411,7 +411,9 @@ def _claim_quest_rewards(device, stop_check=None):
         rewards_claimed += 1
         if stop_check and stop_check():
             return -1
-        time.sleep(1)
+        timed_wait(device,
+                   lambda: check_screen(device) == Screen.ALLIANCE_QUEST,
+                   1, "aq_claim_settle")
     if rewards_claimed:
         log.info("Claimed %d quest reward(s)", rewards_claimed)
     return rewards_claimed
@@ -637,19 +639,20 @@ def phantom_clash_attack(device):
 
     # Determine if we need to attack based on troop statuses
     screen = load_screenshot(device)
-    deployed = 5 - troops_avail(device)
-    if deployed >= 5:
+    total = config.DEVICE_TOTAL_TROOPS.get(device, 5)
+    deployed = total - troops_avail(device)
+    if deployed >= total:
         # All troops out — check if any can attack (stationing or home)
         has_stationing = find_image(screen, "statuses/stationing.png") is not None
         has_battling = find_image(screen, "statuses/battling.png") is not None
         has_marching = find_image(screen, "statuses/marching.png") is not None
         has_returning = find_image(screen, "statuses/returning.png") is not None
         if not has_stationing:
-            log.info("All 5 troops deployed and none stationing — skipping attack")
+            log.info("All %d troops deployed and none stationing — skipping attack", total)
             return
-        log.info("5 troops deployed but stationing troop found — proceeding to attack")
+        log.info("All troops deployed but stationing troop found — proceeding to attack")
     else:
-        log.info("%d/5 troops deployed — proceeding to attack", deployed)
+        log.info("%d/%d troops deployed — proceeding to attack", deployed, total)
 
     # Check for returning troops and drag to recall (skip if attack window already open)
     if not find_image(screen, "esb_middle_attack_window.png"):
@@ -810,6 +813,33 @@ def _find_green_pixel(screen, target_color, center_x=521, center_y=674, box_size
     diff = np.abs(region - np.array(target_color))
     matches = np.all(diff < tolerance, axis=2)
     return np.any(matches)
+
+# Player name colors (BGR) for detecting other players at Evil Guards
+_PLAYER_NAME_BLUE = (255, 150, 66)    # #4296FF
+_PLAYER_TAG_GOLD  = (115, 215, 255)   # #FFD773
+
+def _detect_player_at_eg(screen, x, y, box_size=200, tolerance=25):
+    """Check for another player's name near a dead priest position.
+
+    Player names appear in blue (#4296FF) with gold (#FFD773) alliance tags.
+    Both colors must be present in the region to confirm a player is there.
+    Returns True if another player is detected.
+    """
+    h, w = screen.shape[:2]
+    x0 = max(x - box_size // 2, 0)
+    x1 = min(x + box_size // 2, w)
+    y0 = max(y - box_size // 2, 0)
+    y1 = min(y + box_size // 2, h)
+
+    region = screen[y0:y1:3, x0:x1:3].astype(np.int16)
+
+    blue_diff = np.abs(region - np.array(_PLAYER_NAME_BLUE))
+    blue_matches = np.sum(np.all(blue_diff < tolerance, axis=2))
+
+    gold_diff = np.abs(region - np.array(_PLAYER_TAG_GOLD))
+    gold_matches = np.sum(np.all(gold_diff < tolerance, axis=2))
+
+    return blue_matches >= 5 and gold_matches >= 3
 
 @timed_action("teleport")
 def teleport(device):
@@ -975,7 +1005,8 @@ def join_rally(rally_types, device, skip_heal=False):
         for attempt in range(3):
             # Try close button first
             tap_image("close_x.png", device)
-            time.sleep(0.5)
+            timed_wait(device, lambda: check_screen(device) == Screen.WAR,
+                       0.5, "jr_backout_close_x")
 
             # Check where we are before continuing
             current = check_screen(device)
@@ -1142,7 +1173,7 @@ def join_rally(rally_types, device, skip_heal=False):
                     h, w = join_btn.shape[:2]
                     log.debug("Clicking join at (%d, %d)", join_x + w // 2, join_y + h // 2)
                     adb_tap(device, join_x + w // 2, join_y + h // 2)
-                    time.sleep(1)
+                    timed_wait(device, lambda: False, 1, "jr_detail_load")
 
                     # Wait for rally detail screen to load — check for depart.png
                     # as the definitive signal, then look for slot or full indicators
@@ -1221,10 +1252,11 @@ def join_rally(rally_types, device, skip_heal=False):
                 if not slot_found:
                     continue  # No slot for this type → try next rally_type
 
-                time.sleep(1)
+                timed_wait(device, lambda: False, 1, "jr_slot_to_depart")
                 if tap_image("depart.png", device):
                     # Verify join succeeded — game should transition to map screen
-                    time.sleep(2)
+                    timed_wait(device, lambda: check_screen(device) == Screen.MAP,
+                               2, "jr_depart_to_map")
                     current_screen = check_screen(device)
                     if current_screen != Screen.MAP:
                         log.warning("After depart, expected map_screen but on %s — navigating to map", current_screen)
@@ -1292,7 +1324,7 @@ def join_rally(rally_types, device, skip_heal=False):
             # No more matches at this scroll position
             return False
 
-    # Check current view first
+    # Check current view first (may already see a joinable rally)
     result = check_for_joinable_rally()
     if result not in (False, "lost"):
         return result
@@ -1314,16 +1346,9 @@ def join_rally(rally_types, device, skip_heal=False):
         _exit_war_screen()
         return False
 
-    # Scroll up to top
+    # Scroll up to top (scroll position persists between visits)
     adb_swipe(device, 560, 300, 560, 1400, 500)
-    time.sleep(1.5)  # Wait for scroll momentum to settle
-
-    result = check_for_joinable_rally()
-    if result not in (False, "lost"):
-        return result
-    if result == "lost":
-        log.warning("Lost war screen after failed join, aborting")
-        return False
+    timed_wait(device, lambda: False, 1.5, "jr_scroll_up_settle")
 
     # Scroll down and check 5 times
     for attempt in range(5):
@@ -1332,7 +1357,7 @@ def join_rally(rally_types, device, skip_heal=False):
             return False
         log.debug("Scroll down attempt %d/5", attempt + 1)
         adb_swipe(device, 560, 948, 560, 245, 500)
-        time.sleep(1.5)  # Wait for scroll momentum to settle
+        timed_wait(device, lambda: False, 1.5, "jr_scroll_down_settle")
         result = check_for_joinable_rally()
         if result not in (False, "lost"):
             return result
@@ -1659,27 +1684,27 @@ def rally_titan(device):
 
     # Tap SEARCH button to open rally menu
     logged_tap(device, 900, 1800, "titan_search_btn")
-    time.sleep(1)
+    timed_wait(device, lambda: False, 1, "titan_search_menu_open")
 
     # Tap RALLY tab (rightmost tab in the search menu)
     logged_tap(device, 850, 560, "titan_rally_tab")
-    time.sleep(1)
+    timed_wait(device, lambda: False, 1, "titan_rally_tab_load")
 
     if not wait_for_image_and_tap("rally_titan_select.png", device, timeout=5, threshold=0.65):
         log.warning("Failed to find Titan select")
         return False
-    time.sleep(1)
+    timed_wait(device, lambda: False, 1, "titan_select_to_search")
 
     if not wait_for_image_and_tap("search.png", device, timeout=5, threshold=0.65):
         log.warning("Failed to find Search button")
         return False
-    time.sleep(1)
+    timed_wait(device, lambda: False, 1, "titan_search_complete")
 
     # Select titan on map and confirm
     logged_tap(device, 540, 900, "titan_on_map")
-    time.sleep(1)
+    timed_wait(device, lambda: False, 1, "titan_on_map_select")
     logged_tap(device, 420, 1400, "titan_confirm")
-    time.sleep(1)
+    timed_wait(device, lambda: False, 1, "titan_confirm_to_depart")
 
     if tap_image("depart.png", device):
         log.info("Titan rally started!")
@@ -1882,6 +1907,17 @@ def rally_eg(device, stop_check=None):
         if check_screen(device) != Screen.MAP:
             log.warning("EG: not on map_screen after search — recovering")
             if not navigate(Screen.MAP, device):
+                return False
+
+    # Check all priest positions for another player's name before attacking.
+    # Player names show as blue text (#4296FF) with gold alliance tags (#FFD773).
+    screen = load_screenshot(device)
+    if screen is not None:
+        for idx, (px, py) in enumerate(EG_PRIEST_POSITIONS[:5]):
+            if _detect_player_at_eg(screen, px, py):
+                log.warning("EG occupied — another player detected near P%d (%d,%d), skipping",
+                            idx + 1, px, py)
+                save_failure_screenshot(device, f"eg_occupied_P{idx+1}", screen)
                 return False
 
     # Pre-load templates used in inner loops
@@ -2163,40 +2199,38 @@ def rally_eg(device, stop_check=None):
     # RETRY MISSED PRIESTS — nudge camera to clear UI occlusion
     # =====================================================
     # Priests near screen edges can be occluded by troop march panels
-    # or other UI.  Re-center on the EG, apply a slow camera drag to
-    # shift the priest toward screen center, then re-probe.
+    # or other UI.  Apply a slow camera drag to shift the priest toward
+    # screen center, then re-probe.  We reverse nudges instead of using
+    # _search_eg_center() which would navigate to a DIFFERENT evil guard.
     if missed_priests:
         log.info("Retrying %d missed priest(s) with camera nudge...", len(missed_priests))
+
+    center_x, center_y = 540, 960
+    accumulated_nudge_dx = 0
+    accumulated_nudge_dy = 0
 
     for (i, pnum, x, y) in missed_priests:
         if stop_check and stop_check():
             log.info("Retry aborted (stop requested)")
             return False
 
-        # Dismiss any open dialog before re-centering
+        # Dismiss any open dialog before nudging
         if attacks_completed > 0:
             dismiss_and_verify_map(pnum)
 
-        # Re-center camera on EG via search
-        if not _search_eg_center(device):
-            log.warning("P%d retry: re-center failed, assuming dead", pnum)
-            priests_dead += 1
-            continue
-
-        # Wait for search overlay to close, verify map screen
-        timed_wait(device, lambda: check_screen(device) == Screen.MAP,
-                   1.5, "eg_retry_overlay_close")
-        if check_screen(device) != Screen.MAP:
-            timed_wait(device, lambda: check_screen(device) == Screen.MAP,
-                       1.5, "eg_retry_overlay_close_2")
-            if check_screen(device) != Screen.MAP:
-                if not navigate(Screen.MAP, device):
-                    log.warning("P%d retry: can't reach map, assuming dead", pnum)
-                    priests_dead += 1
-                    continue
+        # Reverse previous retry nudge to get back to original EG center
+        # (don't use _search_eg_center — it finds a DIFFERENT evil guard)
+        if accumulated_nudge_dx != 0 or accumulated_nudge_dy != 0:
+            log.info("P%d retry: reversing previous nudge (%+d, %+d)",
+                     pnum, -accumulated_nudge_dx, -accumulated_nudge_dy)
+            rev_end_x = max(50, min(1030, center_x - accumulated_nudge_dx))
+            rev_end_y = max(50, min(1870, center_y - accumulated_nudge_dy))
+            adb_swipe(device, center_x, center_y, rev_end_x, rev_end_y, 1000)
+            time.sleep(0.5)
+            accumulated_nudge_dx = 0
+            accumulated_nudge_dy = 0
 
         # Calculate nudge to bring priest ~60% toward screen center
-        center_x, center_y = 540, 960
         nudge_dx = int((center_x - x) * 0.6)
         nudge_dy = int((center_y - y) * 0.6)
         end_x = max(50, min(1030, center_x + nudge_dx))
@@ -2205,6 +2239,8 @@ def rally_eg(device, stop_check=None):
         log.info("P%d retry: nudging camera by (%+d, %+d)", pnum, nudge_dx, nudge_dy)
         adb_swipe(device, center_x, center_y, end_x, end_y, 1000)
         time.sleep(0.5)
+        accumulated_nudge_dx = nudge_dx
+        accumulated_nudge_dy = nudge_dy
 
         # Probe at adjusted position
         adj_x = x + nudge_dx
@@ -2257,20 +2293,15 @@ def rally_eg(device, stop_check=None):
     x6, y6 = EG_PRIEST_POSITIONS[5]
     log.info("P6: starting final EG rally at (%d,%d)", x6, y6)
 
-    # If retries shifted the camera, re-center before P6
-    if missed_priests:
-        log.info("P6: re-centering camera after retry nudge(s)")
-        if not _search_eg_center(device):
-            log.warning("P6: re-center failed after retries")
-            return False
-        timed_wait(device, lambda: check_screen(device) == Screen.MAP,
-                   1.5, "eg_p6_recenter_overlay_close")
-        if check_screen(device) != Screen.MAP:
-            timed_wait(device, lambda: check_screen(device) == Screen.MAP,
-                       1.5, "eg_p6_recenter_overlay_close_2")
-            if check_screen(device) != Screen.MAP:
-                if not navigate(Screen.MAP, device):
-                    return False
+    # If retries shifted the camera, reverse the nudge to re-center before P6
+    # (don't use _search_eg_center — it finds a DIFFERENT evil guard)
+    if accumulated_nudge_dx != 0 or accumulated_nudge_dy != 0:
+        log.info("P6: reversing retry nudge (%+d, %+d) to re-center",
+                 -accumulated_nudge_dx, -accumulated_nudge_dy)
+        rev_end_x = max(50, min(1030, center_x - accumulated_nudge_dx))
+        rev_end_y = max(50, min(1870, center_y - accumulated_nudge_dy))
+        adb_swipe(device, center_x, center_y, rev_end_x, rev_end_y, 1000)
+        time.sleep(0.5)
 
     # Dismiss dialog from previous priest
     if not dismiss_and_verify_map(6):
@@ -2678,8 +2709,8 @@ def mine_mithril(device, stop_check=None):
     # Step 2: Scroll kingdom screen to bottom (multiple swipes for reliability)
     for _ in range(3):
         adb_swipe(device, 540, 960, 540, 400, duration_ms=300)
-        time.sleep(0.5)
-    time.sleep(1)
+        timed_wait(device, lambda: False, 0.5, "mithril_scroll_settle")
+    timed_wait(device, lambda: False, 1, "mithril_scroll_done")
 
     if _stopped():
         log.info("Mithril mining aborted (stopped)")
@@ -2688,11 +2719,11 @@ def mine_mithril(device, stop_check=None):
 
     # Step 3: Tap Dimensional Tunnel
     logged_tap(device, 280, 880, "dimensional_tunnel")
-    time.sleep(2)
+    timed_wait(device, lambda: False, 2, "mithril_tunnel_open")
 
     # Step 4: Tap Advanced Mithril (center of screen)
     logged_tap(device, 540, 960, "advanced_mithril")
-    time.sleep(2)
+    timed_wait(device, lambda: False, 2, "mithril_advanced_open")
 
     # Clear deploy timer — troops are about to be recalled
     config.MITHRIL_DEPLOY_TIME.pop(device, None)
@@ -2713,18 +2744,18 @@ def mine_mithril(device, stop_check=None):
         if _stopped():
             break
         adb_tap(device, slot_x, _MITHRIL_SLOT_Y)
-        time.sleep(1)
+        timed_wait(device, lambda: False, 1, "mithril_slot_tap")
         if wait_for_image_and_tap("mithril_return.png", device, timeout=2, threshold=0.7):
             log.debug("Recall %d: RETURN found, recalled", i + 1)
             recalled_count += 1
-            time.sleep(1.5)
+            timed_wait(device, lambda: False, 1.5, "mithril_recall_anim")
         else:
             log.debug("Recall %d: slot empty, all troops recalled", i + 1)
             break
 
     if recalled_count > 0:
         log.info("Recalled %d troops from mithril mines", recalled_count)
-        time.sleep(1)
+        timed_wait(device, lambda: False, 1, "mithril_recall_settle")
 
     if _stopped():
         log.info("Mithril mining aborted after recall (stopped)")
@@ -2733,9 +2764,10 @@ def mine_mithril(device, stop_check=None):
         navigate(Screen.MAP, device)
         return False
 
-    # Step 6: Deploy to mines — cap to recalled_count when known,
-    # otherwise try all mines but stop on first failure.
-    max_deploys = recalled_count if recalled_count > 0 else len(_MITHRIL_MINES)
+    # Step 6: Deploy to mines — use device total troops from UI spinbox,
+    # fall back to recalled_count if troops were in mines.
+    total = config.DEVICE_TOTAL_TROOPS.get(device, 5)
+    max_deploys = min(recalled_count if recalled_count > 0 else total, total)
     mines_to_deploy = _MITHRIL_MINES[:max_deploys]
     deployed_count = 0
     for i, (mine_x, mine_y) in enumerate(mines_to_deploy):
@@ -2743,7 +2775,7 @@ def mine_mithril(device, stop_check=None):
             break
         log.debug("Deploying to mine %d at (%d, %d)", i + 1, mine_x, mine_y)
         adb_tap(device, mine_x, mine_y)  # Tap mine
-        time.sleep(2)
+        timed_wait(device, lambda: False, 2, "mithril_mine_popup")
 
         # Look for ATTACK button in the mine popup
         if not wait_for_image_and_tap("mithril_attack.png", device, timeout=2, threshold=0.7):
@@ -2751,26 +2783,26 @@ def mine_mithril(device, stop_check=None):
                 # First run — no recall data; no ATTACK likely means no troops left
                 log.info("Mine %d: no ATTACK button, no more troops available", i + 1)
                 adb_tap(device, 900, 500)  # dismiss popup
-                time.sleep(1)
+                timed_wait(device, lambda: False, 1, "mithril_dismiss_no_attack")
                 break
             log.warning("Mine %d: no ATTACK button (occupied or missed)", i + 1)
             save_failure_screenshot(device, f"mithril_no_attack_mine{i+1}")
             adb_tap(device, 900, 500)  # dismiss popup
-            time.sleep(1)
+            timed_wait(device, lambda: False, 1, "mithril_dismiss_occupied")
             continue
-        time.sleep(2)
+        timed_wait(device, lambda: False, 2, "mithril_attack_to_depart")
 
         # Wait for troop selection screen and tap DEPART
         if wait_for_image_and_tap("mithril_depart.png", device, timeout=4, threshold=0.7):
             deployed_count += 1
             if deployed_count == 1:
                 config.MITHRIL_DEPLOY_TIME[device] = time.time()
-            time.sleep(2)  # Wait for deploy animation to return to overview
+            timed_wait(device, lambda: False, 2, "mithril_deploy_anim")
         else:
             log.warning("Mine %d: depart button not found after ATTACK", i + 1)
             save_failure_screenshot(device, f"mithril_depart_fail_mine{i+1}")
             adb_tap(device, 900, 500)  # dismiss overlay
-            time.sleep(1)
+            timed_wait(device, lambda: False, 1, "mithril_dismiss_depart_fail")
 
     log.info("Deployed %d/%d troops to mithril mines", deployed_count, max_deploys)
 

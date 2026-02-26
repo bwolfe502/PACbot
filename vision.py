@@ -443,7 +443,7 @@ IMAGE_REGIONS = {
     "slot.png":                   (0, 0, 360, 1920),       # left third
 
     # Quest screen
-    "aq_claim.png":               (540, 640, 1080, 1920),  # right half, lower 2/3
+    "aq_claim.png":               (830, 640, 1069, 1920),  # tight x: 198w tpl @ x:949-950
 
     # Troop status icons (left-side list)
     "statuses/stationing.png":    (0, 0, 360, 1920),       # left third
@@ -454,7 +454,14 @@ IMAGE_REGIONS = {
     "defending.png":              (0, 0, 360, 1920),       # left third
 
     # Back arrow (top-left corner)
-    "back_arrow.png":             (0, 0, 200, 200),         # top-left corner
+    "back_arrow.png":             (0, 9, 145, 137),          # tight: 104x88 tpl @ fixed (73,73)
+}
+
+# Per-template tap offsets from center (dx, dy).
+# Use when a UI element (e.g. chat bubble) overlaps the template center.
+TAP_OFFSETS = {
+    "depart.png":         (150, 0),   # chat bubble covers center; tap right side
+    "mithril_depart.png": (150, 0),
 }
 
 def tap_image(image_name, device, threshold=0.8):
@@ -468,6 +475,9 @@ def tap_image(image_name, device, threshold=0.8):
         max_val, max_loc, h, w = match
         center_x = max_loc[0] + w // 2
         center_y = max_loc[1] + h // 2
+        dx, dy = TAP_OFFSETS.get(image_name, (0, 0))
+        center_x += dx
+        center_y += dy
         if screen is not None:
             _save_click_trail(screen, device, center_x, center_y, image_name.replace(".png", ""))
         adb_tap(device, center_x, center_y)
@@ -499,25 +509,20 @@ def wait_for_image_and_tap(image_name, device, timeout=5, threshold=0.8):
     return False
 
 def timed_wait(device, condition_fn, budget_s, label):
-    """Measure how quickly a condition becomes true, then sleep the remaining budget.
+    """Poll condition_fn every ~150ms; return as soon as it's True.
 
-    Behavior is identical to time.sleep(budget_s) — total wall time is always
-    budget_s seconds.  But we poll condition_fn every ~150ms and log when (if)
-    it becomes True, so we can later decide which sleeps are safe to shorten.
+    If condition_fn is never True within budget_s, sleeps the full budget
+    (same as time.sleep).  If condition_fn becomes True early, exits
+    immediately — saving the remaining wait time.
 
     condition_fn: callable() -> bool  (called repeatedly until True or budget expires)
     Returns True if condition was met within budget, False otherwise.
     """
     start = time.time()
-    condition_met = False
     while time.time() - start < budget_s:
         if condition_fn():
-            condition_met = True
             actual = time.time() - start
             stats.record_transition_time(device, label, actual, budget_s, True)
-            remaining = budget_s - actual
-            if remaining > 0:
-                time.sleep(remaining)
             return True
         time.sleep(0.15)
     # Condition never met within budget

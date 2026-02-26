@@ -3,7 +3,7 @@ import os
 import time
 from datetime import datetime
 
-from vision import tap_image, tap, load_screenshot, adb_tap, get_template
+from vision import tap_image, tap, load_screenshot, adb_tap, get_template, timed_wait
 import config
 from config import Screen
 from botlog import get_logger, stats
@@ -189,7 +189,8 @@ def check_screen(device):
 def _verify_screen(target_screen, device, wait_time=1.5, retries=2):
     """Verify we arrived at the target screen, with retries."""
     log = get_logger("navigation", device)
-    time.sleep(wait_time)
+    timed_wait(device, lambda: check_screen(device) == target_screen,
+               wait_time, f"verify_{target_screen}")
     current = Screen.UNKNOWN
     for attempt in range(1 + retries):
         current = check_screen(device)
@@ -222,7 +223,8 @@ def _recover_to_known_screen(device):
 
     for name, action in strategies:
         action()
-        time.sleep(1.5)
+        timed_wait(device, lambda: check_screen(device) != Screen.UNKNOWN,
+                   1.5, f"recover_{name}")
         current = check_screen(device)
         if current != Screen.UNKNOWN:
             log.info("Recovery via %s: now on %s", name, current)
@@ -266,7 +268,8 @@ def navigate(target_screen, device, _depth=0):
     if current == Screen.TROOP_DETAIL and target_screen != Screen.MAP:
         log.debug("On td_screen, going to map_screen first...")
         adb_tap(device, 990, 1850)
-        time.sleep(1)
+        timed_wait(device, lambda: check_screen(device) == Screen.MAP,
+                   2, "nav_td_to_map")
         current = check_screen(device)
     elif current == Screen.ALLIANCE and target_screen != Screen.MAP and target_screen != Screen.WAR:
         log.debug("On alliance_screen, going to map_screen first...")
@@ -277,7 +280,8 @@ def navigate(target_screen, device, _depth=0):
     if target_screen == Screen.MAP:
         if current == Screen.TROOP_DETAIL:
             adb_tap(device, 990, 1850)
-            time.sleep(1)
+            timed_wait(device, lambda: check_screen(device) == Screen.MAP,
+                       2, "nav_td_exit_to_map")
             current = check_screen(device)
         elif current == Screen.ALLIANCE:
             tap_image("back_arrow.png", device, threshold=0.7)
@@ -285,7 +289,8 @@ def navigate(target_screen, device, _depth=0):
         elif current == Screen.KINGDOM:
             # Bottom-right globe icon takes us back to map
             adb_tap(device, 970, 1880)
-            time.sleep(1)
+            timed_wait(device, lambda: check_screen(device) == Screen.MAP,
+                       1, "nav_kingdom_to_map")
             current = check_screen(device)
         elif current in [Screen.BATTLE_LIST, Screen.ALLIANCE_QUEST, Screen.WAR, Screen.TERRITORY, Screen.PROFILE]:
             tap_image("back_arrow.png", device, threshold=0.7)
@@ -342,9 +347,11 @@ def navigate(target_screen, device, _depth=0):
             if not navigate(Screen.MAP, device, _depth=_depth + 1):
                 return False
         adb_tap(device, 640, 1865)
-        time.sleep(1)
+        timed_wait(device, lambda: check_screen(device) == Screen.ALLIANCE,
+                   2, "nav_map_to_alliance")
         adb_tap(device, 200, 1200)
-        time.sleep(1)
+        timed_wait(device, lambda: check_screen(device) == Screen.ALLIANCE,
+                   1, "nav_alliance_menu_load")
         adb_tap(device, 550, 170)
         return _verify_screen(Screen.WAR, device)
 

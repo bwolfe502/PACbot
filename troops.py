@@ -10,7 +10,7 @@ from typing import Optional, List, Dict, Tuple
 
 import config
 from vision import (load_screenshot, tap_image, adb_tap, logged_tap,
-                    get_template, save_failure_screenshot)
+                    get_template, save_failure_screenshot, timed_wait)
 from navigation import navigate
 from config import Screen
 from botlog import get_logger, timed_action
@@ -243,13 +243,13 @@ def heal_all(device):
             break
         healed_any = True
         log.debug("Starting heal sequence...")
-        time.sleep(1)
+        timed_wait(device, lambda: False, 1, "heal_dialog_open")
         logged_tap(device, 700, 1460, "heal_all_btn")
-        time.sleep(1)
+        timed_wait(device, lambda: False, 1, "heal_confirm_ready")
         logged_tap(device, 542, 1425, "heal_confirm")
-        time.sleep(1)
+        timed_wait(device, lambda: False, 1, "heal_result_show")
         logged_tap(device, 1000, 200, "heal_close")
-        time.sleep(2)
+        timed_wait(device, lambda: False, 2, "heal_close_settle")
     else:
         log.warning("Heal loop hit safety cap (%d iterations) — possible stuck UI", max_heals)
         save_failure_screenshot(device, "heal_stuck_ui")

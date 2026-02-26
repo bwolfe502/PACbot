@@ -91,22 +91,25 @@ class TestCheckScreen:
 # ============================================================
 
 class TestVerifyScreen:
+    @patch("navigation.timed_wait")
     @patch("navigation._save_debug_screenshot")
     @patch("navigation.check_screen")
-    def test_success_first_try(self, mock_check, mock_save):
+    def test_success_first_try(self, mock_check, mock_save, mock_tw):
         mock_check.return_value = Screen.MAP
         assert _verify_screen(Screen.MAP, "dev1") is True
 
+    @patch("navigation.timed_wait")
     @patch("navigation._save_debug_screenshot")
     @patch("navigation.check_screen")
-    def test_success_on_retry(self, mock_check, mock_save):
+    def test_success_on_retry(self, mock_check, mock_save, mock_tw):
         mock_check.side_effect = [Screen.UNKNOWN, Screen.MAP]
         assert _verify_screen(Screen.MAP, "dev1") is True
 
+    @patch("navigation.timed_wait")
     @patch("navigation.stats")
     @patch("navigation._save_debug_screenshot")
     @patch("navigation.check_screen")
-    def test_failure_after_retries(self, mock_check, mock_save, mock_stats):
+    def test_failure_after_retries(self, mock_check, mock_save, mock_stats, mock_tw):
         mock_check.return_value = Screen.BATTLE_LIST
         assert _verify_screen(Screen.MAP, "dev1") is False
         mock_stats.record_nav_failure.assert_called_once()
@@ -140,9 +143,10 @@ class TestNavigate:
         assert navigate(Screen.BATTLE_LIST, "dev1") is True
         mock_tap_img.assert_called_with("bl_button.png", "dev1")
 
+    @patch("navigation.timed_wait")
     @patch("navigation.adb_tap")
     @patch("navigation.check_screen")
-    def test_td_to_map(self, mock_check, mock_tap):
+    def test_td_to_map(self, mock_check, mock_tap, mock_tw):
         # First call: on td_screen. After tap: on map_screen.
         mock_check.side_effect = [Screen.TROOP_DETAIL, Screen.MAP]
         assert navigate(Screen.MAP, "dev1") is True
@@ -168,29 +172,32 @@ class TestNavigate:
 # ============================================================
 
 class TestRecoverToKnownScreen:
+    @patch("navigation.timed_wait")
     @patch("navigation.adb_tap")
     @patch("navigation.tap_image")
     @patch("navigation.check_screen")
-    def test_first_strategy_succeeds(self, mock_check, mock_tap_img, mock_tap):
+    def test_first_strategy_succeeds(self, mock_check, mock_tap_img, mock_tap, mock_tw):
         # close_x template works on first try
         mock_tap_img.return_value = True
         mock_check.return_value = Screen.MAP
         result = _recover_to_known_screen("dev1")
         assert result == Screen.MAP
 
+    @patch("navigation.timed_wait")
     @patch("navigation.adb_tap")
     @patch("navigation.tap_image")
     @patch("navigation.check_screen")
-    def test_all_strategies_fail(self, mock_check, mock_tap_img, mock_tap):
+    def test_all_strategies_fail(self, mock_check, mock_tap_img, mock_tap, mock_tw):
         mock_tap_img.return_value = False
         mock_check.return_value = Screen.UNKNOWN
         result = _recover_to_known_screen("dev1")
         assert result == Screen.UNKNOWN
 
+    @patch("navigation.timed_wait")
     @patch("navigation.adb_tap")
     @patch("navigation.tap_image")
     @patch("navigation.check_screen")
-    def test_back_button_succeeds(self, mock_check, mock_tap_img, mock_tap):
+    def test_back_button_succeeds(self, mock_check, mock_tap_img, mock_tap, mock_tw):
         # First two strategies fail, back button succeeds
         mock_tap_img.return_value = False
         mock_check.side_effect = [Screen.UNKNOWN, Screen.UNKNOWN, Screen.BATTLE_LIST]
