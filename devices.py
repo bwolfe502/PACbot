@@ -13,9 +13,13 @@ _log = get_logger("devices")
 def auto_connect_emulators():
     """Try to adb-connect known emulator ports so they show up in 'adb devices'.
 
-    MuMu Player 12 and some other emulators don't register with ADB automatically.
-    This pings all known ports and connects any that respond.
+    Only runs on macOS/Linux — Windows emulators register with ADB automatically,
+    and forcing adb connect there creates duplicate device entries.
     """
+    if platform.system() == "Windows":
+        _log.debug("Auto-connect skipped on Windows (emulators self-register)")
+        return []
+
     all_ports = set()
     for ports in EMULATOR_PORTS.values():
         all_ports.update(ports)
@@ -43,30 +47,14 @@ def auto_connect_emulators():
     return connected
 
 def get_devices():
-    """Get list of all connected ADB devices, deduplicating emulator/IP pairs."""
+    """Get list of all connected ADB devices."""
     try:
         result = subprocess.run([adb_path, "devices"], capture_output=True, text=True, timeout=10)
         lines = result.stdout.strip().split('\n')[1:]  # Skip "List of devices attached"
         devices = [line.split()[0] for line in lines if line.strip() and 'device' in line]
 
-        # Deduplicate: if both "emulator-5554" and "127.0.0.1:5555" exist,
-        # they are the same instance. Keep only the emulator-XXXX form.
-        emulator_ports = set()
-        for d in devices:
-            if d.startswith("emulator-"):
-                emulator_ports.add(int(d.split("-")[1]) + 1)
-
-        deduped = []
-        for d in devices:
-            if ":" in d and not d.startswith("emulator-"):
-                port = int(d.split(":")[1])
-                if port in emulator_ports:
-                    _log.debug("Dedup: %s (duplicate of emulator port %d)", d, port)
-                    continue
-            deduped.append(d)
-
-        _log.info("Found %d device(s): %s", len(deduped), ", ".join(deduped) if deduped else "(none)")
-        return deduped
+        _log.info("Found %d device(s): %s", len(devices), ", ".join(devices) if devices else "(none)")
+        return devices
     except Exception as e:
         _log.error("Failed to get devices: %s", e)
         return []

@@ -230,6 +230,21 @@ class StatsTracker:
             if len(entry["recent"]) > 20:
                 entry["recent"] = entry["recent"][-20:]
 
+    def get_template_hit_bounds(self, device, template_name):
+        """Return the observed bounding box for a template on a device.
+
+        Returns (min_x, min_y, max_x, max_y, count) or None if no data.
+        Coordinates are template center positions (not top-left).
+        """
+        with self._lock:
+            if device not in self._data:
+                return None
+            entry = self._data[device]["template_hits"].get(template_name)
+            if entry is None:
+                return None
+            return (entry["min_x"], entry["min_y"],
+                    entry["max_x"], entry["max_y"], entry["count"])
+
     def record_nav_failure(self, device, from_screen, to_screen):
         """Record a navigation failure."""
         with self._lock:

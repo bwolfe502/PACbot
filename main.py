@@ -9,6 +9,7 @@ import random
 import json
 import logging
 import platform
+import subprocess
 
 import config
 from updater import get_current_version
@@ -17,7 +18,7 @@ from config import (set_min_troops, set_auto_heal, set_auto_restore_ap,
                      running_tasks, QuestType, RallyType, Screen)
 from devices import get_devices, get_emulator_instances, auto_connect_emulators
 from navigation import check_screen, navigate
-from vision import adb_tap, tap_image, load_screenshot, find_image, wait_for_image_and_tap, read_ap
+from vision import adb_tap, tap_image, load_screenshot, find_image, wait_for_image_and_tap, read_ap, warmup_ocr
 from troops import troops_avail, heal_all, read_panel_statuses
 from actions import (attack, phantom_clash_attack, reinforce_throne, target, check_quests, teleport,
                      rally_titan, rally_eg, search_eg_reset, join_rally,
@@ -466,7 +467,9 @@ COLOR_BG = "#f0f0f0"
 COLOR_SECTION_BG = "#e8e8e8"
 WIN_WIDTH = 520
 
-FONT_TOGGLE = ("Segoe UI", 10, "bold")
+# Cross-platform font: "Segoe UI" on Windows, system default on macOS/Linux
+_FONT_FAMILY = "Segoe UI" if platform.system() == "Windows" else "Helvetica Neue"
+FONT_TOGGLE = (_FONT_FAMILY, 10, "bold")
 
 def make_toggle_bar(parent, text, font_spec, on_click):
     """Create a compact toggle bar."""
@@ -508,25 +511,30 @@ def create_gui():
     # ── Title ──
     title_frame = tk.Frame(window, bg=COLOR_BG)
     title_frame.pack(fill=tk.X, pady=(10, 4))
-    tk.Label(title_frame, text=f"PACbot v{version}", font=("Segoe UI", 16, "bold"),
+    tk.Label(title_frame, text=f"PACbot v{version}", font=(_FONT_FAMILY, 16, "bold"),
              bg=COLOR_BG).pack()
-    tk.Label(title_frame, text="Made by Nine", font=("Segoe UI", 9), fg="#888",
+    tk.Label(title_frame, text="Made by Nine", font=(_FONT_FAMILY, 9), fg="#888",
              bg=COLOR_BG).pack()
 
     def open_tutorial():
         tutorial_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "TUTORIAL.txt")
         if os.path.isfile(tutorial_path):
-            os.startfile(tutorial_path)
+            if platform.system() == "Windows":
+                os.startfile(tutorial_path)
+            elif platform.system() == "Darwin":
+                subprocess.Popen(["open", tutorial_path])
+            else:
+                subprocess.Popen(["xdg-open", tutorial_path])
         else:
             messagebox.showinfo("Tutorial", "TUTORIAL.txt not found.")
 
-    how_to_label = tk.Label(title_frame, text="How to Use", font=("Segoe UI", 9, "underline"),
+    how_to_label = tk.Label(title_frame, text="How to Use", font=(_FONT_FAMILY, 9, "underline"),
                             fg="#0066cc", cursor="hand2", bg=COLOR_BG)
     how_to_label.pack(pady=(2, 0))
     how_to_label.bind("<Button-1>", lambda e: open_tutorial())
 
     # ── Devices ──
-    device_frame = tk.LabelFrame(window, text="Devices", font=("Segoe UI", 9, "bold"),
+    device_frame = tk.LabelFrame(window, text="Devices", font=(_FONT_FAMILY, 9, "bold"),
                                   padx=8, pady=4, bg=COLOR_BG)
     device_frame.pack(fill=tk.X, padx=PAD_X, pady=(4, 4))
 
@@ -574,37 +582,38 @@ def create_gui():
             device_checkbox_widgets.append(row)
 
             cb = tk.Checkbutton(row, text=display_name,
-                                variable=device_checkboxes[device], font=("Segoe UI", 9),
+                                variable=device_checkboxes[device], font=(_FONT_FAMILY, 9),
                                 bg=COLOR_BG, activebackground=COLOR_BG)
             cb.pack(side=tk.LEFT)
 
             # Troops spinbox (right-aligned)
-            tk.Label(row, text="troops:", font=("Segoe UI", 8), fg="#888",
+            tk.Label(row, text="troops:", font=(_FONT_FAMILY, 8), fg="#888",
                      bg=COLOR_BG).pack(side=tk.RIGHT, padx=(4, 0))
             troops_spin = tk.Spinbox(row, from_=1, to=5,
                                      textvariable=device_troops_vars[device],
-                                     width=2, font=("Segoe UI", 8), justify="center",
+                                     width=2, font=(_FONT_FAMILY, 8), justify="center",
                                      command=lambda: (_apply_device_troops(), save_current_settings()))
             troops_spin.pack(side=tk.RIGHT)
 
         _apply_device_troops()
 
         if not devices:
-            lbl = tk.Label(device_list_frame, text="No devices found. Try Auto-Connect.",
-                           font=("Segoe UI", 8), fg="#999", bg=COLOR_BG)
+            lbl = tk.Label(device_list_frame, text="No devices found. Start your emulator and click Refresh.",
+                           font=(_FONT_FAMILY, 8), fg="#999", bg=COLOR_BG)
             lbl.pack(pady=2)
             device_checkbox_widgets.append(lbl)
 
+    auto_connect_emulators()
     refresh_device_list()
 
     btn_row = tk.Frame(device_frame, bg=COLOR_BG)
     btn_row.pack(pady=(2, 0))
-    tk.Button(btn_row, text="Refresh", command=refresh_device_list,
-              font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=4)
+    tk.Button(btn_row, text="Refresh", command=lambda: (auto_connect_emulators(), refresh_device_list()),
+              font=(_FONT_FAMILY, 8)).pack(side=tk.LEFT, padx=4)
     # Auto-Connect button hidden (crashes on click) but function still available
     # tk.Button(btn_row, text="Auto-Connect",
     #           command=lambda: (auto_connect_emulators(), refresh_device_list()),
-    #           font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=4)
+    #           font=(_FONT_FAMILY, 8)).pack(side=tk.LEFT, padx=4)
 
     def get_active_devices():
         return [d for d in devices if device_checkboxes.get(d, tk.BooleanVar(value=False)).get()]
@@ -621,14 +630,16 @@ def create_gui():
     mode_frame = tk.Frame(window, bg=COLOR_BG)
     mode_frame.pack(fill=tk.X, padx=PAD_X, pady=(6, 4))
 
-    rw_mode_btn = tk.Button(mode_frame, text="Home Server", font=("Segoe UI", 10, "bold"),
-                             bg=COLOR_MODE_INACTIVE, fg="#555", relief=tk.FLAT,
-                             activebackground=COLOR_MODE_INACTIVE, cursor="hand2")
+    # Use Labels instead of Buttons for mode toggles — tk.Button ignores
+    # bg/fg on macOS native theme, making text invisible on dark backgrounds.
+    rw_mode_btn = tk.Label(mode_frame, text="Home Server", font=(_FONT_FAMILY, 10, "bold"),
+                            bg=COLOR_MODE_INACTIVE, fg="#555", cursor="hand2",
+                            padx=12, pady=6, anchor="center")
     rw_mode_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 2))
 
-    bl_mode_btn = tk.Button(mode_frame, text="Broken Lands", font=("Segoe UI", 10, "bold"),
-                             bg=COLOR_MODE_ACTIVE, fg="white", relief=tk.FLAT,
-                             activebackground=COLOR_MODE_ACTIVE, cursor="hand2")
+    bl_mode_btn = tk.Label(mode_frame, text="Broken Lands", font=(_FONT_FAMILY, 10, "bold"),
+                            bg=COLOR_MODE_ACTIVE, fg="white", cursor="hand2",
+                            padx=12, pady=6, anchor="center")
     bl_mode_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(2, 0))
 
     # ============================================================
@@ -730,7 +741,7 @@ def create_gui():
         vis = tk.BooleanVar(value=expanded)
         arrow = "\u25BC" if expanded else "\u25B6"
         btn = tk.Button(container, text=f"  {arrow}  {title.upper()}",
-                         font=("Segoe UI", 8, "bold"), relief=tk.FLAT,
+                         font=(_FONT_FAMILY, 8, "bold"), relief=tk.FLAT,
                          bg=COLOR_SECTION_BG, activebackground="#ddd", anchor=tk.W,
                          fg="#555")
         def toggle_section():
@@ -959,13 +970,10 @@ def create_gui():
         if mode_var.get() == new_mode:
             return
 
-        # Stop tasks that don't exist in the target mode
-        if new_mode == "rw":
-            _stop_quest()
-            _stop_pass_battle()
-            _stop_occupy()
-        else:
-            _stop_groot()
+        # Don't stop running tasks on mode switch — they continue in the
+        # background and their toggle bars reflect the real state when the
+        # user switches back.  Only stop tasks exclusive to the OTHER mode
+        # that genuinely conflict (currently none do).
 
         mode_var.set(new_mode)
         _forget_all_toggles()
@@ -973,23 +981,19 @@ def create_gui():
         if new_mode == "rw":
             _layout_rw()
             bl_settings_row.pack_forget()
-            rw_mode_btn.config(bg=COLOR_MODE_ACTIVE, fg="white",
-                               activebackground=COLOR_MODE_ACTIVE)
-            bl_mode_btn.config(bg=COLOR_MODE_INACTIVE, fg="#555",
-                               activebackground=COLOR_MODE_INACTIVE)
+            rw_mode_btn.config(bg=COLOR_MODE_ACTIVE, fg="white")
+            bl_mode_btn.config(bg=COLOR_MODE_INACTIVE, fg="#555")
         else:
             _layout_bl()
             bl_settings_row.pack(fill=tk.X, pady=(4, 0), in_=settings_frame, before=rw_settings_row)
-            bl_mode_btn.config(bg=COLOR_MODE_ACTIVE, fg="white",
-                               activebackground=COLOR_MODE_ACTIVE)
-            rw_mode_btn.config(bg=COLOR_MODE_INACTIVE, fg="#555",
-                               activebackground=COLOR_MODE_INACTIVE)
+            bl_mode_btn.config(bg=COLOR_MODE_ACTIVE, fg="white")
+            rw_mode_btn.config(bg=COLOR_MODE_INACTIVE, fg="#555")
 
         window.update_idletasks()
         window.geometry(f"{WIN_WIDTH}x{window.winfo_reqheight()}")
 
-    rw_mode_btn.config(command=lambda: switch_mode("rw"))
-    bl_mode_btn.config(command=lambda: switch_mode("bl"))
+    rw_mode_btn.bind("<Button-1>", lambda e: switch_mode("rw"))
+    bl_mode_btn.bind("<Button-1>", lambda e: switch_mode("bl"))
 
     # Pack initial layout (BL default)
     _layout_bl()
@@ -1001,7 +1005,7 @@ def create_gui():
     settings_frame = tk.Frame(window, bg=COLOR_SECTION_BG, padx=10, pady=6)
     settings_frame.pack(fill=tk.X, padx=PAD_X, pady=(6, 4))
 
-    tk.Label(settings_frame, text="\u2699  Settings", font=("Segoe UI", 9, "bold"),
+    tk.Label(settings_frame, text="\u2699  Settings", font=(_FONT_FAMILY, 9, "bold"),
              bg=COLOR_SECTION_BG, fg="#444", anchor=tk.W).pack(fill=tk.X, pady=(0, 4))
 
     # Row 1: Auto Heal + Restore AP + EG Rally Own + Verbose
@@ -1016,7 +1020,7 @@ def create_gui():
         save_current_settings()
 
     tk.Checkbutton(row1, text="Auto Heal", variable=auto_heal_var,
-                   command=toggle_auto_heal, font=("Segoe UI", 9),
+                   command=toggle_auto_heal, font=(_FONT_FAMILY, 9),
                    bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.LEFT)
 
     tk.Frame(row1, width=10, bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
@@ -1031,7 +1035,7 @@ def create_gui():
         save_current_settings()
 
     tk.Checkbutton(row1, text="Verbose Log", variable=verbose_var,
-                   command=toggle_verbose, font=("Segoe UI", 9),
+                   command=toggle_verbose, font=(_FONT_FAMILY, 9),
                    bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.RIGHT)
 
 
@@ -1061,23 +1065,23 @@ def create_gui():
         save_current_settings()
 
     tk.Checkbutton(ap_settings_row, text="Free", variable=ap_use_free_var,
-                   command=update_ap_options, font=("Segoe UI", 8),
+                   command=update_ap_options, font=(_FONT_FAMILY, 8),
                    bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.LEFT)
     tk.Checkbutton(ap_settings_row, text="Potions", variable=ap_use_potions_var,
-                   command=update_ap_options, font=("Segoe UI", 8),
+                   command=update_ap_options, font=(_FONT_FAMILY, 8),
                    bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.LEFT)
     tk.Checkbutton(ap_settings_row, text="Large Potions", variable=ap_allow_large_var,
-                   command=update_ap_options, font=("Segoe UI", 8),
+                   command=update_ap_options, font=(_FONT_FAMILY, 8),
                    bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.LEFT)
     tk.Checkbutton(ap_settings_row, text="Gems", variable=ap_use_gems_var,
-                   command=update_ap_options, font=("Segoe UI", 8),
+                   command=update_ap_options, font=(_FONT_FAMILY, 8),
                    bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.LEFT)
-    tk.Label(ap_settings_row, text="Limit:", font=("Segoe UI", 8),
+    tk.Label(ap_settings_row, text="Limit:", font=(_FONT_FAMILY, 8),
              bg=COLOR_SECTION_BG).pack(side=tk.LEFT, padx=(4, 0))
     tk.Entry(ap_settings_row, textvariable=ap_gem_limit_var, width=5,
-             font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=(2, 0))
+             font=(_FONT_FAMILY, 8)).pack(side=tk.LEFT, padx=(2, 0))
     tk.Button(ap_settings_row, text="Set", command=update_ap_options,
-              font=("Segoe UI", 7)).pack(side=tk.LEFT, padx=(2, 0))
+              font=(_FONT_FAMILY, 7)).pack(side=tk.LEFT, padx=(2, 0))
 
     def toggle_auto_restore_ap():
         enabled = auto_restore_ap_var.get()
@@ -1091,7 +1095,7 @@ def create_gui():
         save_current_settings()
 
     tk.Checkbutton(row1, text="Auto Restore AP", variable=auto_restore_ap_var,
-                   command=toggle_auto_restore_ap, font=("Segoe UI", 9),
+                   command=toggle_auto_restore_ap, font=(_FONT_FAMILY, 9),
                    bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.LEFT)
 
     # EG rally own toggle
@@ -1103,7 +1107,7 @@ def create_gui():
         save_current_settings()
 
     tk.Checkbutton(row1, text="Rally Own EG", variable=eg_rally_own_var,
-                   command=toggle_eg_rally_own, font=("Segoe UI", 9),
+                   command=toggle_eg_rally_own, font=(_FONT_FAMILY, 9),
                    bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.LEFT)
 
     # Show AP settings row if auto restore is already enabled
@@ -1114,12 +1118,12 @@ def create_gui():
     row1b = tk.Frame(settings_frame, bg=COLOR_SECTION_BG)
     row1b.pack(fill=tk.X, pady=(2, 0))
 
-    tk.Label(row1b, text="Min Troops:", font=("Segoe UI", 9),
+    tk.Label(row1b, text="Min Troops:", font=(_FONT_FAMILY, 9),
              bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
     min_troops_var = tk.StringVar(value=str(settings["min_troops"]))
     set_min_troops(settings["min_troops"])
     tk.Entry(row1b, textvariable=min_troops_var, width=6,
-             font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(4, 4))
+             font=(_FONT_FAMILY, 9)).pack(side=tk.LEFT, padx=(4, 4))
 
     def update_min_troops():
         try:
@@ -1129,15 +1133,15 @@ def create_gui():
             pass
 
     tk.Button(row1b, text="Set", command=update_min_troops,
-              font=("Segoe UI", 8)).pack(side=tk.LEFT)
+              font=(_FONT_FAMILY, 8)).pack(side=tk.LEFT)
 
     variation_var = tk.StringVar(value=str(settings["variation"]))
     tk.Frame(row1b, width=20, bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
-    tk.Label(row1b, text="Randomize \u00b1", font=("Segoe UI", 9),
+    tk.Label(row1b, text="Randomize \u00b1", font=(_FONT_FAMILY, 9),
              bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
     tk.Entry(row1b, textvariable=variation_var, width=4, justify="center",
-             font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(4, 1))
-    tk.Label(row1b, text="s", font=("Segoe UI", 9),
+             font=(_FONT_FAMILY, 9)).pack(side=tk.LEFT, padx=(4, 1))
+    tk.Label(row1b, text="s", font=(_FONT_FAMILY, 9),
              bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
 
     tk.Frame(settings_frame, height=1, bg="#ccc").pack(fill=tk.X, pady=(4, 4))
@@ -1145,51 +1149,51 @@ def create_gui():
     # Row 2 (BL): Pass mode & interval
     bl_settings_row = tk.Frame(settings_frame, bg=COLOR_SECTION_BG)
 
-    tk.Label(bl_settings_row, text="Pass", font=("Segoe UI", 9),
+    tk.Label(bl_settings_row, text="Pass", font=(_FONT_FAMILY, 9),
              bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
     ttk.Combobox(bl_settings_row, textvariable=pass_mode_var,
                  values=["Rally Joiner", "Rally Starter"],
-                 width=12, state="readonly", font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=(4, 4))
+                 width=12, state="readonly", font=(_FONT_FAMILY, 8)).pack(side=tk.LEFT, padx=(4, 4))
     tk.Entry(bl_settings_row, textvariable=pass_interval_var, width=4, justify="center",
-             font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(0, 1))
-    tk.Label(bl_settings_row, text="s", font=("Segoe UI", 9),
+             font=(_FONT_FAMILY, 9)).pack(side=tk.LEFT, padx=(0, 1))
+    tk.Label(bl_settings_row, text="s", font=(_FONT_FAMILY, 9),
              bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
 
     # Row 2: Titan / Groot / Reinforce intervals (always visible)
     rw_settings_row = tk.Frame(settings_frame, bg=COLOR_SECTION_BG)
 
-    tk.Label(rw_settings_row, text="Titan", font=("Segoe UI", 9),
+    tk.Label(rw_settings_row, text="Titan", font=(_FONT_FAMILY, 9),
              bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
     tk.Entry(rw_settings_row, textvariable=titan_interval_var, width=4, justify="center",
-             font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(4, 1))
-    tk.Label(rw_settings_row, text="s", font=("Segoe UI", 9),
+             font=(_FONT_FAMILY, 9)).pack(side=tk.LEFT, padx=(4, 1))
+    tk.Label(rw_settings_row, text="s", font=(_FONT_FAMILY, 9),
              bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
 
     tk.Frame(rw_settings_row, width=16, bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
 
-    tk.Label(rw_settings_row, text="Groot", font=("Segoe UI", 9),
+    tk.Label(rw_settings_row, text="Groot", font=(_FONT_FAMILY, 9),
              bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
     tk.Entry(rw_settings_row, textvariable=groot_interval_var, width=4, justify="center",
-             font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(4, 1))
-    tk.Label(rw_settings_row, text="s", font=("Segoe UI", 9),
+             font=(_FONT_FAMILY, 9)).pack(side=tk.LEFT, padx=(4, 1))
+    tk.Label(rw_settings_row, text="s", font=(_FONT_FAMILY, 9),
              bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
 
     tk.Frame(rw_settings_row, width=16, bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
 
-    tk.Label(rw_settings_row, text="Reinf", font=("Segoe UI", 9),
+    tk.Label(rw_settings_row, text="Reinf", font=(_FONT_FAMILY, 9),
              bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
     tk.Entry(rw_settings_row, textvariable=reinforce_interval_var, width=4, justify="center",
-             font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(4, 1))
-    tk.Label(rw_settings_row, text="s", font=("Segoe UI", 9),
+             font=(_FONT_FAMILY, 9)).pack(side=tk.LEFT, padx=(4, 1))
+    tk.Label(rw_settings_row, text="s", font=(_FONT_FAMILY, 9),
              bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
 
     tk.Frame(rw_settings_row, width=16, bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
 
-    tk.Label(rw_settings_row, text="Mithril", font=("Segoe UI", 9),
+    tk.Label(rw_settings_row, text="Mithril", font=(_FONT_FAMILY, 9),
              bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
     tk.Entry(rw_settings_row, textvariable=mithril_interval_var, width=4, justify="center",
-             font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(4, 1))
-    tk.Label(rw_settings_row, text="m", font=("Segoe UI", 9),
+             font=(_FONT_FAMILY, 9)).pack(side=tk.LEFT, padx=(4, 1))
+    tk.Label(rw_settings_row, text="m", font=(_FONT_FAMILY, 9),
              bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
 
     # Pack settings rows (intervals always visible, BL pass row only in BL mode)
@@ -1225,25 +1229,25 @@ def create_gui():
             window.geometry(f"{WIN_WIDTH}x{window.winfo_reqheight()}")
 
     territory_btn = tk.Button(territory_container, text="Territory Settings  \u25B6",
-                               command=toggle_territory, font=("Segoe UI", 9, "bold"),
+                               command=toggle_territory, font=(_FONT_FAMILY, 9, "bold"),
                                relief=tk.FLAT, bg=COLOR_SECTION_BG, activebackground="#ddd")
     territory_btn.pack(fill=tk.X)
 
     # Territory content
     teams_row = tk.Frame(territory_inner, bg=COLOR_SECTION_BG)
     teams_row.pack(fill=tk.X, pady=2)
-    tk.Label(teams_row, text="My Team:", font=("Segoe UI", 9),
+    tk.Label(teams_row, text="My Team:", font=(_FONT_FAMILY, 9),
              bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
     my_team_var = tk.StringVar(value=settings["my_team"])
     ttk.Combobox(teams_row, textvariable=my_team_var,
                  values=["yellow", "red", "blue", "green"],
-                 width=7, state="readonly", font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=(4, 12))
-    tk.Label(teams_row, text="Attack:", font=("Segoe UI", 9),
+                 width=7, state="readonly", font=(_FONT_FAMILY, 8)).pack(side=tk.LEFT, padx=(4, 12))
+    tk.Label(teams_row, text="Attack:", font=(_FONT_FAMILY, 9),
              bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
     enemy_var = tk.StringVar(value=settings["enemy_team"])
     ttk.Combobox(teams_row, textvariable=enemy_var,
                  values=["green", "red", "blue", "yellow"],
-                 width=7, state="readonly", font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=(4, 6))
+                 width=7, state="readonly", font=(_FONT_FAMILY, 8)).pack(side=tk.LEFT, padx=(4, 6))
 
     set_territory_config(settings["my_team"], [settings["enemy_team"]])
 
@@ -1252,7 +1256,7 @@ def create_gui():
         save_current_settings()
 
     tk.Button(teams_row, text="Set", command=update_territory_config,
-              font=("Segoe UI", 8)).pack(side=tk.LEFT)
+              font=(_FONT_FAMILY, 8)).pack(side=tk.LEFT)
 
     def open_territory_mgr():
         active = get_active_devices()
@@ -1260,7 +1264,7 @@ def create_gui():
             threading.Thread(target=open_territory_manager, args=(active[0],), daemon=True).start()
 
     tk.Button(territory_inner, text="Territory Square Manager",
-              command=open_territory_mgr, font=("Segoe UI", 9)).pack(fill=tk.X, pady=(4, 0))
+              command=open_territory_mgr, font=(_FONT_FAMILY, 9)).pack(fill=tk.X, pady=(4, 0))
 
     # ============================================================
     # SETTINGS PERSISTENCE
@@ -1324,13 +1328,13 @@ def create_gui():
             window.geometry(f"{WIN_WIDTH}x{window.winfo_reqheight()}")
 
     actions_toggle_btn = tk.Button(actions_container, text="More Actions  \u25B6",
-                                    command=toggle_actions, font=("Segoe UI", 9, "bold"),
+                                    command=toggle_actions, font=(_FONT_FAMILY, 9, "bold"),
                                     relief=tk.FLAT, bg=COLOR_SECTION_BG, activebackground="#ddd")
     actions_toggle_btn.pack(fill=tk.X)
 
     # Tabs inside collapsible section
     tab_style = ttk.Style()
-    tab_style.configure("Bold.TNotebook.Tab", font=("Segoe UI", 10, "bold"), padding=[12, 6])
+    tab_style.configure("Bold.TNotebook.Tab", font=(_FONT_FAMILY, 10, "bold"), padding=[12, 6])
 
     tabs = ttk.Notebook(actions_inner, style="Bold.TNotebook")
     tabs.pack(fill=tk.BOTH, expand=True, pady=(4, 4), padx=4)
@@ -1375,8 +1379,8 @@ def create_gui():
 
         tk.Checkbutton(frame, variable=enabled, command=toggle).pack(side=tk.LEFT)
         tk.Entry(frame, textvariable=interval, width=4, justify="center",
-                 font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=(2, 0))
-        tk.Label(frame, text="s", font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=(1, 4))
+                 font=(_FONT_FAMILY, 8)).pack(side=tk.LEFT, padx=(2, 0))
+        tk.Label(frame, text="s", font=(_FONT_FAMILY, 8)).pack(side=tk.LEFT, padx=(1, 4))
 
         def do_run_once():
             enabled.set(False)
@@ -1392,7 +1396,7 @@ def create_gui():
                             run_once, stop_event, args=(device, name, func))
 
         tk.Button(frame, text=name, command=do_run_once,
-                  font=("Segoe UI", 9)).pack(side=tk.LEFT, fill=tk.X, expand=True)
+                  font=(_FONT_FAMILY, 9)).pack(side=tk.LEFT, fill=tk.X, expand=True)
 
     def add_debug_button(parent, name, function):
         def do_run_once():
@@ -1400,7 +1404,7 @@ def create_gui():
                 threading.Thread(target=function, args=(device,), daemon=True).start()
 
         tk.Button(parent, text=name, command=do_run_once,
-                  font=("Segoe UI", 9)).pack(pady=2, fill=tk.X)
+                  font=(_FONT_FAMILY, 9)).pack(pady=2, fill=tk.X)
 
     # Farm tab (Rally Titan removed — now a top-level toggle)
     add_task_row(farm_tab, "Rally Evil Guard", 30)
@@ -1462,12 +1466,12 @@ def create_gui():
 
     tap_row = tk.Frame(debug_tab)
     tap_row.pack(fill=tk.X, pady=2)
-    tk.Label(tap_row, text="Tap X:", font=("Segoe UI", 9)).pack(side=tk.LEFT)
+    tk.Label(tap_row, text="Tap X:", font=(_FONT_FAMILY, 9)).pack(side=tk.LEFT)
     x_var = tk.StringVar()
-    tk.Entry(tap_row, textvariable=x_var, width=5, font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=(2, 8))
-    tk.Label(tap_row, text="Y:", font=("Segoe UI", 9)).pack(side=tk.LEFT)
+    tk.Entry(tap_row, textvariable=x_var, width=5, font=(_FONT_FAMILY, 8)).pack(side=tk.LEFT, padx=(2, 8))
+    tk.Label(tap_row, text="Y:", font=(_FONT_FAMILY, 9)).pack(side=tk.LEFT)
     y_var = tk.StringVar()
-    tk.Entry(tap_row, textvariable=y_var, width=5, font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=(2, 8))
+    tk.Entry(tap_row, textvariable=y_var, width=5, font=(_FONT_FAMILY, 8)).pack(side=tk.LEFT, padx=(2, 8))
 
     def test_tap():
         try:
@@ -1478,7 +1482,7 @@ def create_gui():
         except ValueError:
             log.warning("Invalid coordinates!")
 
-    tk.Button(tap_row, text="Tap", command=test_tap, font=("Segoe UI", 8)).pack(side=tk.LEFT)
+    tk.Button(tap_row, text="Tap", command=test_tap, font=(_FONT_FAMILY, 8)).pack(side=tk.LEFT)
 
     # ============================================================
     # STOP ALL / QUIT
@@ -1499,7 +1503,7 @@ def create_gui():
         log.info("=== ALL TASKS STOPPED ===")
 
     stop_frame = tk.Frame(window, bg="#333333", cursor="hand2")
-    stop_label = tk.Label(stop_frame, text="STOP ALL", font=("Segoe UI", 11, "bold"),
+    stop_label = tk.Label(stop_frame, text="STOP ALL", font=(_FONT_FAMILY, 11, "bold"),
                           bg="#333333", fg="white", pady=8)
     stop_label.pack(fill=tk.X)
     stop_frame.bind("<Button-1>", lambda e: stop_all())
@@ -1592,11 +1596,11 @@ def create_gui():
             messagebox.showerror("Bug Report", f"Failed to export bug report:\n{e}")
 
     tk.Button(quit_row, text="Restart", command=restart,
-              font=("Segoe UI", 9), bg=COLOR_BG).pack(side=tk.LEFT, padx=(0, 8))
+              font=(_FONT_FAMILY, 9), bg=COLOR_BG).pack(side=tk.LEFT, padx=(0, 8))
     tk.Button(quit_row, text="Bug Report", command=export_bug_report,
-              font=("Segoe UI", 9), bg=COLOR_BG).pack(side=tk.LEFT, padx=(0, 8))
+              font=(_FONT_FAMILY, 9), bg=COLOR_BG).pack(side=tk.LEFT, padx=(0, 8))
     tk.Button(quit_row, text="Quit", command=lambda: on_close(),
-              font=("Segoe UI", 9), bg=COLOR_BG).pack(side=tk.LEFT)
+              font=(_FONT_FAMILY, 9), bg=COLOR_BG).pack(side=tk.LEFT)
 
     # ============================================================
     # PERIODIC CLEANUP
@@ -1764,4 +1768,7 @@ if __name__ == "__main__":
         os.execv(sys.executable, [sys.executable] + sys.argv)
 
     _main_log.info("Running PACbot...")
+    # Pre-initialize OCR engine in background thread (Windows only — loads EasyOCR models).
+    # On macOS, Apple Vision has no startup cost so this is a no-op.
+    threading.Thread(target=warmup_ocr, daemon=True).start()
     create_gui()

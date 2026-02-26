@@ -218,43 +218,37 @@ class TestReadText:
     def test_none_screen_returns_empty(self):
         assert read_text(None) == ""
 
-    @patch("vision._get_ocr_reader")
-    def test_normal_text(self, mock_get_reader):
-        mock_reader = MagicMock()
-        # EasyOCR detail=1 returns [(bbox, text, confidence), ...]
-        mock_reader.readtext.return_value = [
+    @patch("vision.ocr_read")
+    def test_normal_text(self, mock_ocr_read):
+        # ocr_read detail=1 returns [(bbox, text, confidence), ...]
+        mock_ocr_read.return_value = [
             (None, "Hello", 0.95),
             (None, "World", 0.90),
         ]
-        mock_get_reader.return_value = mock_reader
 
         screen = np.zeros((100, 100, 3), dtype=np.uint8)
         result = read_text(screen)
         assert result == "Hello World"
 
-    @patch("vision._get_ocr_reader")
-    def test_region_cropping(self, mock_get_reader):
-        mock_reader = MagicMock()
-        mock_reader.readtext.return_value = [(None, "Cropped", 0.95)]
-        mock_get_reader.return_value = mock_reader
+    @patch("vision.ocr_read")
+    def test_region_cropping(self, mock_ocr_read):
+        mock_ocr_read.return_value = [(None, "Cropped", 0.95)]
 
         # 200x200 screen, crop to (50,50)-(100,100)
         screen = np.ones((200, 200, 3), dtype=np.uint8) * 128
         result = read_text(screen, region=(50, 50, 100, 100))
         assert result == "Cropped"
         # Verify the OCR received a processed (grayscale, upscaled) image
-        call_args = mock_reader.readtext.call_args
+        call_args = mock_ocr_read.call_args
         gray_img = call_args[0][0]
         # Region is 50x50, upscaled 2x → 100x100
         assert gray_img.shape == (100, 100)
 
-    @patch("vision._get_ocr_reader")
-    def test_low_confidence_warning(self, mock_get_reader):
-        mock_reader = MagicMock()
-        mock_reader.readtext.return_value = [
+    @patch("vision.ocr_read")
+    def test_low_confidence_warning(self, mock_ocr_read):
+        mock_ocr_read.return_value = [
             (None, "Blurry", 0.3),
         ]
-        mock_get_reader.return_value = mock_reader
 
         screen = np.zeros((100, 100, 3), dtype=np.uint8)
         # Should not crash — warning is logged internally
@@ -268,38 +262,32 @@ class TestReadText:
 
 class TestReadAP:
     @patch("vision.time.sleep")
-    @patch("vision._get_ocr_reader")
+    @patch("vision.ocr_read")
     @patch("vision.load_screenshot")
-    def test_success_first_try(self, mock_screenshot, mock_get_reader, mock_sleep):
+    def test_success_first_try(self, mock_screenshot, mock_ocr_read, mock_sleep):
         mock_screenshot.return_value = np.zeros((1920, 1080, 3), dtype=np.uint8)
-        mock_reader = MagicMock()
-        mock_reader.readtext.return_value = ["101/400"]
-        mock_get_reader.return_value = mock_reader
+        mock_ocr_read.return_value = ["101/400"]
 
         result = read_ap("dev1", retries=3)
         assert result == (101, 400)
 
     @patch("vision.time.sleep")
-    @patch("vision._get_ocr_reader")
+    @patch("vision.ocr_read")
     @patch("vision.load_screenshot")
-    def test_success_on_retry(self, mock_screenshot, mock_get_reader, mock_sleep):
+    def test_success_on_retry(self, mock_screenshot, mock_ocr_read, mock_sleep):
         mock_screenshot.return_value = np.zeros((1920, 1080, 3), dtype=np.uint8)
-        mock_reader = MagicMock()
         # First attempt: timer text, second: AP value
-        mock_reader.readtext.side_effect = [["03:45"], ["200/400"]]
-        mock_get_reader.return_value = mock_reader
+        mock_ocr_read.side_effect = [["03:45"], ["200/400"]]
 
         result = read_ap("dev1", retries=3)
         assert result == (200, 400)
 
     @patch("vision.time.sleep")
-    @patch("vision._get_ocr_reader")
+    @patch("vision.ocr_read")
     @patch("vision.load_screenshot")
-    def test_all_retries_fail(self, mock_screenshot, mock_get_reader, mock_sleep):
+    def test_all_retries_fail(self, mock_screenshot, mock_ocr_read, mock_sleep):
         mock_screenshot.return_value = np.zeros((1920, 1080, 3), dtype=np.uint8)
-        mock_reader = MagicMock()
-        mock_reader.readtext.return_value = ["garbage"]
-        mock_get_reader.return_value = mock_reader
+        mock_ocr_read.return_value = ["garbage"]
 
         result = read_ap("dev1", retries=2)
         assert result is None
@@ -340,13 +328,15 @@ class TestFindAllMatches:
 
     @patch("vision.get_template")
     def test_multiple_matches_dedup(self, mock_get_template):
-        # Create a screen with a known pattern repeated at known positions
-        screen = np.zeros((200, 200, 3), dtype=np.uint8)
-        template = np.ones((10, 10, 3), dtype=np.uint8) * 255
+        # Use a distinctive (non-uniform) pattern — TM_CCOEFF_NORMED needs
+        # variance in the template to produce meaningful scores.
+        rng = np.random.RandomState(42)
+        template = rng.randint(0, 256, (10, 10, 3), dtype=np.uint8)
 
+        screen = np.zeros((200, 200, 3), dtype=np.uint8)
         # Place template at (20,20) and (100,100) — far apart
-        screen[20:30, 20:30] = 255
-        screen[100:110, 100:110] = 255
+        screen[20:30, 20:30] = template
+        screen[100:110, 100:110] = template
         mock_get_template.return_value = template
 
         result = find_all_matches(screen, "test.png", threshold=0.9, min_distance=50)

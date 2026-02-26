@@ -58,13 +58,14 @@ class TestGetDevices:
         assert len(result) == 2
 
     @patch("devices.subprocess.run")
-    def test_dedup_emulator_and_ip(self, mock_run):
-        """emulator-5554 and 127.0.0.1:5555 are the same — keep only emulator form."""
+    def test_both_emulator_and_ip_returned(self, mock_run):
+        """get_devices() returns all devices as-is (dedup is handled by
+        skipping auto_connect on Windows instead)."""
         mock_run.return_value = MagicMock(
             stdout="List of devices attached\nemulator-5554\tdevice\n127.0.0.1:5555\tdevice\n"
         )
         result = get_devices()
-        assert result == ["emulator-5554"]
+        assert result == ["emulator-5554", "127.0.0.1:5555"]
 
     @patch("devices.subprocess.run")
     def test_empty(self, mock_run):

@@ -103,6 +103,11 @@ def _find_adb():
             if os.path.isfile(candidate):
                 return candidate
 
+        # BlueStacks Mac — bundled adb
+        bluestacks_mac = "/Applications/BlueStacks.app/Contents/MacOS/hd-adb"
+        if os.path.isfile(bluestacks_mac):
+            return bluestacks_mac
+
         # MuMu Player Mac — bundled adb
         mumu_mac = "/Applications/MuMuPlayer.app/Contents/MacOS/tools/adb"
         if os.path.isfile(mumu_mac):

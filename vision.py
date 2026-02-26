@@ -4,16 +4,9 @@ import time
 import random
 import os
 import re
+import platform
 import numpy as np
 from datetime import datetime
-
-import warnings
-
-# Suppress noisy warnings from torch/easyocr before importing
-warnings.filterwarnings("ignore", message=".*pin_memory.*")
-warnings.filterwarnings("ignore", message=".*GPU.*")
-
-import easyocr
 
 import threading
 
@@ -24,20 +17,157 @@ from botlog import get_logger, stats
 # Thread-local storage for find_image best score (avoids race between device threads)
 _thread_local = threading.local()
 
-# Initialize EasyOCR reader once (downloads models on first run)
+# ============================================================
+# OCR BACKEND — platform-specific
+# ============================================================
+#
+# Two OCR backends are supported:
+#
+#   macOS:   Apple Vision framework (via pyobjc-framework-Vision)
+#            - Uses the native VNRecognizeTextRequest API
+#            - Hardware-accelerated, ~30ms per call (Accurate mode)
+#            - No model downloads needed — ships with macOS
+#            - Requires: pyobjc-framework-Vision (installed automatically on macOS)
+#
+#   Windows: EasyOCR (deep learning, PyTorch-based)
+#            - Uses a neural network OCR model (~100MB download on first run)
+#            - ~500-2000ms per call on CPU
+#            - Requires: easyocr, torch (installed via requirements.txt)
+#
+# Both backends expose the same interface through ocr_read().
+# When modifying OCR behavior, update BOTH backends to keep them in sync.
+# The easiest way to verify: search for "BACKEND:" comments in this section.
+# ============================================================
+
+_USE_APPLE_VISION = platform.system() == "Darwin"
+
+# --- BACKEND: EasyOCR (Windows) ---
+# EasyOCR reader is initialized lazily and cached globally.
+# Thread-safe via double-checked locking.
 _ocr_reader = None
 _ocr_lock = threading.Lock()
 
 def _get_ocr_reader():
+    """Get the EasyOCR reader instance (Windows only).
+
+    Lazy-initialized on first call. Downloads OCR models on first run.
+    On macOS, this is never called — Apple Vision is used instead.
+    """
     global _ocr_reader
     if _ocr_reader is None:
         with _ocr_lock:
-            if _ocr_reader is None:  # Double-check after acquiring lock
+            if _ocr_reader is None:
+                import warnings
+                warnings.filterwarnings("ignore", message=".*pin_memory.*")
+                warnings.filterwarnings("ignore", message=".*GPU.*")
+                import easyocr
                 _log = get_logger("vision")
                 _log.info("Initializing EasyOCR (first run may download models)...")
                 _ocr_reader = easyocr.Reader(['en'], gpu=False, verbose=False)
                 _log.info("EasyOCR ready.")
     return _ocr_reader
+
+# --- BACKEND: Apple Vision (macOS) ---
+
+def _apple_vision_ocr(image, allowlist=None):
+    """Run OCR using Apple's Vision framework.
+
+    Takes a grayscale or BGR numpy array, returns list of (text, confidence) tuples.
+    The allowlist parameter is applied as a post-filter (Vision doesn't support
+    character allowlists natively, but its accuracy is high enough that filtering
+    after recognition works well).
+
+    Only called on macOS — guarded by _USE_APPLE_VISION flag.
+    """
+    import Vision
+    import Quartz
+
+    # Convert numpy array to CGImage via PNG bytes
+    _, png_bytes = cv2.imencode(".png", image)
+    data = Quartz.CFDataCreate(None, png_bytes.tobytes(), len(png_bytes))
+    image_source = Quartz.CGImageSourceCreateWithData(data, None)
+    cg_image = Quartz.CGImageSourceCreateImageAtIndex(image_source, 0, None)
+
+    request = Vision.VNRecognizeTextRequest.alloc().init()
+    request.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
+
+    handler = Vision.VNImageRequestHandler.alloc().initWithCGImage_options_(cg_image, None)
+    success, error = handler.performRequests_error_([request], None)
+    if not success:
+        get_logger("vision").warning("Apple Vision OCR failed: %s", error)
+        return []
+
+    results = []
+    for obs in request.results():
+        candidate = obs.topCandidates_(1)[0]
+        text = candidate.string()
+        confidence = candidate.confidence()
+
+        # Apply allowlist filter if specified
+        if allowlist:
+            text = "".join(c for c in text if c in allowlist)
+
+        if text:
+            results.append((text, confidence))
+
+    return results
+
+
+def warmup_ocr():
+    """Pre-initialize the OCR engine in the background so the first real call is fast.
+
+    On Windows: loads EasyOCR + downloads models (can take 10-30s on first run).
+    On macOS: triggers Apple Vision framework initialization (~5-7s first call,
+              then ~50ms per call). Without this, the first quest check would stall.
+
+    Call this from main.py at startup in a background thread.
+    """
+    _log = get_logger("vision")
+    if _USE_APPLE_VISION:
+        _log.info("Warming up Apple Vision OCR...")
+        # Trigger framework load with a tiny dummy image
+        dummy = np.zeros((10, 100), dtype=np.uint8)
+        cv2.putText(dummy, "init", (2, 8), cv2.FONT_HERSHEY_SIMPLEX, 0.3, 255, 1)
+        _apple_vision_ocr(dummy)
+        _log.info("Apple Vision OCR ready.")
+    else:
+        _log.info("Warming up EasyOCR engine in background...")
+        _get_ocr_reader()
+        _log.info("EasyOCR ready.")
+
+
+def ocr_read(image, allowlist=None, detail=0):
+    """Unified OCR interface — works on both macOS (Apple Vision) and Windows (EasyOCR).
+
+    Args:
+        image: Preprocessed image (grayscale numpy array, already upscaled).
+        allowlist: Optional string of allowed characters (e.g. "0123456789/").
+        detail: 0 = return list of text strings only.
+                1 = return list of (bbox, text, confidence) tuples (EasyOCR format).
+
+    Returns:
+        detail=0: List of recognized text strings.
+        detail=1: List of (bbox, text, confidence) tuples.
+
+    When modifying this function, ensure BOTH backends produce compatible output.
+    """
+    if _USE_APPLE_VISION:
+        # --- BACKEND: Apple Vision (macOS) ---
+        results = _apple_vision_ocr(image, allowlist=allowlist)
+        if detail == 0:
+            return [text for text, conf in results]
+        else:
+            # Return EasyOCR-compatible format: (bbox, text, confidence)
+            # bbox is set to None since Apple Vision uses different coordinate systems
+            # and no caller currently uses bbox from detail=1 results.
+            return [(None, text, conf) for text, conf in results]
+    else:
+        # --- BACKEND: EasyOCR (Windows) ---
+        reader = _get_ocr_reader()
+        if detail == 0:
+            return reader.readtext(image, allowlist=allowlist, detail=0)
+        else:
+            return reader.readtext(image, allowlist=allowlist, detail=1)
 
 # ============================================================
 # CLICK TRAIL (debug tap logging)
@@ -220,9 +350,9 @@ def read_text(screen, region=None, allowlist=None, device=None):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
 
-    reader = _get_ocr_reader()
-    results = reader.readtext(gray, allowlist=allowlist, detail=1)
-    # Extract text and confidence from detail=1 results
+    # Uses ocr_read() which dispatches to Apple Vision (macOS) or EasyOCR (Windows)
+    results = ocr_read(gray, allowlist=allowlist, detail=1)
+    # Extract text and confidence from detail=1 results: (bbox, text, confidence)
     texts = [entry[1] for entry in results]
     if results:
         confidences = [entry[2] for entry in results]
@@ -284,8 +414,8 @@ def read_ap(device, retries=5):
         gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
         _, thresh = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
 
-        reader = _get_ocr_reader()
-        results = reader.readtext(thresh, allowlist="0123456789/", detail=0)
+        # Uses ocr_read() which dispatches to Apple Vision (macOS) or EasyOCR (Windows)
+        results = ocr_read(thresh, allowlist="0123456789/", detail=0)
         raw = " ".join(results).strip()
 
         match = re.search(r"(\d+)/(\d+)", raw)
@@ -311,31 +441,59 @@ def get_last_best():
     """Get the best match score from the last find_image call on this thread."""
     return getattr(_thread_local, 'last_best', 0.0)
 
+def _match_in_region(screen, button, region):
+    """Run matchTemplate on a cropped region, return (max_val, full_screen_loc)."""
+    x1, y1, x2, y2 = region
+    cropped = screen[y1:y2, x1:x2]
+    if cropped.shape[0] < button.shape[0] or cropped.shape[1] < button.shape[1]:
+        return 0.0, (0, 0)
+    result = cv2.matchTemplate(cropped, button, cv2.TM_CCOEFF_NORMED)
+    _, max_val, _, max_loc = cv2.minMaxLoc(result)
+    # Translate back to full-screen coordinates
+    return max_val, (max_loc[0] + x1, max_loc[1] + y1)
+
+
 def find_image(screen, image_name, threshold=0.8, region=None, device=None):
     """Find an image template on screen.
     Returns (max_val, max_loc, h, w) on match, or None on failure.
     On failure, the best score is stored per-thread via get_last_best().
-    If device is provided, records hit position to stats for region analysis."""
+    If device is provided, records hit position to stats for region analysis.
+
+    When a region is provided, tries the cropped search first for speed.
+    If that misses, falls back to a full-screen search so that UI shifts
+    (different devices, resolutions, or game updates) don't cause hard failures.
+    A fallback hit logs a warning — check stats to widen the region.
+    """
     _thread_local.last_best = 0.0
     button = get_template(f"elements/{image_name}")
     if screen is None or button is None:
         return None
 
+    log = get_logger("vision", device)
     h, w = button.shape[:2]
 
     if region:
-        x1, y1, x2, y2 = region
-        cropped = screen[y1:y2, x1:x2]
-        result = cv2.matchTemplate(cropped, button, cv2.TM_CCOEFF_NORMED)
-        min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
+        # Fast path: search in cropped region first
+        max_val, loc = _match_in_region(screen, button, region)
         _thread_local.last_best = max_val
         if max_val > threshold:
-            # Translate back to full-screen coordinates
-            loc = (max_loc[0] + x1, max_loc[1] + y1)
             if device:
                 stats.record_template_hit(
                     device, image_name, loc[0] + w // 2, loc[1] + h // 2, max_val)
             return max_val, loc, h, w
+
+        # Fallback: search full screen in case the element moved outside the region
+        result = cv2.matchTemplate(screen, button, cv2.TM_CCOEFF_NORMED)
+        _, max_val_full, _, max_loc_full = cv2.minMaxLoc(result)
+        _thread_local.last_best = max(max_val, max_val_full)
+        if max_val_full > threshold:
+            log.warning("REGION MISS for %s — found via full-screen fallback at (%d, %d). "
+                        "Consider widening IMAGE_REGIONS.",
+                        image_name, max_loc_full[0] + w // 2, max_loc_full[1] + h // 2)
+            if device:
+                stats.record_template_hit(
+                    device, image_name, max_loc_full[0] + w // 2, max_loc_full[1] + h // 2, max_val_full)
+            return max_val_full, max_loc_full, h, w
         return None
 
     result = cv2.matchTemplate(screen, button, cv2.TM_CCOEFF_NORMED)
@@ -460,15 +618,76 @@ IMAGE_REGIONS = {
 # Per-template tap offsets from center (dx, dy).
 # Use when a UI element (e.g. chat bubble) overlaps the template center.
 TAP_OFFSETS = {
-    "depart.png":         (150, 0),   # chat bubble covers center; tap right side
-    "mithril_depart.png": (150, 0),
+    "depart.png":         (75, 0),    # slight right offset to dodge chat bubble overlay
+    "mithril_depart.png": (75, 0),
 }
+
+# Templates eligible for dynamic region learning.
+# After enough hits, the search region auto-narrows to observed positions + padding.
+# Templates NOT in this set always use their static IMAGE_REGIONS entry (or full-screen).
+DYNAMIC_REGION_TEMPLATES = {
+    "rally_titan_select.png",
+    "rally_eg_select.png",
+    "search.png",
+    "depart.png",
+    "mithril_depart.png",
+    "map_screen.png",
+    "aq_claim.png",
+}
+
+# Minimum hits before trusting dynamic region (until then, full-screen search).
+_DYNAMIC_MIN_HITS = 3
+# Padding around the observed bounding box (pixels).  Enough to handle minor
+# variation without eating into full-screen search cost.
+_DYNAMIC_PADDING = 120
+
+
+def get_dynamic_region(device, image_name):
+    """Compute a search region from accumulated hit position data.
+
+    Returns (x1, y1, x2, y2) clipped to screen bounds, or None if not enough
+    data yet — caller should fall back to full-screen search.
+    """
+    if image_name not in DYNAMIC_REGION_TEMPLATES:
+        return None
+    bounds = stats.get_template_hit_bounds(device, image_name)
+    if bounds is None:
+        return None
+    min_x, min_y, max_x, max_y, count = bounds
+    if count < _DYNAMIC_MIN_HITS:
+        return None
+
+    # Get template size so the region encloses the full template, not just centers
+    tpl = get_template(f"elements/{image_name}")
+    if tpl is None:
+        return None
+    th, tw = tpl.shape[:2]
+    half_w, half_h = tw // 2, th // 2
+
+    # Build padded region around observed center positions
+    x1 = max(0, min_x - half_w - _DYNAMIC_PADDING)
+    y1 = max(0, min_y - half_h - _DYNAMIC_PADDING)
+    x2 = min(1080, max_x + half_w + _DYNAMIC_PADDING)
+    y2 = min(1920, max_y + half_h + _DYNAMIC_PADDING)
+
+    # If a static region exists, take the union so we never go tighter than static
+    static = IMAGE_REGIONS.get(image_name)
+    if static:
+        sx1, sy1, sx2, sy2 = static
+        x1 = min(x1, sx1)
+        y1 = min(y1, sy1)
+        x2 = max(x2, sx2)
+        y2 = max(y2, sy2)
+
+    return (x1, y1, x2, y2)
+
 
 def tap_image(image_name, device, threshold=0.8):
     """Find an image on screen and tap it"""
     log = get_logger("vision", device)
     screen = load_screenshot(device)
-    region = IMAGE_REGIONS.get(image_name)
+    # Dynamic region (learned from hits) > static IMAGE_REGIONS > full-screen
+    region = get_dynamic_region(device, image_name) or IMAGE_REGIONS.get(image_name)
     match = find_image(screen, image_name, threshold=threshold, region=region, device=device)
 
     if match:
