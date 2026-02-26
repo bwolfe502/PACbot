@@ -9,6 +9,25 @@ echo "============================"
 echo "PACbot - Setup + Run"
 echo "============================"
 
+# Download ADB if missing (fallback for source installs without bundled binaries)
+if [ ! -f "platform-tools/adb" ]; then
+    echo ""
+    echo "Downloading ADB platform-tools..."
+    PLAT_URL="https://dl.google.com/android/repository/platform-tools-latest-darwin.zip"
+    if [ "$(uname)" = "Linux" ]; then
+        PLAT_URL="https://dl.google.com/android/repository/platform-tools-latest-linux.zip"
+    fi
+    if curl -fSL -o /tmp/platform-tools.zip "$PLAT_URL" 2>/dev/null; then
+        mkdir -p platform-tools
+        unzip -jo /tmp/platform-tools.zip "platform-tools/adb" -d platform-tools/ 2>/dev/null
+        chmod +x platform-tools/adb
+        rm -f /tmp/platform-tools.zip
+        echo "Done!"
+    else
+        echo "WARNING: Failed to download platform-tools. ADB may not work."
+    fi
+fi
+
 # Check Python
 if ! command -v python3 &> /dev/null; then
     echo ""

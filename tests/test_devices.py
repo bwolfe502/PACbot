@@ -3,37 +3,70 @@
 import subprocess
 from unittest.mock import patch, MagicMock
 
-from devices import auto_connect_emulators, get_devices, get_emulator_instances
+from devices import (auto_connect_emulators, get_devices, get_emulator_instances,
+                     _auto_connect_by_ports, _connect_ports)
 
 
 # ============================================================
-# auto_connect_emulators
+# auto_connect_emulators / _connect_ports / _auto_connect_by_ports
 # ============================================================
 
-class TestAutoConnectEmulators:
-    @patch("devices.EMULATOR_PORTS", {"mumu": [7555, 7556]})
+class TestConnectPorts:
+    """Tests for _connect_ports (shared by Windows and non-Windows paths)."""
+
     @patch("devices.subprocess.run")
     def test_connected(self, mock_run):
         """Ports that respond with 'connected to' are returned."""
         mock_run.return_value = MagicMock(stdout="connected to 127.0.0.1:7555")
-        result = auto_connect_emulators()
+        result = _connect_ports({7555, 7556})
         assert "127.0.0.1:7555" in result
 
-    @patch("devices.EMULATOR_PORTS", {"mumu": [7555]})
     @patch("devices.subprocess.run")
     def test_already_connected(self, mock_run):
         """'already connected' also counts as success."""
         mock_run.return_value = MagicMock(stdout="already connected to 127.0.0.1:7555")
-        result = auto_connect_emulators()
+        result = _connect_ports({7555})
         assert "127.0.0.1:7555" in result
 
-    @patch("devices.EMULATOR_PORTS", {"mumu": [7555]})
     @patch("devices.subprocess.run")
     def test_timeout_skipped(self, mock_run):
         """Ports that time out are silently skipped."""
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="adb", timeout=3)
-        result = auto_connect_emulators()
+        result = _connect_ports({7555})
         assert result == []
+
+
+class TestAutoConnectByPorts:
+    """Tests for _auto_connect_by_ports (macOS/Linux path)."""
+
+    @patch("devices.EMULATOR_PORTS", {"mumu": [7555, 7556]})
+    @patch("devices.subprocess.run")
+    def test_probes_known_ports(self, mock_run):
+        mock_run.return_value = MagicMock(stdout="connected to 127.0.0.1:7555")
+        result = _auto_connect_by_ports()
+        assert "127.0.0.1:7555" in result
+
+
+class TestAutoConnectEmulators:
+    """Tests for auto_connect_emulators dispatch logic."""
+
+    @patch("devices.platform.system", return_value="Linux")
+    @patch("devices.EMULATOR_PORTS", {"mumu": [7555]})
+    @patch("devices.subprocess.run")
+    def test_non_windows_probes_ports(self, mock_run, _mock_sys):
+        """On non-Windows, probes known emulator ports."""
+        mock_run.return_value = MagicMock(stdout="connected to 127.0.0.1:7555")
+        result = auto_connect_emulators()
+        assert "127.0.0.1:7555" in result
+
+    @patch("devices.platform.system", return_value="Windows")
+    @patch("devices._auto_connect_windows")
+    def test_windows_delegates(self, mock_win, _mock_sys):
+        """On Windows, delegates to _auto_connect_windows."""
+        mock_win.return_value = ["127.0.0.1:5635"]
+        result = auto_connect_emulators()
+        assert result == ["127.0.0.1:5635"]
+        mock_win.assert_called_once()
 
 
 # ============================================================
@@ -58,14 +91,23 @@ class TestGetDevices:
         assert len(result) == 2
 
     @patch("devices.subprocess.run")
-    def test_both_emulator_and_ip_returned(self, mock_run):
-        """get_devices() returns all devices as-is (dedup is handled by
-        skipping auto_connect on Windows instead)."""
+    def test_duplicate_emulator_and_ip_deduplicated(self, mock_run):
+        """emulator-5554 and 127.0.0.1:5555 are the same device (port 5554+1),
+        so get_devices() keeps only the emulator-N form."""
         mock_run.return_value = MagicMock(
             stdout="List of devices attached\nemulator-5554\tdevice\n127.0.0.1:5555\tdevice\n"
         )
         result = get_devices()
-        assert result == ["emulator-5554", "127.0.0.1:5555"]
+        assert result == ["emulator-5554"]
+
+    @patch("devices.subprocess.run")
+    def test_non_overlapping_ip_kept(self, mock_run):
+        """127.0.0.1:<port> entries that don't overlap with emulator-N are kept."""
+        mock_run.return_value = MagicMock(
+            stdout="List of devices attached\nemulator-5554\tdevice\n127.0.0.1:7555\tdevice\n"
+        )
+        result = get_devices()
+        assert result == ["emulator-5554", "127.0.0.1:7555"]
 
     @patch("devices.subprocess.run")
     def test_empty(self, mock_run):
