@@ -8,6 +8,7 @@ icon template matching, portrait tracking, and triangle detection.
 
 import time
 import numpy as np
+import pytest
 import cv2
 from unittest.mock import patch, MagicMock
 
@@ -37,49 +38,21 @@ def _make_screen_with_yellow_at(y_positions):
 class TestTroopsAvail:
     """Test troop counting with mocked screenshots."""
 
-    @patch("troops.get_template", return_value=None)  # Skip map_screen check
-    @patch("troops.load_screenshot")
-    def test_zero_troops_all_occupied(self, mock_screenshot, mock_template):
-        # Pattern 0: all 5 slots occupied → 0 troops available
-        screen = _make_screen_with_yellow_at([640, 800, 960, 1110, 1270])
-        mock_screenshot.return_value = screen
-        assert troops_avail("dev1") == 0
-
+    @pytest.mark.parametrize("yellow_positions,expected", [
+        ([640, 800, 960, 1110, 1270], 0),  # all 5 slots occupied
+        ([720, 880, 1040, 1200], 1),
+        ([800, 960, 1110], 2),
+        ([880, 1040], 3),
+        ([960], 4),
+        ([], 5),                            # no match → all home
+    ])
     @patch("troops.get_template", return_value=None)
     @patch("troops.load_screenshot")
-    def test_one_troop(self, mock_screenshot, mock_template):
-        screen = _make_screen_with_yellow_at([720, 880, 1040, 1200])
+    def test_troop_count_patterns(self, mock_screenshot, mock_template,
+                                  yellow_positions, expected):
+        screen = _make_screen_with_yellow_at(yellow_positions)
         mock_screenshot.return_value = screen
-        assert troops_avail("dev1") == 1
-
-    @patch("troops.get_template", return_value=None)
-    @patch("troops.load_screenshot")
-    def test_two_troops(self, mock_screenshot, mock_template):
-        screen = _make_screen_with_yellow_at([800, 960, 1110])
-        mock_screenshot.return_value = screen
-        assert troops_avail("dev1") == 2
-
-    @patch("troops.get_template", return_value=None)
-    @patch("troops.load_screenshot")
-    def test_three_troops(self, mock_screenshot, mock_template):
-        screen = _make_screen_with_yellow_at([880, 1040])
-        mock_screenshot.return_value = screen
-        assert troops_avail("dev1") == 3
-
-    @patch("troops.get_template", return_value=None)
-    @patch("troops.load_screenshot")
-    def test_four_troops(self, mock_screenshot, mock_template):
-        screen = _make_screen_with_yellow_at([960])
-        mock_screenshot.return_value = screen
-        assert troops_avail("dev1") == 4
-
-    @patch("troops.get_template", return_value=None)
-    @patch("troops.load_screenshot")
-    def test_five_troops_no_match(self, mock_screenshot, mock_template):
-        # No yellow pixels at any pattern position → falls through to 5
-        screen = _make_screen_with_yellow_at([])
-        mock_screenshot.return_value = screen
-        assert troops_avail("dev1") == 5
+        assert troops_avail("dev1") == expected
 
     @patch("troops.get_template", return_value=None)
     @patch("troops.load_screenshot")
@@ -652,26 +625,17 @@ class TestDetectSelectedTroop:
                 screen[y, x] = (255, 255, 255)
         return screen
 
+    @pytest.mark.parametrize("slot_index,expected", [
+        (0, 1),
+        (2, 3),
+        (4, 5),
+    ])
     @patch("troops.load_screenshot")
-    def test_troop_1(self, mock_ss):
-        screen = self._make_screen_with_triangle(_DEPART_SLOT_Y_POSITIONS[0])
+    def test_detects_troop_slot(self, mock_ss, slot_index, expected):
+        screen = self._make_screen_with_triangle(_DEPART_SLOT_Y_POSITIONS[slot_index])
         mock_ss.return_value = screen
         result = detect_selected_troop("test_dev", screen=screen)
-        assert result == 1
-
-    @patch("troops.load_screenshot")
-    def test_troop_3(self, mock_ss):
-        screen = self._make_screen_with_triangle(_DEPART_SLOT_Y_POSITIONS[2])
-        mock_ss.return_value = screen
-        result = detect_selected_troop("test_dev", screen=screen)
-        assert result == 3
-
-    @patch("troops.load_screenshot")
-    def test_troop_5(self, mock_ss):
-        screen = self._make_screen_with_triangle(_DEPART_SLOT_Y_POSITIONS[4])
-        mock_ss.return_value = screen
-        result = detect_selected_troop("test_dev", screen=screen)
-        assert result == 5
+        assert result == expected
 
     @patch("troops.load_screenshot")
     def test_no_triangle(self, mock_ss):
