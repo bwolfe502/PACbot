@@ -367,15 +367,20 @@ def navigate(target_screen, device, _depth=0):
     if target_screen == Screen.BATTLE_LIST:
         if current == Screen.MAP:
             if not tap_image("bl_button.png", device):
-                _save_debug_screenshot(device, "bl_button_not_found")
+                # Button may not have rendered yet — wait and retry once
+                time.sleep(1.0)
+                if not tap_image("bl_button.png", device):
+                    _save_debug_screenshot(device, "bl_button_not_found")
         elif current in [Screen.ALLIANCE_QUEST, Screen.TERRITORY]:
             tap_image("back_arrow.png", device, threshold=0.7)
         else:
             if not navigate(Screen.MAP, device, _depth=_depth + 1):
                 return False
             if not tap_image("bl_button.png", device):
-                _save_debug_screenshot(device, "bl_button_not_found")
-        return _verify_screen(Screen.BATTLE_LIST, device)
+                time.sleep(1.0)
+                if not tap_image("bl_button.png", device):
+                    _save_debug_screenshot(device, "bl_button_not_found")
+        return _verify_screen(Screen.BATTLE_LIST, device, wait_time=2.5)
 
     # To aq_screen
     if target_screen == Screen.ALLIANCE_QUEST:
