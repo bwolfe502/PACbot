@@ -180,7 +180,7 @@ Loaded on startup, saved on quit/restart. `DEFAULTS` dict provides fallback valu
 ## Tests
 
 ```bash
-py -m pytest          # run all ~280 tests
+py -m pytest          # run all ~326 tests
 py -m pytest -x       # stop on first failure
 py -m pytest -k name  # filter by test name
 ```
@@ -202,6 +202,7 @@ No fixtures require a running emulator — all use mocked ADB/vision.
 | `test_quest_tracking.py` | Multi-device quest rally tracking, `_track_quest_progress`, `_record_rally_started`, `_effective_remaining` |
 | `test_check_quests_helpers.py` | `_deduplicate_quests`, `_get_actionable_quests` |
 | `test_classify_quest.py` | `_classify_quest_text` OCR classification (all QuestType values) |
+| `test_settings_validation.py` | `validate_settings` — type checks, range/choice validation, device_troops, warnings, schema sync |
 | `test_task_runner.py` | `sleep_interval`, `launch_task`/`stop_task`, run_once, run_repeat, settings load/save |
 
 ### Test Conventions
@@ -241,7 +242,7 @@ PACbot/
 ├── elements/            # Template images for matching
 │   └── statuses/        # Troop status icon templates
 ├── platform-tools/      # Bundled ADB executable
-├── tests/               # pytest suite (~280 tests)
+├── tests/               # pytest suite (~326 tests)
 ├── logs/                # Log files
 ├── stats/               # Session stats JSON
 └── debug/               # Debug screenshots

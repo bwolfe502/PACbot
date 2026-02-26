@@ -236,6 +236,105 @@ BORDER_COLORS = {
 }
 
 # ============================================================
+# SETTINGS VALIDATION
+# ============================================================
+
+SETTINGS_RULES = {
+    # Booleans — type check only
+    "auto_heal":             {"type": bool},
+    "auto_restore_ap":       {"type": bool},
+    "ap_use_free":           {"type": bool},
+    "ap_use_potions":        {"type": bool},
+    "ap_allow_large_potions":{"type": bool},
+    "ap_use_gems":           {"type": bool},
+    "verbose_logging":       {"type": bool},
+    "eg_rally_own":          {"type": bool},
+    # Ints — type + optional min/max
+    "ap_gem_limit":          {"type": int, "min": 0, "max": 3500},
+    "min_troops":            {"type": int, "min": 0, "max": 5},
+    "variation":             {"type": int, "min": 0},
+    "titan_interval":        {"type": int, "min": 1},
+    "groot_interval":        {"type": int, "min": 1},
+    "reinforce_interval":    {"type": int, "min": 1},
+    "pass_interval":         {"type": int, "min": 1},
+    "mithril_interval":      {"type": int, "min": 1},
+    # Strings — type + allowed values
+    "pass_mode":             {"type": str, "choices": ["Rally Joiner", "Rally Starter"]},
+    "my_team":               {"type": str, "choices": ["yellow", "red", "blue", "green"]},
+    "enemy_team":            {"type": str, "choices": ["yellow", "red", "blue", "green"]},
+    "mode":                  {"type": str, "choices": ["bl", "rw"]},
+}
+
+
+def validate_settings(settings, defaults):
+    """Validate and sanitize a settings dict.
+
+    Returns (cleaned_settings, warnings) where cleaned_settings is a new dict
+    with invalid values replaced by defaults, and warnings is a list of strings
+    describing what was fixed.
+    """
+    cleaned = dict(settings)
+    warnings = []
+
+    for key, rule in SETTINGS_RULES.items():
+        if key not in cleaned:
+            continue
+
+        value = cleaned[key]
+        expected = rule["type"]
+
+        # Type check
+        if expected is bool:
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, int) and value in (0, 1):
+                cleaned[key] = bool(value)
+                continue
+            warnings.append(f"{key}: expected bool, got {type(value).__name__} — reset to default")
+            cleaned[key] = defaults[key]
+        elif expected is int:
+            if isinstance(value, bool) or not isinstance(value, int):
+                warnings.append(f"{key}: expected int, got {type(value).__name__} — reset to default")
+                cleaned[key] = defaults[key]
+                continue
+            lo = rule.get("min")
+            hi = rule.get("max")
+            if lo is not None and value < lo:
+                warnings.append(f"{key}: {value} below minimum {lo} — reset to default")
+                cleaned[key] = defaults[key]
+            elif hi is not None and value > hi:
+                warnings.append(f"{key}: {value} above maximum {hi} — reset to default")
+                cleaned[key] = defaults[key]
+        elif expected is str:
+            if not isinstance(value, str):
+                warnings.append(f"{key}: expected str, got {type(value).__name__} — reset to default")
+                cleaned[key] = defaults[key]
+            elif "choices" in rule and value not in rule["choices"]:
+                warnings.append(f"{key}: '{value}' not in {rule['choices']} — reset to default")
+                cleaned[key] = defaults[key]
+
+    # Special case: device_troops (nested dict, not in DEFAULTS)
+    dt = cleaned.get("device_troops")
+    if dt is not None:
+        if not isinstance(dt, dict):
+            warnings.append(f"device_troops: expected dict, got {type(dt).__name__} — removed")
+            cleaned["device_troops"] = {}
+        else:
+            clean_dt = {}
+            for dev_id, count in dt.items():
+                if not isinstance(count, int) or isinstance(count, bool):
+                    warnings.append(f"device_troops[{dev_id}]: expected int, got {type(count).__name__} — skipped")
+                    continue
+                if count < 1 or count > 5:
+                    warnings.append(f"device_troops[{dev_id}]: {count} out of range [1, 5] — skipped")
+                    continue
+                clean_dt[dev_id] = count
+            cleaned["device_troops"] = clean_dt
+
+    return cleaned, warnings
+
+
+# ============================================================
 # CONFIGURATION SETTERS
 # ============================================================
 
