@@ -126,10 +126,28 @@ class StatsTracker:
     navigation failures, and recent errors. Saves to JSON on shutdown.
     """
 
+    AUTO_SAVE_INTERVAL = 300  # seconds (5 minutes)
+
     def __init__(self):
         self._lock = Lock()
         self._session_start = datetime.now()
         self._data = {}
+        self._start_auto_save()
+
+    def _start_auto_save(self):
+        """Periodically save stats to disk so data isn't lost on crash/kill."""
+        from threading import Timer
+
+        def _tick():
+            try:
+                self.save()
+            except Exception:
+                pass
+            self._start_auto_save()
+
+        self._auto_save_timer = Timer(self.AUTO_SAVE_INTERVAL, _tick)
+        self._auto_save_timer.daemon = True
+        self._auto_save_timer.start()
 
     def _ensure_device(self, device):
         if device not in self._data:
