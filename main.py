@@ -162,23 +162,33 @@ def run_auto_quest(device, stop_event):
                 # (troop pixel detection only works on map_screen)
                 if not navigate(Screen.MAP, device):
                     dlog.warning("Cannot reach map screen — retrying in 10s")
+                    config.set_device_status(device, "Navigating...")
                     time.sleep(10)
                     continue
                 troops = troops_avail(device)
                 if troops > config.MIN_TROOPS_AVAILABLE:
+                    config.set_device_status(device, "Checking quests...")
                     check_quests(device, stop_check=stop_check)
                 else:
                     dlog.warning("Not enough troops for quests")
+                    config.set_device_status(device, "Waiting for troops...")
                     if _smart_wait_for_troops(device, stop_check, dlog):
                         continue  # Troop freed up — retry immediately
             if stop_check():
                 break
+            # Show "Waiting for troops" if troops are low, otherwise "Idle"
+            troops = troops_avail(device) if check_screen(device) == Screen.MAP else 0
+            if troops <= config.MIN_TROOPS_AVAILABLE:
+                config.set_device_status(device, "Waiting for troops...")
+            else:
+                config.set_device_status(device, "Idle")
             for _ in range(10):
                 if stop_check():
                     break
                 time.sleep(1)
     except Exception as e:
         dlog.error("ERROR in Auto Quest: %s", e, exc_info=True)
+    config.clear_device_status(device)
     dlog.info("Auto Quest stopped")
 
 def run_auto_titan(device, stop_event, interval, variation):
@@ -199,6 +209,7 @@ def run_auto_titan(device, stop_event, interval, variation):
                     heal_all(device)
                 if not navigate(Screen.MAP, device):
                     dlog.warning("Cannot reach map screen — retrying")
+                    config.set_device_status(device, "Navigating...")
                     time.sleep(10)
                     continue
                 troops = troops_avail(device)
@@ -208,17 +219,21 @@ def run_auto_titan(device, stop_event, interval, variation):
                         search_eg_reset(device)
                         if stop_check():
                             break
+                    config.set_device_status(device, "Rallying titan...")
                     rally_titan(device)
                     rally_count += 1
                 else:
                     dlog.warning("Not enough troops for Rally Titan")
+                    config.set_device_status(device, "Waiting for troops...")
                     if _smart_wait_for_troops(device, stop_check, dlog):
                         continue  # Troop freed up — retry immediately
             if stop_check():
                 break
+            config.set_device_status(device, "Idle")
             sleep_interval(interval, variation, stop_check)
     except Exception as e:
         dlog.error("ERROR in Rally Titan: %s", e, exc_info=True)
+    config.clear_device_status(device)
     dlog.info("Rally Titan stopped")
 
 def run_auto_groot(device, stop_event, interval, variation):
@@ -237,24 +252,30 @@ def run_auto_groot(device, stop_event, interval, variation):
                     heal_all(device)
                 if not navigate(Screen.MAP, device):
                     dlog.warning("Cannot reach map screen — retrying")
+                    config.set_device_status(device, "Navigating...")
                     time.sleep(10)
                     continue
                 troops = troops_avail(device)
                 if troops > config.MIN_TROOPS_AVAILABLE:
+                    config.set_device_status(device, "Joining groot rally...")
                     join_rally(RallyType.GROOT, device)
                 else:
                     dlog.warning("Not enough troops for Rally Groot")
+                    config.set_device_status(device, "Waiting for troops...")
                     if _smart_wait_for_troops(device, stop_check, dlog):
                         continue  # Troop freed up — retry immediately
             if stop_check():
                 break
+            config.set_device_status(device, "Idle")
             sleep_interval(interval, variation, stop_check)
     except Exception as e:
         dlog.error("ERROR in Rally Groot: %s", e, exc_info=True)
+    config.clear_device_status(device)
     dlog.info("Rally Groot stopped")
 
 def run_auto_occupy(device, stop_event):
     config.auto_occupy_running = True
+    config.set_device_status(device, "Occupying towers...")
 
     # Monitor stop event in background and set config flag when stopped
     def monitor():
@@ -263,6 +284,7 @@ def run_auto_occupy(device, stop_event):
 
     threading.Thread(target=monitor, daemon=True).start()
     auto_occupy_loop(device)
+    config.clear_device_status(device)
     get_logger("main", device).info("Auto Occupy stopped")
 
 def run_auto_pass(device, stop_event, pass_mode, pass_interval, variation):
@@ -323,6 +345,7 @@ def run_auto_pass(device, stop_event, pass_mode, pass_interval, variation):
                 mine_mithril_if_due(device, stop_check=stop_check)
                 if stop_check():
                     break
+                config.set_device_status(device, "Pass battle...")
                 result = target(device)
                 if result == "no_marker":
                     dlog.warning("*** TARGET NOT SET! ***")
@@ -344,6 +367,7 @@ def run_auto_pass(device, stop_event, pass_mode, pass_interval, variation):
                 time.sleep(2)
             elif action == "attack":
                 dlog.info("Enemy owns pass - joining war rallies continuously")
+                config.set_device_status(device, "Joining war rallies...")
                 while not stop_check():
                     with lock:
                         troops = troops_avail(device)
@@ -361,6 +385,7 @@ def run_auto_pass(device, stop_event, pass_mode, pass_interval, variation):
                 sleep_interval(10, variation, stop_check)
     except Exception as e:
         dlog.error("ERROR in Auto Pass Battle: %s", e, exc_info=True)
+    config.clear_device_status(device)
     dlog.info("Auto Pass Battle stopped")
 
 def run_auto_reinforce(device, stop_event, interval, variation):
@@ -375,12 +400,15 @@ def run_auto_reinforce(device, stop_event, interval, variation):
                 mine_mithril_if_due(device, stop_check=stop_check)
                 if stop_check():
                     break
+                config.set_device_status(device, "Reinforcing throne...")
                 reinforce_throne(device)
             if stop_check():
                 break
+            config.set_device_status(device, "Idle")
             sleep_interval(interval, variation, stop_check)
     except Exception as e:
         dlog.error("ERROR in Auto Reinforce Throne: %s", e, exc_info=True)
+    config.clear_device_status(device)
     dlog.info("Auto Reinforce Throne stopped")
 
 def run_auto_mithril(device, stop_event):
@@ -393,12 +421,15 @@ def run_auto_mithril(device, stop_event):
     try:
         while not stop_check():
             with lock:
+                config.set_device_status(device, "Mining mithril...")
                 mine_mithril_if_due(device, stop_check=stop_check)
             if stop_check():
                 break
+            config.set_device_status(device, "Idle")
             sleep_interval(60, 0, stop_check)  # Check every 60s
     except Exception as e:
         dlog.error("ERROR in Auto Mithril: %s", e, exc_info=True)
+    config.clear_device_status(device)
     dlog.info("Auto Mithril stopped")
 
 def run_repeat(device, task_name, function, interval, variation, stop_event):
@@ -409,24 +440,29 @@ def run_repeat(device, task_name, function, interval, variation, stop_event):
     try:
         while not stop_check():
             dlog.info("Running %s...", task_name)
+            config.set_device_status(device, f"{task_name}...")
             with lock:
                 function(device)
             dlog.debug("%s completed, waiting %ss...", task_name, interval)
+            config.set_device_status(device, "Idle")
             sleep_interval(interval, variation, stop_check)
     except Exception as e:
         dlog.error("ERROR in %s: %s", task_name, e, exc_info=True)
+    config.clear_device_status(device)
     dlog.info("%s stopped", task_name)
 
 def run_once(device, task_name, function):
     dlog = get_logger("main", device)
     lock = config.get_device_lock(device)
     dlog.info("Running %s...", task_name)
+    config.set_device_status(device, f"{task_name}...")
     try:
         with lock:
             function(device)
         dlog.info("%s completed", task_name)
     except Exception as e:
         dlog.error("ERROR in %s: %s", task_name, e, exc_info=True)
+    config.clear_device_status(device)
 
 # ============================================================
 # TASK LAUNCHER (threads instead of subprocesses)
@@ -540,6 +576,12 @@ def create_gui():
                             fg="#0066cc", cursor="hand2", bg=COLOR_BG)
     how_to_label.pack(pady=(2, 0))
     how_to_label.bind("<Button-1>", lambda e: open_tutorial())
+
+    # ── Status line ──
+    status_var = tk.StringVar(value="")
+    status_label = tk.Label(title_frame, textvariable=status_var,
+                            font=(_FONT_FAMILY, 10, "bold"), fg="#cc0000", bg=COLOR_BG)
+    status_label.pack(pady=(2, 0))
 
     # ── Devices ──
     device_frame = tk.LabelFrame(window, text="Devices", font=(_FONT_FAMILY, 9, "bold"),
@@ -1508,6 +1550,8 @@ def create_gui():
             var.set(False)
         for key in list(running_tasks.keys()):
             stop_task(key)
+        config.DEVICE_STATUS.clear()
+        status_var.set("")
         log.info("=== ALL TASKS STOPPED ===")
 
     stop_frame = tk.Frame(window, bg="#333333", cursor="hand2")
@@ -1674,6 +1718,34 @@ def create_gui():
         window.after(3000, cleanup_dead_tasks)
 
     window.after(3000, cleanup_dead_tasks)
+
+    _status_instance_cache = {}
+    _status_cache_time = [0.0]
+
+    def update_status_line():
+        """Poll config.DEVICE_STATUS and update the GUI status label."""
+        statuses = config.DEVICE_STATUS
+        if statuses:
+            # Refresh instance map at most every 30s (avoids per-second adb+win32 calls)
+            now = time.time()
+            if now - _status_cache_time[0] > 30:
+                _status_instance_cache.clear()
+                _status_instance_cache.update(get_emulator_instances())
+                _status_cache_time[0] = now
+            # Show all active device statuses joined by " | "
+            parts = []
+            for dev, msg in list(statuses.items()):
+                if len(statuses) > 1:
+                    name = _status_instance_cache.get(dev, dev.split(":")[-1])
+                    parts.append(f"{name}: {msg}")
+                else:
+                    parts.append(msg)
+            status_var.set(" | ".join(parts))
+        else:
+            status_var.set("")
+        window.after(1000, update_status_line)
+
+    window.after(1000, update_status_line)
 
     def update_mithril_timer():
         """Update the mithril button text with elapsed time since deploy."""

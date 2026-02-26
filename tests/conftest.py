@@ -24,15 +24,20 @@ def reset_quest_state():
     from actions import (
         _quest_rallies_pending, _quest_last_seen, _quest_pending_since,
         _rally_owner_blacklist, _rally_owner_failures,
+        _last_depart_slot, _quest_rally_slots,
     )
     _quest_rallies_pending.clear()
     _quest_last_seen.clear()
     _quest_pending_since.clear()
     _rally_owner_blacklist.clear()
     _rally_owner_failures.clear()
+    _last_depart_slot.clear()
+    _quest_rally_slots.clear()
     yield
     _quest_rallies_pending.clear()
     _quest_last_seen.clear()
     _quest_pending_since.clear()
     _rally_owner_blacklist.clear()
     _rally_owner_failures.clear()
+    _last_depart_slot.clear()
+    _quest_rally_slots.clear()

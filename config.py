@@ -178,6 +178,8 @@ FAILURE_SCREENSHOT_MAX = 200     # max failure screenshots (persistent)
 MAX_RALLY_ATTEMPTS = 15          # max iterations in rally join loop
 MAX_HEAL_ITERATIONS = 20         # max heal_all cycles (5 troops + safety buffer)
 QUEST_PENDING_TIMEOUT = 360      # seconds — timeout for quest-pending rally (6 min)
+RALLY_PANEL_WAIT_ENABLED = True  # Use troop panel to wait for rallies (vs counter polling)
+RALLY_WAIT_POLL_INTERVAL = 5     # seconds between panel status polls while waiting
 
 # Mithril mining
 MITHRIL_ENABLED = False
@@ -200,6 +202,16 @@ def get_device_lock(device):
 MY_TEAM_COLOR = "red"
 ENEMY_TEAMS = ["yellow"]
 running_tasks = {}
+DEVICE_STATUS = {}   # {device_id: "status message"} — shown in GUI
+
+def set_device_status(device, msg):
+    """Set the current status message for a device (shown in GUI)."""
+    DEVICE_STATUS[device] = msg
+
+def clear_device_status(device):
+    """Clear status for a device (e.g. when task stops)."""
+    DEVICE_STATUS.pop(device, None)
+
 auto_occupy_running = False
 auto_occupy_thread = None
 

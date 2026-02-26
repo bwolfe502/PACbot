@@ -159,6 +159,18 @@ def check_and_update():
                 shutil.copy2(src, dst)
 
         print("Done.")
+
+        # Verify version.txt was actually updated (prevents restart loops
+        # when a release is accidentally built with a stale version.txt)
+        new_version = get_current_version()
+        if version_tuple(new_version) < version_tuple(latest_tag):
+            print(f"WARNING: Update extracted but version.txt still says {new_version}.")
+            print("The release package may be misconfigured. Skipping restart.")
+            # Write the expected version so we don't loop
+            with open(VERSION_FILE, "w", encoding="utf-8") as f:
+                f.write(latest_tag.lstrip("v") + "\n")
+            print(f"Patched version.txt to {latest_tag.lstrip('v')}.")
+
         print(f"Updated to {latest_tag} successfully!")
 
         # Cleanup temp files
