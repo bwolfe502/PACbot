@@ -1708,7 +1708,14 @@ def rally_titan(device):
     timed_wait(
         device,
         lambda: check_screen(device) == Screen.MAP,
-        1, "titan_search_complete")
+        2, "titan_search_complete")
+
+    # Dismiss any popup that appeared during the search (e.g. Season Crystal Card)
+    if check_screen(device) != Screen.MAP:
+        log.info("Popup appeared after titan search — navigating back to map")
+        if not navigate(Screen.MAP, device):
+            log.warning("Failed to dismiss popup and return to map")
+            return False
 
     # Select titan on map and confirm
     logged_tap(device, 540, 900, "titan_on_map")
