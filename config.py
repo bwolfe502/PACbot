@@ -197,8 +197,8 @@ def get_device_lock(device):
             _device_locks[device] = threading.Lock()
         return _device_locks[device]
 
-MY_TEAM_COLOR = "yellow"
-ENEMY_TEAMS = ["green"]
+MY_TEAM_COLOR = "red"
+ENEMY_TEAMS = ["yellow"]
 running_tasks = {}
 auto_occupy_running = False
 auto_occupy_thread = None
