@@ -63,6 +63,10 @@ def load_settings():
         with open(SETTINGS_FILE, "r") as f:
             saved = json.load(f)
         merged = {**DEFAULTS, **saved}
+        from config import validate_settings
+        merged, warnings = validate_settings(merged, DEFAULTS)
+        for w in warnings:
+            _log.warning("Settings: %s", w)
         _log.info("Settings loaded (%d keys, %d from file)", len(merged), len(saved))
         return merged
     except FileNotFoundError:
