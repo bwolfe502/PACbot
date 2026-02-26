@@ -180,7 +180,7 @@ Loaded on startup, saved on quit/restart. `DEFAULTS` dict provides fallback valu
 ## Tests
 
 ```bash
-py -m pytest          # run all 290 tests
+py -m pytest          # run all ~280 tests
 py -m pytest -x       # stop on first failure
 py -m pytest -k name  # filter by test name
 ```
@@ -195,7 +195,7 @@ No fixtures require a running emulator — all use mocked ADB/vision.
 | `test_navigation.py` | `check_screen`, `navigate`, `_verify_screen`, `_recover_to_known_screen` |
 | `test_troops.py` | Troop pixel detection, status tracking, icon matching, portrait tracking, triangle detection |
 | `test_botlog.py` | `StatsTracker`, `timed_action` decorator, `get_logger` |
-| `test_config.py` | All setter functions (`set_min_troops`, `set_auto_heal`, `set_auto_restore_ap`, etc.) |
+| `test_config.py` | AP restore options clamping logic (gem limit bounds) |
 | `test_devices.py` | `auto_connect_emulators`, `get_devices`, `get_emulator_instances` |
 | `test_rally_blacklist.py` | Direct blacklist, failure thresholds, 30-min expiry, reset |
 | `test_rally_wait.py` | Troop-tracked rally, slot tracking, panel-based waiting, false positive detection |
@@ -209,6 +209,7 @@ No fixtures require a running emulator — all use mocked ADB/vision.
 - `reset_quest_state` autouse fixture clears quest tracking, rally blacklist, and slot tracking before each test
 - All ADB calls and screenshots are mocked via `unittest.mock.patch`
 - Test names: `test_<function>_<scenario>` (e.g. `test_find_image_returns_none_below_threshold`)
+- Use `@pytest.mark.parametrize` for related test cases that vary only by input/expected values
 
 ## Git Workflow
 
@@ -222,6 +223,8 @@ No fixtures require a running emulator — all use mocked ADB/vision.
 
 ```
 PACbot/
+├── CLAUDE.md            # AI technical reference (this file)
+├── ROADMAP.md           # Development roadmap
 ├── main.py              # GUI entry point
 ├── actions.py           # Game actions (~3000 lines)
 ├── vision.py            # CV + OCR + ADB input
@@ -238,7 +241,7 @@ PACbot/
 ├── elements/            # Template images for matching
 │   └── statuses/        # Troop status icon templates
 ├── platform-tools/      # Bundled ADB executable
-├── tests/               # pytest suite (290 tests)
+├── tests/               # pytest suite (~280 tests)
 ├── logs/                # Log files
 ├── stats/               # Session stats JSON
 └── debug/               # Debug screenshots
