@@ -5,7 +5,7 @@ from unittest.mock import patch, MagicMock
 
 import config
 from config import QuestType
-from actions import gather_gold, _run_gather_loop, _get_actionable_quests
+from actions import gather_gold, gather_gold_loop, _get_actionable_quests
 
 
 # ============================================================
@@ -120,7 +120,7 @@ class TestGatherGold:
 
 
 # ============================================================
-# _run_gather_loop
+# gather_gold_loop
 # ============================================================
 
 class TestRunGatherLoop:
@@ -130,7 +130,7 @@ class TestRunGatherLoop:
         config.GATHER_MAX_TROOPS = 3
         config.MIN_TROOPS_AVAILABLE = 0
         mock_gather.return_value = True
-        result = _run_gather_loop(mock_device)
+        result = gather_gold_loop(mock_device)
         assert result == 3
         assert mock_gather.call_count == 3
 
@@ -140,7 +140,7 @@ class TestRunGatherLoop:
         config.GATHER_MAX_TROOPS = 5
         config.MIN_TROOPS_AVAILABLE = 1
         mock_gather.return_value = True
-        result = _run_gather_loop(mock_device)
+        result = gather_gold_loop(mock_device)
         assert result == 2
 
     @patch("actions.gather_gold")
@@ -149,7 +149,7 @@ class TestRunGatherLoop:
         config.GATHER_MAX_TROOPS = 3
         config.MIN_TROOPS_AVAILABLE = 0
         mock_gather.side_effect = [True, False]
-        result = _run_gather_loop(mock_device)
+        result = gather_gold_loop(mock_device)
         assert result == 1
 
     @patch("actions.gather_gold")
@@ -162,7 +162,7 @@ class TestRunGatherLoop:
         def stop_after_one():
             call_count[0] += 1
             return call_count[0] > 1
-        result = _run_gather_loop(mock_device, stop_check=stop_after_one)
+        result = gather_gold_loop(mock_device, stop_check=stop_after_one)
         assert result == 1
 
     @patch("actions.gather_gold")
@@ -170,6 +170,6 @@ class TestRunGatherLoop:
     def test_returns_zero_on_immediate_stop(self, mock_troops, mock_gather, mock_device):
         config.GATHER_MAX_TROOPS = 3
         config.MIN_TROOPS_AVAILABLE = 0
-        result = _run_gather_loop(mock_device, stop_check=lambda: True)
+        result = gather_gold_loop(mock_device, stop_check=lambda: True)
         assert result == 0
         mock_gather.assert_not_called()

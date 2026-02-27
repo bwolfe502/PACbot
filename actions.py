@@ -755,6 +755,10 @@ def check_quests(device, stop_check=None):
                     log.info("Waiting for pending rallies to complete: %s", pending_str)
             else:
                 log.info("No actionable quests remaining (all complete or skip-only)")
+                if config.GATHER_ENABLED:
+                    log.info("All quests complete — gathering gold as fallback")
+                    if navigate(Screen.MAP, device):
+                        gather_gold_loop(device, stop_check)
             return True
 
         remaining_str = ", ".join(
@@ -789,12 +793,12 @@ def check_quests(device, stop_check=None):
             # After PVP, deploy gather troops if also needed
             if has_gather and not (stop_check and stop_check()):
                 if navigate(Screen.MAP, device):
-                    _run_gather_loop(device, stop_check)
+                    gather_gold_loop(device, stop_check)
             return True
 
         elif has_gather:
             if navigate(Screen.MAP, device):
-                _run_gather_loop(device, stop_check)
+                gather_gold_loop(device, stop_check)
             return True
 
         return True
@@ -3516,7 +3520,7 @@ def gather_gold(device, stop_check=None):
     return False
 
 
-def _run_gather_loop(device, stop_check=None):
+def gather_gold_loop(device, stop_check=None):
     """Deploy up to GATHER_MAX_TROOPS troops to gold mines.
     Returns the number of troops successfully deployed."""
     log = get_logger("actions", device)

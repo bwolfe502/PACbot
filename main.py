@@ -25,7 +25,7 @@ from actions import (attack, phantom_clash_attack, reinforce_throne, target, che
                      rally_titan, rally_eg, search_eg_reset, join_rally,
                      join_war_rallies, reset_quest_tracking, reset_rally_blacklist,
                      test_eg_positions, mine_mithril, mine_mithril_if_due,
-                     gather_gold, occupy_tower)
+                     gather_gold, gather_gold_loop, occupy_tower)
 from territory import (attack_territory, auto_occupy_loop,
                        open_territory_manager, sample_specific_squares)
 from botlog import get_logger
@@ -456,6 +456,30 @@ def run_auto_mithril(device, stop_event):
     config.clear_device_status(device)
     dlog.info("Auto Mithril stopped")
 
+def run_auto_gold(device, stop_event):
+    """Standalone gold gathering loop — deploys troops to gold mines every 60s."""
+    dlog = get_logger("main", device)
+    dlog.info("Auto Gold started")
+    stop_check = stop_event.is_set
+    lock = config.get_device_lock(device)
+    try:
+        while not stop_check():
+            with lock:
+                mine_mithril_if_due(device, stop_check=stop_check)
+                if stop_check():
+                    break
+                config.set_device_status(device, "Gathering Gold...")
+                if navigate(Screen.MAP, device):
+                    gather_gold_loop(device, stop_check=stop_check)
+            if stop_check():
+                break
+            config.set_device_status(device, "Idle")
+            sleep_interval(60, 0, stop_check)
+    except Exception as e:
+        dlog.error("ERROR in Auto Gold: %s", e, exc_info=True)
+    config.clear_device_status(device)
+    dlog.info("Auto Gold stopped")
+
 def run_repeat(device, task_name, function, interval, variation, stop_event):
     dlog = get_logger("main", device)
     stop_check = stop_event.is_set
@@ -741,6 +765,7 @@ def create_gui():
     auto_occupy_var = tk.BooleanVar(value=False)
     auto_reinforce_var = tk.BooleanVar(value=False)
     auto_mithril_var = tk.BooleanVar(value=False)
+    auto_gold_var = tk.BooleanVar(value=False)
 
     titan_interval_var = tk.StringVar(value=str(settings["titan_interval"]))
     groot_interval_var = tk.StringVar(value=str(settings["groot_interval"]))
@@ -809,6 +834,14 @@ def create_gui():
             mithril_label.config(text="Mine Mithril: OFF", bg=COLOR_OFF)
             stop_all_tasks_matching("_auto_mithril")
             log.info("Stopping Mine Mithril on all devices")
+
+    def _stop_gold():
+        if auto_gold_var.get():
+            auto_gold_var.set(False)
+            gold_frame.config(bg=COLOR_OFF)
+            gold_label.config(text="Mine Gold: OFF", bg=COLOR_OFF)
+            stop_all_tasks_matching("_auto_gold")
+            log.info("Stopping Mine Gold on all devices")
 
     # ── Collapsible section helper ──
     def _make_section(parent, title, expanded=True):
@@ -918,6 +951,7 @@ def create_gui():
         if not auto_quest_var.get():
             _stop_pass_battle()
             _stop_occupy()
+            _stop_gold()
             auto_quest_var.set(True)
             quest_frame.config(bg=COLOR_ON)
             quest_label.config(text="Auto Quest: ON", bg=COLOR_ON)
@@ -938,6 +972,7 @@ def create_gui():
         active_devices = get_active_devices()
         if not auto_titan_var.get():
             _stop_groot()
+            _stop_gold()
             auto_titan_var.set(True)
             titan_frame.config(bg=COLOR_ON)
             titan_label.config(text="Rally Titans: ON", bg=COLOR_ON)
@@ -999,18 +1034,41 @@ def create_gui():
     mithril_frame, mithril_label = make_toggle_bar(
         auto_frame, "Mine Mithril: OFF", FONT_TOGGLE, toggle_auto_mithril)
 
+    def toggle_auto_gold():
+        active_devices = get_active_devices()
+        if not auto_gold_var.get():
+            _stop_quest()
+            _stop_titan()
+            auto_gold_var.set(True)
+            gold_frame.config(bg=COLOR_ON)
+            gold_label.config(text="Mine Gold: ON", bg=COLOR_ON)
+            for device in active_devices:
+                task_key = f"{device}_auto_gold"
+                if task_key not in running_tasks:
+                    stop_event = threading.Event()
+                    launch_task(device, "auto_gold",
+                                run_auto_gold, stop_event, args=(device, stop_event))
+                    log.info("Started Mine Gold on %s", device)
+        else:
+            _stop_gold()
+
+    gold_frame, gold_label = make_toggle_bar(
+        auto_frame, "Mine Gold: OFF", FONT_TOGGLE, toggle_auto_gold)
+
     # ── Row frames for side-by-side layout (children of their section inners) ──
     bl_combat_row1 = tk.Frame(bl_combat_inner, bg=COLOR_BG)     # Pass + Occupy
     bl_combat_row1.pack(fill=tk.X, pady=(0, 3))
     bl_farming_row1 = tk.Frame(bl_farming_inner, bg=COLOR_BG)   # Quest + Titans
     bl_farming_row1.pack(fill=tk.X, pady=(0, 3))
-    rw_farming_row1 = tk.Frame(rw_farming_inner, bg=COLOR_BG)   # Titans + Mithril
+    bl_farming_row2 = tk.Frame(bl_farming_inner, bg=COLOR_BG)   # Gold + Mithril
+    bl_farming_row2.pack(fill=tk.X, pady=(0, 3))
+    rw_farming_row1 = tk.Frame(rw_farming_inner, bg=COLOR_BG)   # Gold + Mithril
     rw_farming_row1.pack(fill=tk.X)
 
     # ── Layout helpers — pack toggle bars into the right sections ──
 
     def _layout_bl():
-        """Pack BL mode: Combat (Pass+Occupy, Reinforce) then Farming (Quest+Titans, Mithril)."""
+        """Pack BL mode: Combat (Pass+Occupy, Reinforce) then Farming (Quest+Titans, Gold+Mithril)."""
         bl_combat_ctr.pack(fill=tk.X, in_=auto_frame)
         pass_frame.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=(0, 2), in_=bl_combat_row1)
         occupy_frame.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=(2, 0), in_=bl_combat_row1)
@@ -1019,15 +1077,17 @@ def create_gui():
         bl_farming_ctr.pack(fill=tk.X, pady=(4, 0), in_=auto_frame)
         quest_frame.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=(0, 2), in_=bl_farming_row1)
         titan_frame.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=(2, 0), in_=bl_farming_row1)
-        mithril_frame.pack(fill=tk.X, in_=bl_farming_inner)
+        gold_frame.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=(0, 2), in_=bl_farming_row2)
+        mithril_frame.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=(2, 0), in_=bl_farming_row2)
 
     def _layout_rw():
-        """Pack Home Server mode: Events (Groot), Farming (Titans+Mithril), Combat (Reinforce)."""
+        """Pack Home Server mode: Events (Groot), Farming (Titans, Gold+Mithril), Combat (Reinforce)."""
         rw_events_ctr.pack(fill=tk.X, in_=auto_frame)
         groot_frame.pack(fill=tk.X, in_=rw_events_inner)
 
         rw_farming_ctr.pack(fill=tk.X, pady=(4, 0), in_=auto_frame)
-        titan_frame.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=(0, 2), in_=rw_farming_row1)
+        titan_frame.pack(fill=tk.X, in_=rw_farming_inner)
+        gold_frame.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=(0, 2), in_=rw_farming_row1)
         mithril_frame.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=(2, 0), in_=rw_farming_row1)
 
         rw_combat_ctr.pack(fill=tk.X, pady=(4, 0), in_=auto_frame)
@@ -1036,7 +1096,7 @@ def create_gui():
     def _forget_all_toggles():
         """Forget all toggle bars and section containers from layout."""
         for w in [pass_frame, occupy_frame, reinforce_frame, quest_frame,
-                  titan_frame, groot_frame, mithril_frame,
+                  titan_frame, groot_frame, mithril_frame, gold_frame,
                   bl_combat_ctr, bl_farming_ctr,
                   rw_events_ctr, rw_farming_ctr, rw_combat_ctr]:
             w.pack_forget()
@@ -1871,6 +1931,11 @@ def create_gui():
             mithril_label.config(text="Mine Mithril: OFF", bg=COLOR_OFF)
             config.MITHRIL_ENABLED = False
             config.MITHRIL_DEPLOY_TIME.clear()
+
+        if auto_gold_var.get() and not any(k.endswith("_auto_gold") for k in running_tasks):
+            auto_gold_var.set(False)
+            gold_frame.config(bg=COLOR_OFF)
+            gold_label.config(text="Mine Gold: OFF", bg=COLOR_OFF)
 
         try:
             while True:

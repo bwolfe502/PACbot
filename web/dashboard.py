@@ -39,6 +39,7 @@ from actions import (attack, phantom_clash_attack, reinforce_throne, target,
                      search_eg_reset, join_rally, join_war_rallies,
                      reset_quest_tracking, reset_rally_blacklist,
                      mine_mithril, mine_mithril_if_due,
+                     gather_gold, gather_gold_loop,
                      get_quest_tracking_state, occupy_tower)
 from territory import attack_territory, sample_specific_squares
 from botlog import get_logger
@@ -68,6 +69,7 @@ TASK_FUNCTIONS = {
     "Check Screen": check_screen,
     "Sample Specific Squares": sample_specific_squares,
     "Mine Mithril": mine_mithril,
+    "Gather Gold": gather_gold,
     "Reinforce Tower": occupy_tower,
 }
 
@@ -83,6 +85,7 @@ AUTO_MODES_BL = [
     {"group": "Farming", "modes": [
         {"key": "auto_quest",     "label": "Auto Quest"},
         {"key": "auto_titan",     "label": "Rally Titans"},
+        {"key": "auto_gold",      "label": "Mine Gold"},
         {"key": "auto_mithril",   "label": "Mine Mithril"},
     ]},
 ]
@@ -93,6 +96,7 @@ AUTO_MODES_HS = [
     ]},
     {"group": "Farming", "modes": [
         {"key": "auto_titan",     "label": "Rally Titans"},
+        {"key": "auto_gold",      "label": "Mine Gold"},
         {"key": "auto_mithril",   "label": "Mine Mithril"},
     ]},
     {"group": "Combat", "modes": [
@@ -339,6 +343,28 @@ def run_auto_mithril(device, stop_event):
         dlog.error("ERROR in Auto Mithril: %s", e, exc_info=True)
     config.clear_device_status(device)
 
+def run_auto_gold(device, stop_event):
+    dlog = get_logger("web", device)
+    stop_check = stop_event.is_set
+    lock = config.get_device_lock(device)
+    try:
+        while not stop_check():
+            with lock:
+                mine_mithril_if_due(device, stop_check=stop_check)
+                if stop_check():
+                    break
+                config.set_device_status(device, "Gathering Gold...")
+                from navigation import navigate
+                if navigate(Screen.MAP, device):
+                    gather_gold_loop(device, stop_check=stop_check)
+            if stop_check():
+                break
+            config.set_device_status(device, "Idle")
+            sleep_interval(60, 0, stop_check)
+    except Exception as e:
+        dlog.error("ERROR in Auto Gold: %s", e, exc_info=True)
+    config.clear_device_status(device)
+
 def run_once(device, task_name, function):
     dlog = get_logger("web", device)
     lock = config.get_device_lock(device)
@@ -377,6 +403,7 @@ AUTO_RUNNERS = {
     "auto_occupy":    lambda dev, se, s: run_auto_occupy(dev, se),
     "auto_reinforce": lambda dev, se, s: run_auto_reinforce(dev, se, s.get("reinforce_interval", 30), s.get("variation", 0)),
     "auto_mithril":   lambda dev, se, s: run_auto_mithril(dev, se),
+    "auto_gold":      lambda dev, se, s: run_auto_gold(dev, se),
 }
 
 
@@ -672,6 +699,17 @@ def create_app():
                     info = running_tasks[task_key]
                     if isinstance(info, dict) and info.get("thread") and info["thread"].is_alive():
                         continue
+
+                # Exclusivity: stop conflicting modes before starting
+                EXCLUSIVE = {
+                    "auto_quest": ["auto_gold"],
+                    "auto_titan": ["auto_gold"],
+                    "auto_gold":  ["auto_quest", "auto_titan"],
+                }
+                for conflict in EXCLUSIVE.get(mode_key, []):
+                    ckey = f"{device}_{conflict}"
+                    if ckey in running_tasks:
+                        stop_task(ckey)
 
                 runner = AUTO_RUNNERS.get(mode_key)
                 if runner:
