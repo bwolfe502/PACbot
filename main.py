@@ -1133,7 +1133,7 @@ def create_gui():
                 messagebox.showinfo("Web Dashboard",
                     f"Web dashboard will start on next restart.\n\n"
                     f"On your phone, open Safari and go to:\n"
-                    f"http://{_ip}:5000")
+                    f"http://{_ip}:8080")
         save_current_settings()
 
     tk.Checkbutton(row1, text="Web", variable=web_dash_var,
@@ -1857,12 +1857,12 @@ def create_gui():
 
             def _start_web_dashboard():
                 app = create_app()
-                app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
+                app.run(host="0.0.0.0", port=8080, debug=False, use_reloader=False)
 
             _web_thread = threading.Thread(target=_start_web_dashboard, daemon=True)
             _web_thread.start()
             _web_ip = get_local_ip()
-            _web_url = f"http://{_web_ip}:5000"
+            _web_url = f"http://{_web_ip}:8080"
             log.info("Web dashboard started at %s", _web_url)
             status_var.set(f"Dashboard: {_web_url}")
         except ImportError:

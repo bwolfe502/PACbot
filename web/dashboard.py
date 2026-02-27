@@ -8,7 +8,7 @@ Enable via settings.json::
 
     "web_dashboard": true
 
-Then access at ``http://<your-ip>:5000`` from any browser.
+Then access at ``http://<your-ip>:8080`` from any browser.
 """
 
 import os
