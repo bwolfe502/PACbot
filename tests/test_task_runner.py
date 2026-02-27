@@ -185,9 +185,9 @@ class TestSettings:
 
     def test_round_trip(self, tmp_path):
         settings_file = str(tmp_path / "test_settings.json")
-        custom = {**DEFAULTS, "min_troops": 42, "auto_heal": False}
+        custom = {**DEFAULTS, "min_troops": 3, "auto_heal": False}
         with patch("main.SETTINGS_FILE", settings_file):
             save_settings(custom)
             loaded = load_settings()
-        assert loaded["min_troops"] == 42
+        assert loaded["min_troops"] == 3
         assert loaded["auto_heal"] is False
