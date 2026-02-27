@@ -28,7 +28,7 @@ Run PACbot + an Android emulator on a cloud server. Control everything from your
 2. Click **"Create"** → **"Droplets"**
 3. Choose settings:
    - **Region:** Pick one close to you
-   - **Image:** Ubuntu 22.04 LTS
+   - **Image:** Ubuntu 24.04 LTS
    - **Size:** Regular → $48/mo (8 GB, 4 vCPUs) recommended
    - **Authentication:** Choose **Password** (simpler) or **SSH Key** (more secure)
 4. Click **"Create Droplet"**
