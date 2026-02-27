@@ -1,0 +1,362 @@
+/* PACbot Web Dashboard — Mobile-First CSS */
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #1a1a2e;
+    color: #e0e0e0;
+    min-height: 100vh;
+    -webkit-text-size-adjust: 100%;
+}
+
+/* Navigation */
+nav {
+    background: #16213e;
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+
+.nav-brand {
+    font-size: 18px;
+    font-weight: bold;
+    color: #4fc3f7;
+    text-decoration: none;
+}
+
+.nav-links {
+    display: flex;
+    gap: 4px;
+}
+
+.nav-links a {
+    color: #aaa;
+    text-decoration: none;
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 500;
+}
+
+.nav-links a.active {
+    color: #fff;
+    background: #0a3d62;
+}
+
+/* Main content */
+main {
+    max-width: 600px;
+    margin: 0 auto;
+    padding: 16px;
+}
+
+h1 {
+    font-size: 24px;
+    margin-bottom: 16px;
+    color: #fff;
+}
+
+h2 {
+    font-size: 18px;
+    margin: 24px 0 12px;
+    color: #ccc;
+}
+
+h3 {
+    font-size: 15px;
+    margin-bottom: 12px;
+    color: #4fc3f7;
+}
+
+/* Cards */
+.card {
+    background: #16213e;
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 12px;
+}
+
+.muted {
+    color: #888;
+    font-size: 14px;
+}
+
+/* Summary bar */
+.summary-bar {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+}
+
+.badge {
+    background: #0a3d62;
+    padding: 6px 12px;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 500;
+}
+
+.badge-active {
+    background: #2e7d32;
+    color: #fff;
+}
+
+/* Device cards */
+.device-card {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.device-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.device-troops {
+    font-size: 13px;
+    color: #888;
+}
+
+.device-status {
+    font-size: 14px;
+    color: #888;
+    padding: 4px 0;
+}
+
+.device-status.status-active {
+    color: #4fc3f7;
+    font-weight: 500;
+}
+
+/* Task cards */
+.task-card {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.task-name {
+    font-size: 13px;
+    word-break: break-all;
+}
+
+/* Task rows (tasks page) */
+.task-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+}
+
+.task-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 15px;
+}
+
+.task-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #555;
+}
+
+.status-dot.active {
+    background: #4caf50;
+    box-shadow: 0 0 6px #4caf50;
+}
+
+/* Device selector */
+.device-select {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.device-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 15px;
+    cursor: pointer;
+    padding: 8px;
+    border-radius: 8px;
+}
+
+.device-option:active {
+    background: #0a3d62;
+}
+
+.device-option input[type="radio"] {
+    width: 20px;
+    height: 20px;
+}
+
+/* Buttons */
+.btn {
+    display: inline-block;
+    padding: 12px 20px;
+    border: none;
+    border-radius: 10px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    text-align: center;
+    text-decoration: none;
+    background: #0a3d62;
+    color: #fff;
+    min-height: 48px;
+    line-height: 24px;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.btn:active {
+    opacity: 0.8;
+    transform: scale(0.98);
+}
+
+.btn-sm {
+    padding: 8px 16px;
+    font-size: 13px;
+    min-height: 36px;
+}
+
+.btn-primary {
+    background: #1565c0;
+}
+
+.btn-start {
+    background: #2e7d32;
+}
+
+.btn-stop {
+    background: #c62828;
+}
+
+.btn-danger {
+    background: #b71c1c;
+}
+
+.btn-full {
+    display: block;
+    width: 100%;
+    margin-top: 8px;
+}
+
+.inline-form {
+    display: inline;
+}
+
+/* Quick actions */
+.quick-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 16px;
+    flex-wrap: wrap;
+}
+
+.quick-actions .btn {
+    flex: 1;
+    min-width: 120px;
+}
+
+/* Settings */
+.setting-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 0;
+    font-size: 15px;
+    border-bottom: 1px solid #1a1a2e;
+}
+
+.setting-row:last-child {
+    border-bottom: none;
+}
+
+.setting-row.indent {
+    padding-left: 28px;
+}
+
+.setting-row input[type="checkbox"] {
+    width: 22px;
+    height: 22px;
+    cursor: pointer;
+}
+
+.input-sm {
+    width: 70px;
+    padding: 8px;
+    border: 1px solid #333;
+    border-radius: 8px;
+    background: #1a1a2e;
+    color: #fff;
+    font-size: 15px;
+    text-align: center;
+}
+
+.select-sm {
+    padding: 8px;
+    border: 1px solid #333;
+    border-radius: 8px;
+    background: #1a1a2e;
+    color: #fff;
+    font-size: 15px;
+}
+
+.unit {
+    color: #888;
+    font-size: 13px;
+}
+
+/* Logs */
+.log-controls {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 12px;
+}
+
+.log-viewer {
+    background: #0d1117;
+    border-radius: 12px;
+    padding: 12px;
+    height: 70vh;
+    overflow-y: auto;
+    font-family: "SF Mono", "Menlo", "Courier New", monospace;
+    font-size: 11px;
+    line-height: 1.5;
+    -webkit-overflow-scrolling: touch;
+}
+
+.log-line {
+    padding: 1px 0;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+/* Safe area for notched iPhones */
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+    main {
+        padding-bottom: calc(16px + env(safe-area-inset-bottom));
+    }
+}

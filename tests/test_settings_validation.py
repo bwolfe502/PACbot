@@ -26,6 +26,7 @@ DEFAULTS = {
     "verbose_logging": False,
     "eg_rally_own": True,
     "mithril_interval": 19,
+    "web_dashboard": False,
 }
 
 

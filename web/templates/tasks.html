@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title_suffix %} - Tasks{% endblock %}
+
+{% block content %}
+<h1>Tasks</h1>
+
+<!-- Device selector -->
+<div class="card">
+    <h3>Select Device</h3>
+    {% if devices %}
+    <div class="device-select">
+        {% for dev in devices %}
+        <label class="device-option">
+            <input type="radio" name="device_select" value="{{ dev.id }}"
+                   {% if loop.first %}checked{% endif %}
+                   onchange="updateDeviceForms()">
+            {{ dev.name }}
+        </label>
+        {% endfor %}
+    </div>
+    {% else %}
+    <p class="muted">No devices connected.</p>
+    {% endif %}
+</div>
+
+<!-- Auto Modes -->
+<h2>Auto Modes</h2>
+{% for mode in auto_modes %}
+<div class="card task-row">
+    <div class="task-info">
+        <strong>{{ mode.label }}</strong>
+        {% set mode_running = [] %}
+        {% for t in active_tasks %}
+            {% if t.endswith('_' + mode.key) %}
+                {% if mode_running.append(t) %}{% endif %}
+            {% endif %}
+        {% endfor %}
+        {% if mode_running %}
+        <span class="status-dot active"></span>
+        {% endif %}
+    </div>
+    <div class="task-actions">
+        {% if mode_running %}
+        {% for t in mode_running %}
+        <form method="post" action="/tasks/stop" class="inline-form">
+            <input type="hidden" name="task_key" value="{{ t }}">
+            <button type="submit" class="btn btn-stop">Stop</button>
+        </form>
+        {% endfor %}
+        {% else %}
+        <form method="post" action="/tasks/start" class="inline-form device-form">
+            <input type="hidden" name="device" value="">
+            <input type="hidden" name="task_name" value="{{ mode.key }}">
+            <input type="hidden" name="task_type" value="auto">
+            <button type="submit" class="btn btn-start">Start</button>
+        </form>
+        {% endif %}
+    </div>
+</div>
+{% endfor %}
+
+<!-- One-Shot Actions: Farm -->
+<h2>Farm Actions</h2>
+{% for name in oneshot_farm %}
+<div class="card task-row">
+    <div class="task-info">
+        <strong>{{ name }}</strong>
+    </div>
+    <div class="task-actions">
+        <form method="post" action="/tasks/start" class="inline-form device-form">
+            <input type="hidden" name="device" value="">
+            <input type="hidden" name="task_name" value="{{ name }}">
+            <input type="hidden" name="task_type" value="oneshot">
+            <button type="submit" class="btn btn-sm">Run</button>
+        </form>
+    </div>
+</div>
+{% endfor %}
+
+<!-- One-Shot Actions: War -->
+<h2>War Actions</h2>
+{% for name in oneshot_war %}
+<div class="card task-row">
+    <div class="task-info">
+        <strong>{{ name }}</strong>
+    </div>
+    <div class="task-actions">
+        <form method="post" action="/tasks/start" class="inline-form device-form">
+            <input type="hidden" name="device" value="">
+            <input type="hidden" name="task_name" value="{{ name }}">
+            <input type="hidden" name="task_type" value="oneshot">
+            <button type="submit" class="btn btn-sm">Run</button>
+        </form>
+    </div>
+</div>
+{% endfor %}
+
+<!-- Stop All -->
+<form method="post" action="/tasks/stop-all" style="margin-top: 24px;">
+    <button type="submit" class="btn btn-danger btn-full">Stop All Tasks</button>
+</form>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+function updateDeviceForms() {
+    var selected = document.querySelector('input[name="device_select"]:checked');
+    if (!selected) return;
+    var forms = document.querySelectorAll('.device-form');
+    forms.forEach(function(form) {
+        var input = form.querySelector('input[name="device"]');
+        if (input) input.value = selected.value;
+    });
+}
+// Set initial device on page load
+document.addEventListener('DOMContentLoaded', updateDeviceForms);
+</script>
+{% endblock %}

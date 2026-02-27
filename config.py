@@ -249,6 +249,7 @@ SETTINGS_RULES = {
     "ap_use_gems":           {"type": bool},
     "verbose_logging":       {"type": bool},
     "eg_rally_own":          {"type": bool},
+    "web_dashboard":         {"type": bool},
     # Ints — type + optional min/max
     "ap_gem_limit":          {"type": int, "min": 0, "max": 3500},
     "min_troops":            {"type": int, "min": 0, "max": 5},
