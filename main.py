@@ -541,6 +541,13 @@ def create_gui():
     window.resizable(False, True)
     window.configure(bg=COLOR_BG)
 
+    # macOS dark mode makes tkinter default to white text and adds visible
+    # highlight borders. Force light-mode defaults for consistent rendering.
+    if platform.system() == "Darwin":
+        window.tk.call("tk::unsupported::MacWindowStyle", "appearance", window._w, "aqua")
+        window.option_add("*foreground", "black")
+        window.option_add("*highlightThickness", 0)
+
     # Set window icon (title bar + taskbar)
     script_dir = os.path.dirname(os.path.abspath(__file__))
     if platform.system() == "Darwin":
