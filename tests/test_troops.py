@@ -510,12 +510,11 @@ class TestReadPanelStatuses:
         assert len(deployed) == 1
         assert deployed[0].action == TroopAction.MARCHING
 
+    @patch("troops.load_screenshot", return_value=None)
     @patch("troops.get_template", return_value=None)
     @patch("troops._status_templates_loaded", True)
-    def test_screenshot_none(self, mock_tpl):
+    def test_screenshot_none(self, mock_tpl, mock_ss):
         result = read_panel_statuses("test_panel", screen=None)
-        # load_screenshot is called, but we didn't mock it → returns None
-        # Actually it will try to call real ADB. Let's mock it.
         assert result is None
 
     @patch("troops.load_screenshot", return_value=None)
