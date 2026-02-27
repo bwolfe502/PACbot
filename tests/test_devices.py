@@ -1,6 +1,7 @@
 """Tests for device detection (devices.py)."""
 
 import subprocess
+import pytest
 from unittest.mock import patch, MagicMock
 
 from devices import (auto_connect_emulators, get_devices, get_emulator_instances,
@@ -14,17 +15,14 @@ from devices import (auto_connect_emulators, get_devices, get_emulator_instances
 class TestConnectPorts:
     """Tests for _connect_ports (shared by Windows and non-Windows paths)."""
 
+    @pytest.mark.parametrize("output", [
+        "connected to 127.0.0.1:7555",
+        "already connected to 127.0.0.1:7555",
+    ])
     @patch("devices.subprocess.run")
-    def test_connected(self, mock_run):
-        """Ports that respond with 'connected to' are returned."""
-        mock_run.return_value = MagicMock(stdout="connected to 127.0.0.1:7555")
-        result = _connect_ports({7555, 7556})
-        assert "127.0.0.1:7555" in result
-
-    @patch("devices.subprocess.run")
-    def test_already_connected(self, mock_run):
-        """'already connected' also counts as success."""
-        mock_run.return_value = MagicMock(stdout="already connected to 127.0.0.1:7555")
+    def test_successful_connection(self, mock_run, output):
+        """Both 'connected to' and 'already connected to' are success."""
+        mock_run.return_value = MagicMock(stdout=output)
         result = _connect_ports({7555})
         assert "127.0.0.1:7555" in result
 

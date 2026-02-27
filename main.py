@@ -55,6 +55,7 @@ DEFAULTS = {
     "verbose_logging": False,
     "eg_rally_own": True,
     "mithril_interval": 19,
+    "web_dashboard": False,
 }
 
 def load_settings():
@@ -63,6 +64,10 @@ def load_settings():
         with open(SETTINGS_FILE, "r") as f:
             saved = json.load(f)
         merged = {**DEFAULTS, **saved}
+        from config import validate_settings
+        merged, warnings = validate_settings(merged, DEFAULTS)
+        for w in warnings:
+            _log.warning("Settings: %s", w)
         _log.info("Settings loaded (%d keys, %d from file)", len(merged), len(saved))
         return merged
     except FileNotFoundError:
@@ -537,6 +542,13 @@ def create_gui():
     window.resizable(False, True)
     window.configure(bg=COLOR_BG)
 
+    # macOS dark mode makes tkinter default to white text and adds visible
+    # highlight borders. Force light-mode defaults for consistent rendering.
+    if platform.system() == "Darwin":
+        window.tk.call("tk::unsupported::MacWindowStyle", "appearance", window._w, "aqua")
+        window.option_add("*foreground", "black")
+        window.option_add("*highlightThickness", 0)
+
     # Set window icon (title bar + taskbar)
     script_dir = os.path.dirname(os.path.abspath(__file__))
     if platform.system() == "Darwin":
@@ -660,10 +672,6 @@ def create_gui():
     btn_row.pack(pady=(2, 0))
     tk.Button(btn_row, text="Refresh", command=lambda: (auto_connect_emulators(), refresh_device_list()),
               font=(_FONT_FAMILY, 8)).pack(side=tk.LEFT, padx=4)
-    # Auto-Connect button hidden (crashes on click) but function still available
-    # tk.Button(btn_row, text="Auto-Connect",
-    #           command=lambda: (auto_connect_emulators(), refresh_device_list()),
-    #           font=(_FONT_FAMILY, 8)).pack(side=tk.LEFT, padx=4)
 
     def get_active_devices():
         return [d for d in devices if device_checkboxes.get(d, tk.BooleanVar(value=False)).get()]
@@ -1088,6 +1096,49 @@ def create_gui():
                    command=toggle_verbose, font=(_FONT_FAMILY, 9),
                    bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.RIGHT)
 
+    # Web Dashboard toggle
+    web_dash_var = tk.BooleanVar(value=settings.get("web_dashboard", False))
+
+    def toggle_web_dashboard():
+        if web_dash_var.get():
+            # Check if flask is installed
+            import importlib.util
+            if importlib.util.find_spec("flask") is None:
+                if messagebox.askyesno(
+                    "Install Required",
+                    "The web dashboard requires Flask (~10 MB download).\n\n"
+                    "Install it now?"):
+                    def _install():
+                        try:
+                            subprocess.run([sys.executable, "-m", "pip", "install", "flask"],
+                                           capture_output=True, timeout=120)
+                            messagebox.showinfo("Installed",
+                                "Flask installed successfully!\n\n"
+                                "Restart PACbot to start the dashboard.")
+                        except Exception as ex:
+                            messagebox.showerror("Error", f"Failed to install Flask:\n{ex}")
+                    threading.Thread(target=_install, daemon=True).start()
+                else:
+                    web_dash_var.set(False)
+                    return
+            else:
+                import socket as _sock
+                try:
+                    _s = _sock.socket(_sock.AF_INET, _sock.SOCK_DGRAM)
+                    _s.connect(("8.8.8.8", 80))
+                    _ip = _s.getsockname()[0]
+                    _s.close()
+                except Exception:
+                    _ip = "your-pc-ip"
+                messagebox.showinfo("Web Dashboard",
+                    f"Web dashboard will start on next restart.\n\n"
+                    f"On your phone, open Safari and go to:\n"
+                    f"http://{_ip}:5000")
+        save_current_settings()
+
+    tk.Checkbutton(row1, text="Web", variable=web_dash_var,
+                   command=toggle_web_dashboard, font=(_FONT_FAMILY, 9),
+                   bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.RIGHT)
 
     auto_restore_ap_var = tk.BooleanVar(value=settings["auto_restore_ap"])
     set_auto_restore_ap(settings["auto_restore_ap"])
@@ -1350,6 +1401,7 @@ def create_gui():
             "verbose_logging": verbose_var.get(),
             "eg_rally_own": eg_rally_own_var.get(),
             "mithril_interval": int(mithril_interval_var.get()) if mithril_interval_var.get().isdigit() else 19,
+            "web_dashboard": web_dash_var.get(),
             "device_troops": dt,
         })
 
@@ -1456,7 +1508,7 @@ def create_gui():
         tk.Button(parent, text=name, command=do_run_once,
                   font=(_FONT_FAMILY, 9)).pack(pady=2, fill=tk.X)
 
-    # Farm tab (Rally Titan removed — now a top-level toggle)
+    # Farm tab (Rally Titan is a top-level toggle, not listed here)
     add_task_row(farm_tab, "Rally Evil Guard", 30)
     add_task_row(farm_tab, "Join Titan Rally", 30)
     add_task_row(farm_tab, "Join Evil Guard Rally", 30)
@@ -1791,6 +1843,33 @@ def create_gui():
         os._exit(0)
 
     window.protocol("WM_DELETE_WINDOW", on_close)
+
+    # ============================================================
+    # WEB DASHBOARD (opt-in, background thread)
+    # ============================================================
+
+    if settings.get("web_dashboard", False):
+        try:
+            from web.dashboard import create_app, get_local_ip
+            import logging as _wlog
+            # Suppress Flask's default request logging in console
+            _wlog.getLogger("werkzeug").setLevel(_wlog.WARNING)
+
+            def _start_web_dashboard():
+                app = create_app()
+                app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
+
+            _web_thread = threading.Thread(target=_start_web_dashboard, daemon=True)
+            _web_thread.start()
+            _web_ip = get_local_ip()
+            _web_url = f"http://{_web_ip}:5000"
+            log.info("Web dashboard started at %s", _web_url)
+            status_var.set(f"Dashboard: {_web_url}")
+        except ImportError:
+            log.info("Web dashboard enabled but Flask not installed. "
+                     "Install with: pip install flask")
+        except Exception as e:
+            log.warning("Failed to start web dashboard: %s", e)
 
     window.update_idletasks()
     window.geometry(f"{WIN_WIDTH}x{window.winfo_reqheight()}")

@@ -1,36 +1,57 @@
-# PACbot Development Roadmap
+# PACbot Roadmap
 
-## Phase 1: Housekeeping [DONE]
-- [x] Tag v1.1.0 on release commit
-- [x] Delete dead code (analyze_priests.py, nav_to_eg.py, keygen.py, test_ap_region.py, test_ocr.py)
-- [x] Remove unused imports in main.py (traceback, subprocess, zipfile)
-- [x] Fix bare except clauses in devices.py
-- [x] Consolidate magic numbers into config.py constants
-- Branch: `cleanup/phase1-housekeeping` (merged to dev)
+Forward-looking development plan from **v1.3.0**.
+Priority: bug fixes, clean code, maintainability, usability — then new features.
 
-## Bug Fix: Rally owner blacklist [DONE]
-- [x] OCR rally owner name from war screen cards
-- [x] Blacklist owners after failed depart (2 failures or error detection)
-- [x] 30-minute expiry + reset on auto-quest start
-- [x] 24 tests
-- Branch: `fix/rally-owner-blacklist` (merged to dev)
-- **Needs live testing** — OCR regions estimated from screenshot, may need tuning
+---
 
-## Phase 2: Code Quality [DONE]
-- [x] Add QuestType, RallyType, Screen enums (str, Enum) in config.py
-- [x] Migrate ~250 string literals across 6 source files to enum values
-- [x] Break up check_quests (171 → ~65 lines) into 4 helpers
-- [x] Recapture slot.png template (tighter crop, 107x77 vs 156x150)
-- [x] 15 new tests for extracted helpers
-- Branch: `cleanup/phase2-code-quality` (merged to dev)
+## Phase 1 — Bug Fixes & Reliability (v1.4.0)
 
-## Phase 3: Test Coverage [PARTIAL]
-- [x] Tests for vision.py (find_image, read_text, read_number, read_ap, get_template, adb_tap, adb_swipe)
-- [x] Tests for devices.py (auto_connect_emulators, get_devices, get_emulator_instances)
-- [x] Tests for task runner logic in main.py (sleep_interval, launch/stop, run_once, run_repeat, settings)
-- [ ] Tests for territory.py (17 functions, zero tests)
-- Current total: 290 tests
+Harden existing features before adding new ones.
 
-## Phase 4: New Features [TODO]
-- [ ] Complete troop status reading (stubs in troops.py)
-- [ ] (user feature ideas TBD)
+- [ ] Improve mithril mining reliability — detect occupied mines and plundered troops
+- [ ] Improve titan rally miss detection — handle titan walking away, detect miss + retry
+- [ ] Teleport system improvements — more reliable targeting and validation
+- [ ] Error recovery — stuck-state detection, disconnect handling, popup resilience
+- [ ] Image region audit — verify all `IMAGE_REGIONS` in vision.py are still accurate
+- [ ] Settings validation — validate `settings.json` on startup, catch invalid/corrupt values
+
+## Phase 2 — Testing & Quality (v1.4.0)
+
+Build confidence that everything works before shipping updates.
+
+- [ ] Territory.py test coverage — 17 functions, currently zero tests
+- [ ] Audit existing test suite — remove bloated/redundant tests, ensure every test is meaningful
+- [ ] Add live testing suite — integration tests that run against a real emulator
+- [ ] Establish pre-release checklist — full test pass, live smoke test, version bump verification
+- [ ] Actionable test data — coverage reports, structured failure output, clear pass/fail signals
+- [ ] Keep CLAUDE.md current — ensure AI has full codebase context for efficient development
+
+## Phase 3 — UI & Project Cleanup (v1.5.0)
+
+Clean up the interface and codebase structure for long-term maintainability.
+
+- [ ] Clean up settings layout — currently cluttered
+- [ ] Reorganize "More Actions" section
+- [ ] Clean up file and folder structure — organize `elements/`, consolidate debug dirs
+- [ ] Better status display and multi-device management
+- [ ] Refactor main.py — extract GUI from task runner logic
+- [ ] Split actions.py (~3000 lines) into focused modules (rally, quest, utility actions)
+
+## Phase 4 — Quest Expansion (v1.6.0)
+
+Extend auto quest to handle more quest types. The classification infrastructure already exists
+(`_classify_quest_text` recognizes all types) — they just need to be wired up.
+
+- [ ] Add TOWER quests to auto quest loop
+- [ ] Add GATHER (gold mining) to auto quest loop
+- [ ] Add PVP to auto quest loop
+- [ ] Expand `_classify_quest_text` and `_get_actionable_quests` for new types
+- [ ] New template images for tower/gather/PvP quest UI elements
+
+## Phase 5 — New Automations (v1.7.0)
+
+Entirely new game automations.
+
+- [ ] Automatic frost giant function
+- [ ] Automatic lava haka spawning

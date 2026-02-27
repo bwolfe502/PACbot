@@ -301,42 +301,6 @@ class StatsTracker:
             return (entry["min_x"], entry["min_y"],
                     entry["max_x"], entry["max_y"], entry["count"])
 
-    def get_adaptive_budget(self, device, label, original_budget_s):
-        """Return an adaptive budget for a timed_wait label based on history.
-
-        Uses P90 of observed times × headroom.  Returns the original budget
-        when there isn't enough data, the success rate is too low, or the
-        label is a pure delay (lambda: False — met_count stays 0).
-        """
-        with self._lock:
-            if device not in self._data:
-                return original_budget_s
-            entry = self._data[device].get("transition_times", {}).get(label)
-            if entry is None:
-                return original_budget_s
-            # Pure delays never have met_count > 0 — leave them alone
-            if entry.get("met_count", 0) == 0:
-                return original_budget_s
-            samples = entry.get("samples", [])
-            if len(samples) < MIN_ADAPTIVE_SAMPLES:
-                return original_budget_s
-            # Success rate gate — don't tighten if conditions are failing
-            success_rate = entry["met_count"] / max(1, entry["count"])
-            if success_rate < MIN_ADAPTIVE_SUCCESS_RATE:
-                return original_budget_s
-            # P90 + headroom
-            sorted_s = sorted(samples)
-            p90_idx = int(len(sorted_s) * 0.9)
-            p90 = sorted_s[min(p90_idx, len(sorted_s) - 1)]
-            adaptive = p90 * ADAPTIVE_HEADROOM
-            # Floors
-            floor = max(original_budget_s * ADAPTIVE_FLOOR_FRACTION,
-                        ADAPTIVE_MIN_BUDGET_S)
-            adaptive = max(adaptive, floor)
-            # Cap — never exceed original
-            adaptive = min(adaptive, original_budget_s)
-            return round(adaptive, 3)
-
     def record_nav_failure(self, device, from_screen, to_screen):
         """Record a navigation failure."""
         with self._lock:

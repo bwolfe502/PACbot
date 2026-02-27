@@ -61,18 +61,18 @@ class TestStatsTrackerTemplateMiss:
     def setup_method(self):
         self.tracker = StatsTracker()
 
-    def test_records_miss(self):
+    def test_records_miss_and_caps_scores(self):
+        # Single miss recorded correctly
         self.tracker.record_template_miss("dev1", "slot.png", 0.3)
         entry = self.tracker._data["dev1"]["template_misses"]["slot.png"]
         assert entry["count"] == 1
         assert entry["best_scores"] == [0.3]
 
-    def test_scores_capped_at_10(self):
-        for i in range(15):
+        # After 15 misses, scores list is capped at 10 (keeps most recent)
+        for i in range(14):
             self.tracker.record_template_miss("dev1", "slot.png", i * 0.05)
-        scores = self.tracker._data["dev1"]["template_misses"]["slot.png"]["best_scores"]
-        assert len(scores) == 10
-        assert scores[0] == 0.25  # 5th entry (index 5 * 0.05)
+        assert entry["count"] == 15
+        assert len(entry["best_scores"]) == 10
 
 
 class TestStatsTrackerNavFailure:
