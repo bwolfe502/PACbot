@@ -254,6 +254,37 @@ def _verify_screen(target_screen, device, wait_time=1.5, retries=2):
     _save_debug_screenshot(device, f"verify_fail_{target_screen}")
     return False
 
+def _try_clear_map_popup(device):
+    """Dismiss a popup overlay on the MAP screen.
+
+    Normally close_x is skipped on MAP (it appears in normal flows like
+    rally dialogs).  But when navigate() is called to LEAVE MAP, any
+    popup is blocking and should be dismissed.
+
+    Returns True if a popup was found and dismissed.
+    """
+    log = get_logger("navigation", device)
+    screen = load_screenshot(device)
+    if screen is None:
+        return False
+    for tpl_path, popup_name, threshold in _POPUP_SOFT:
+        tpl = get_template(tpl_path)
+        if tpl is None:
+            continue
+        result = cv2.matchTemplate(screen, tpl, cv2.TM_CCOEFF_NORMED)
+        _, tpl_val, _, tpl_loc = cv2.minMaxLoc(result)
+        if tpl_val > threshold:
+            h, w = tpl.shape[:2]
+            cx = tpl_loc[0] + w // 2
+            cy = tpl_loc[1] + h // 2
+            log.info("MAP popup (%s, %.0f%%) — dismissing to unblock navigation",
+                     popup_name, tpl_val * 100)
+            adb_tap(device, cx, cy)
+            time.sleep(1.0)
+            return True
+    return False
+
+
 def _recover_to_known_screen(device):
     """Try multiple dismiss strategies to escape unknown screens (popups, dialogs, etc).
     Returns the screen name if recovery succeeds, or 'unknown' if all attempts fail."""
@@ -313,6 +344,12 @@ def navigate(target_screen, device, _depth=0):
     if current == target_screen:
         log.debug("Already on %s", target_screen)
         return True
+
+    # If on MAP and trying to leave, clear any popup that might block taps.
+    # check_screen() intentionally skips close_x on MAP (normal flows use it),
+    # but when navigate() is explicitly leaving MAP, popups are just in the way.
+    if current == Screen.MAP and target_screen != Screen.MAP:
+        _try_clear_map_popup(device)
 
     # If on td_screen or alliance_screen, always go to map_screen first
     if current == Screen.TROOP_DETAIL and target_screen != Screen.MAP:

@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import messagebox, filedialog
 import threading
 import queue
 import time
@@ -10,6 +10,8 @@ import json
 import logging
 import platform
 import subprocess
+import zipfile
+import customtkinter as ctk
 
 import config
 from updater import get_current_version
@@ -20,12 +22,13 @@ from config import (set_min_troops, set_auto_heal, set_auto_restore_ap,
 from devices import get_devices, get_emulator_instances, auto_connect_emulators
 from navigation import check_screen, navigate
 from vision import adb_tap, tap_image, load_screenshot, find_image, wait_for_image_and_tap, read_ap, warmup_ocr
-from troops import troops_avail, heal_all, read_panel_statuses
+from troops import troops_avail, heal_all, read_panel_statuses, get_troop_status, TroopAction
 from actions import (attack, phantom_clash_attack, reinforce_throne, target, check_quests, teleport,
                      rally_titan, rally_eg, search_eg_reset, join_rally,
                      join_war_rallies, reset_quest_tracking, reset_rally_blacklist,
                      test_eg_positions, mine_mithril, mine_mithril_if_due,
-                     gather_gold, gather_gold_loop, occupy_tower)
+                     gather_gold, gather_gold_loop, occupy_tower,
+                     get_quest_tracking_state)
 from territory import (attack_territory, auto_occupy_loop,
                        open_territory_manager, sample_specific_squares)
 from botlog import get_logger
@@ -63,6 +66,10 @@ DEFAULTS = {
     "gather_mine_level": 4,
     "gather_max_troops": 3,
     "tower_quest_enabled": False,
+    "relay_enabled": False,
+    "relay_url": "",
+    "relay_secret": "",
+    "relay_bot_name": "",
 }
 
 def load_settings():
@@ -545,25 +552,58 @@ def stop_all_tasks_matching(suffix):
 # GUI
 # ============================================================
 
-COLOR_ON = "#2e7d32"
-COLOR_OFF = "#6c757d"
-COLOR_BG = "#f0f0f0"
-COLOR_SECTION_BG = "#e8e8e8"
 WIN_WIDTH = 520
 
 # Cross-platform font: "Segoe UI" on Windows, system default on macOS/Linux
 _FONT_FAMILY = "Segoe UI" if platform.system() == "Windows" else "Helvetica Neue"
-FONT_TOGGLE = (_FONT_FAMILY, 10, "bold")
 
-def make_toggle_bar(parent, text, font_spec, on_click):
-    """Create a compact toggle bar."""
-    frame = tk.Frame(parent, bg=COLOR_OFF, cursor="hand2")
-    label = tk.Label(frame, text=text, font=font_spec,
-                     bg=COLOR_OFF, fg="white", pady=5, padx=8)
-    label.pack(fill=tk.X)
-    frame.bind("<Button-1>", lambda e: on_click())
-    label.bind("<Button-1>", lambda e: on_click())
-    return frame, label
+THEME = {
+    "bg_deep":       "#0c0c18",
+    "bg_card":       "#181830",
+    "bg_section":    "#14142a",
+    "bg_input":      "#141428",
+    "bg_hover":      "#1e3a5f",
+    "border_subtle": "#1a1a30",
+    "border_cyan":   "#1a3a4a",
+    "accent_cyan":   "#64d8ff",
+    "accent_green":  "#4caf50",
+    "accent_red":    "#ef5350",
+    "accent_amber":  "#ffb74d",
+    "text_primary":  "#e0e0f0",
+    "text_secondary":"#8899aa",
+    "text_muted":    "#667788",
+    "text_label":    "#ccccdd",
+    "text_white":    "#ffffff",
+    "toggle_off":    "#252540",
+    "toggle_on":     "#1b5e20",
+    "knob_off":      "#556677",
+    "knob_on":       "#4caf50",
+    "mode_active":   "#1a5276",
+    "mode_inactive": "#252540",
+    "btn_default":   "#1e3a5f",
+    "btn_danger":    "#c62828",
+    "btn_danger_hover": "#d32f2f",
+}
+
+# Troop action → (bg_color, text_color) matching web dashboard CSS
+TROOP_PILL_COLORS = {
+    TroopAction.HOME:        ("#222238", "#8888aa"),
+    TroopAction.RETURNING:   ("#1a3520", "#66bb6a"),
+    TroopAction.RALLYING:    ("#1a3535", "#4dd9c0"),
+    TroopAction.DEFENDING:   ("#2a1a3a", "#b388ff"),
+    TroopAction.MARCHING:    ("#33301a", "#ffe082"),
+    TroopAction.GATHERING:   ("#2e2510", "#c9a030"),
+    TroopAction.OCCUPYING:   ("#1a2540", "#64b5f6"),
+    TroopAction.STATIONING:  ("#1a2540", "#64b5f6"),
+    TroopAction.BATTLING:    ("#3a1a1a", "#ef5350"),
+    TroopAction.ADVENTURING: ("#1a2540", "#64b5f6"),
+}
+
+QUEST_LABELS = {
+    "QuestType.TITAN": "Titans", "QuestType.EVIL_GUARD": "Evil Guard",
+    "QuestType.PVP": "PvP", "QuestType.GATHER": "Gather",
+    "QuestType.FORTRESS": "Fortress", "QuestType.TOWER": "Towers",
+}
 
 def create_gui():
     global devices
@@ -579,23 +619,17 @@ def create_gui():
     except:
         pass
 
-    window = tk.Tk()
-    window.title(f"PACbot v{version}")
-    window.geometry(f"{WIN_WIDTH}x580")
-    window.resizable(False, True)
-    window.configure(bg=COLOR_BG)
+    ctk.set_appearance_mode("dark")
+    ctk.set_default_color_theme("dark-blue")
 
-    # macOS dark mode makes tkinter default to white text and adds visible
-    # highlight borders. Force light-mode defaults for consistent rendering.
-    if platform.system() == "Darwin":
-        window.tk.call("tk::unsupported::MacWindowStyle", "appearance", window._w, "aqua")
-        window.option_add("*foreground", "black")
-        window.option_add("*highlightThickness", 0)
+    window = ctk.CTk()
+    window.title(f"PACbot v{version}")
+    window.resizable(False, True)
+    window.configure(fg_color=THEME["bg_deep"])
 
     # Set window icon (title bar + taskbar)
     script_dir = os.path.dirname(os.path.abspath(__file__))
     if platform.system() == "Darwin":
-        # macOS: iconbitmap doesn't support .ico; use iconphoto with PNG instead
         icon_png = os.path.join(script_dir, "icon.png")
         if os.path.isfile(icon_png):
             icon_img = tk.PhotoImage(file=icon_png)
@@ -607,13 +641,49 @@ def create_gui():
 
     PAD_X = 16
 
+    def _resize_window():
+        """Resize window to fit content, correcting for CTk widget height inflation.
+
+        CustomTkinter widgets use internal canvases that report ~60% more
+        reqheight than their visible content.  Multiplying winfo_reqheight()
+        by 0.68 gives a close approximation of the actual needed height
+        while keeping the bottom bar (Restart/Bug Report/Quit) visible.
+        """
+        window.update_idletasks()
+        req = window.winfo_reqheight()
+        window.geometry(f"{WIN_WIDTH}x{max(int(req * 0.68), 460)}")
+
+    # Shared style kwargs
+    _cb_kw = dict(font=ctk.CTkFont(family=_FONT_FAMILY, size=12),
+                  text_color=THEME["text_primary"],
+                  fg_color=THEME["accent_cyan"], hover_color=THEME["bg_hover"],
+                  border_color=THEME["border_subtle"],
+                  checkmark_color=THEME["bg_deep"], corner_radius=4)
+    _entry_kw = dict(font=ctk.CTkFont(family=_FONT_FAMILY, size=12),
+                     fg_color=THEME["bg_input"], border_color=THEME["border_subtle"],
+                     text_color=THEME["text_primary"], corner_radius=6, height=28)
+    _sw_kw = dict(font=ctk.CTkFont(family=_FONT_FAMILY, size=12),
+                  text_color=THEME["text_label"],
+                  fg_color=THEME["toggle_off"], progress_color=THEME["toggle_on"],
+                  button_color=THEME["knob_off"], button_hover_color=THEME["knob_on"],
+                  switch_width=38, switch_height=20)
+    _om_kw = dict(height=24,
+                  font=ctk.CTkFont(family=_FONT_FAMILY, size=11),
+                  fg_color=THEME["bg_input"], button_color=THEME["border_subtle"],
+                  button_hover_color=THEME["bg_hover"],
+                  dropdown_fg_color=THEME["bg_card"],
+                  dropdown_hover_color=THEME["bg_hover"],
+                  text_color=THEME["text_primary"], corner_radius=6)
+
     # ── Title ──
-    title_frame = tk.Frame(window, bg=COLOR_BG)
+    title_frame = tk.Frame(window, bg=THEME["bg_deep"])
     title_frame.pack(fill=tk.X, pady=(10, 4))
-    tk.Label(title_frame, text=f"PACbot v{version}", font=(_FONT_FAMILY, 16, "bold"),
-             bg=COLOR_BG).pack()
-    tk.Label(title_frame, text="Made by Nine", font=(_FONT_FAMILY, 9), fg="#888",
-             bg=COLOR_BG).pack()
+    ctk.CTkLabel(title_frame, text=f"PACbot v{version}",
+                 font=ctk.CTkFont(family=_FONT_FAMILY, size=18, weight="bold"),
+                 text_color=THEME["accent_cyan"]).pack()
+    ctk.CTkLabel(title_frame, text="Made by Nine",
+                 font=ctk.CTkFont(family=_FONT_FAMILY, size=10),
+                 text_color=THEME["text_muted"]).pack()
 
     def open_tutorial():
         tutorial_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "TUTORIAL.txt")
@@ -627,28 +697,50 @@ def create_gui():
         else:
             messagebox.showinfo("Tutorial", "TUTORIAL.txt not found.")
 
-    how_to_label = tk.Label(title_frame, text="How to Use", font=(_FONT_FAMILY, 9, "underline"),
-                            fg="#0066cc", cursor="hand2", bg=COLOR_BG)
-    how_to_label.pack(pady=(2, 0))
-    how_to_label.bind("<Button-1>", lambda e: open_tutorial())
+    links_row = tk.Frame(title_frame, bg=THEME["bg_deep"])
+    links_row.pack(pady=(2, 0))
+    ctk.CTkButton(links_row, text="How to Use",
+                  font=ctk.CTkFont(family=_FONT_FAMILY, size=10, underline=True),
+                  fg_color="transparent", hover_color=THEME["bg_hover"],
+                  text_color=THEME["accent_cyan"], width=80, height=20,
+                  command=open_tutorial).pack(side=tk.LEFT, padx=4)
+
+    def _open_web_dashboard():
+        import webbrowser
+        try:
+            import socket as _sock
+            _s = _sock.socket(_sock.AF_INET, _sock.SOCK_DGRAM)
+            _s.connect(("8.8.8.8", 80))
+            _ip = _s.getsockname()[0]
+            _s.close()
+        except Exception:
+            _ip = "localhost"
+        webbrowser.open(f"http://{_ip}:8080")
+
+    web_link_btn = ctk.CTkButton(links_row, text="Web App",
+                  font=ctk.CTkFont(family=_FONT_FAMILY, size=10, underline=True),
+                  fg_color="transparent", hover_color=THEME["bg_hover"],
+                  text_color=THEME["accent_cyan"], width=80, height=20,
+                  command=_open_web_dashboard)
+    if settings.get("web_dashboard", False):
+        web_link_btn.pack(side=tk.LEFT, padx=4)
 
     # ── Status line ──
     status_var = tk.StringVar(value="")
-    status_label = tk.Label(title_frame, textvariable=status_var,
-                            font=(_FONT_FAMILY, 10, "bold"), fg="#cc0000", bg=COLOR_BG)
+    status_label = ctk.CTkLabel(title_frame, textvariable=status_var,
+                                font=ctk.CTkFont(family=_FONT_FAMILY, size=11, weight="bold"),
+                                text_color=THEME["accent_cyan"])
     status_label.pack(pady=(2, 0))
 
     # ── Devices ──
-    device_frame = tk.LabelFrame(window, text="Devices", font=(_FONT_FAMILY, 9, "bold"),
-                                  padx=8, pady=4, bg=COLOR_BG)
-    device_frame.pack(fill=tk.X, padx=PAD_X, pady=(4, 4))
-
-    device_list_frame = tk.Frame(device_frame, bg=COLOR_BG)
-    device_list_frame.pack(fill=tk.X)
+    devices_container = tk.Frame(window, bg=THEME["bg_deep"])
+    devices_container.pack(fill=tk.X, padx=PAD_X, pady=(4, 4))
 
     device_checkboxes = {}
-    device_checkbox_widgets = []
-    device_troops_vars = {}  # {device_id: StringVar} for per-device total troops
+    device_card_widgets = []  # top-level widgets to destroy on refresh
+    device_troops_vars = {}   # {device_id: StringVar} for per-device total troops
+    # Per-device display refs: {device_id: {status_label, troop_frame, quest_frame}}
+    device_display = {}
 
     # Load saved per-device troops from settings
     saved_device_troops = settings.get("device_troops", {})
@@ -666,9 +758,10 @@ def create_gui():
         devices = get_devices()
         instance_map = get_emulator_instances()
 
-        for widget in device_checkbox_widgets:
+        for widget in device_card_widgets:
             widget.destroy()
-        device_checkbox_widgets.clear()
+        device_card_widgets.clear()
+        device_display.clear()
 
         for device in devices:
             if device not in device_checkboxes:
@@ -682,79 +775,110 @@ def create_gui():
 
             display_name = instance_map.get(device, device)
 
-            row = tk.Frame(device_list_frame, bg=COLOR_BG)
-            row.pack(fill=tk.X, padx=4)
-            device_checkbox_widgets.append(row)
+            # ── Per-device card (tk.Frame for correct auto-sizing) ──
+            card = tk.Frame(devices_container, bg=THEME["bg_card"],
+                            highlightbackground=THEME["border_subtle"],
+                            highlightthickness=1)
+            card.pack(fill=tk.X, pady=(0, 4))
+            device_card_widgets.append(card)
 
-            cb = tk.Checkbutton(row, text=display_name,
-                                variable=device_checkboxes[device], font=(_FONT_FAMILY, 9),
-                                bg=COLOR_BG, activebackground=COLOR_BG)
+            # Header row: checkbox + name + troops selector
+            header = tk.Frame(card, bg=THEME["bg_card"])
+            header.pack(fill=tk.X, padx=10, pady=(6, 0))
+
+            cb = ctk.CTkCheckBox(header, text=display_name,
+                                 variable=device_checkboxes[device], **_cb_kw)
             cb.pack(side=tk.LEFT)
 
-            # Troops spinbox (right-aligned)
-            tk.Label(row, text="troops:", font=(_FONT_FAMILY, 8), fg="#888",
-                     bg=COLOR_BG).pack(side=tk.RIGHT, padx=(4, 0))
-            troops_spin = tk.Spinbox(row, from_=1, to=5,
-                                     textvariable=device_troops_vars[device],
-                                     width=2, font=(_FONT_FAMILY, 8), justify="center",
-                                     command=lambda: (_apply_device_troops(), save_current_settings()))
-            troops_spin.pack(side=tk.RIGHT)
+            ctk.CTkLabel(header, text="troops:",
+                         font=ctk.CTkFont(family=_FONT_FAMILY, size=10),
+                         text_color=THEME["text_muted"]).pack(side=tk.RIGHT, padx=(4, 0))
+            troops_om = ctk.CTkOptionMenu(
+                header, variable=device_troops_vars[device],
+                values=["1", "2", "3", "4", "5"],
+                command=lambda _: (_apply_device_troops(), save_current_settings()),
+                width=50, height=22,
+                font=ctk.CTkFont(family=_FONT_FAMILY, size=10),
+                fg_color=THEME["bg_input"], button_color=THEME["border_subtle"],
+                button_hover_color=THEME["bg_hover"],
+                dropdown_fg_color=THEME["bg_card"],
+                dropdown_hover_color=THEME["bg_hover"],
+                text_color=THEME["text_primary"], corner_radius=4)
+            troops_om.pack(side=tk.RIGHT)
+
+            # Status bar
+            status_lbl = ctk.CTkLabel(card, text="Idle",
+                                      font=ctk.CTkFont(family=_FONT_FAMILY, size=11),
+                                      text_color=THEME["text_muted"],
+                                      fg_color=THEME["bg_card"])
+            status_lbl.pack(anchor=tk.W, padx=12, pady=(2, 0))
+
+            # Troop pills row
+            troop_frame = tk.Frame(card, bg=THEME["bg_card"])
+            troop_frame.pack(fill=tk.X, padx=10, pady=(2, 0))
+
+            # Quest pills row
+            quest_frame = tk.Frame(card, bg=THEME["bg_card"])
+            quest_frame.pack(fill=tk.X, padx=10, pady=(0, 6))
+
+            device_display[device] = {
+                "status_label": status_lbl,
+                "troop_frame": troop_frame,
+                "quest_frame": quest_frame,
+            }
 
         _apply_device_troops()
 
         if not devices:
-            lbl = tk.Label(device_list_frame, text="No devices found. Start your emulator and click Refresh.",
-                           font=(_FONT_FAMILY, 8), fg="#999", bg=COLOR_BG)
+            lbl = ctk.CTkLabel(devices_container,
+                               text="No devices found. Start your emulator and click Refresh.",
+                               font=ctk.CTkFont(family=_FONT_FAMILY, size=10),
+                               text_color=THEME["text_muted"])
             lbl.pack(pady=2)
-            device_checkbox_widgets.append(lbl)
+            device_card_widgets.append(lbl)
 
     auto_connect_emulators()
     refresh_device_list()
 
-    btn_row = tk.Frame(device_frame, bg=COLOR_BG)
-    btn_row.pack(pady=(2, 0))
-    tk.Button(btn_row, text="Refresh", command=lambda: (auto_connect_emulators(), refresh_device_list()),
-              font=(_FONT_FAMILY, 8)).pack(side=tk.LEFT, padx=4)
+    refresh_row = tk.Frame(devices_container, bg=THEME["bg_deep"])
+    refresh_row.pack()
+    device_card_widgets_static = []  # not cleared on refresh
+    ctk.CTkButton(refresh_row, text="Refresh Devices",
+                  command=lambda: (auto_connect_emulators(), refresh_device_list()),
+                  font=ctk.CTkFont(family=_FONT_FAMILY, size=10),
+                  fg_color=THEME["btn_default"], hover_color=THEME["bg_hover"],
+                  corner_radius=8, height=26, width=120).pack(padx=4)
 
     def get_active_devices():
         return [d for d in devices if device_checkboxes.get(d, tk.BooleanVar(value=False)).get()]
 
     # ============================================================
-    # MODE TOGGLE — Rest Week vs Broken Lands
+    # MODE TOGGLE — CTkSegmentedButton
     # ============================================================
-
-    COLOR_MODE_ACTIVE = "#1a5276"
-    COLOR_MODE_INACTIVE = "#bbb"
 
     mode_var = tk.StringVar(value="bl")
 
-    mode_frame = tk.Frame(window, bg=COLOR_BG)
+    mode_frame = tk.Frame(window, bg=THEME["bg_deep"])
     mode_frame.pack(fill=tk.X, padx=PAD_X, pady=(6, 4))
 
-    # Use Labels instead of Buttons for mode toggles — tk.Button ignores
-    # bg/fg on macOS native theme, making text invisible on dark backgrounds.
-    rw_mode_btn = tk.Label(mode_frame, text="Home Server", font=(_FONT_FAMILY, 10, "bold"),
-                            bg=COLOR_MODE_INACTIVE, fg="#555", cursor="hand2",
-                            padx=12, pady=6, anchor="center")
-    rw_mode_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 2))
-
-    bl_mode_btn = tk.Label(mode_frame, text="Broken Lands", font=(_FONT_FAMILY, 10, "bold"),
-                            bg=COLOR_MODE_ACTIVE, fg="white", cursor="hand2",
-                            padx=12, pady=6, anchor="center")
-    bl_mode_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(2, 0))
+    mode_toggle = ctk.CTkSegmentedButton(
+        mode_frame, values=["Home Server", "Broken Lands"],
+        font=ctk.CTkFont(family=_FONT_FAMILY, size=12, weight="bold"),
+        selected_color=THEME["mode_active"],
+        selected_hover_color=THEME["bg_hover"],
+        unselected_color=THEME["mode_inactive"],
+        unselected_hover_color=THEME["bg_hover"],
+        text_color=THEME["text_primary"],
+        corner_radius=8, height=36,
+        command=lambda val: switch_mode("rw" if val == "Home Server" else "bl"))
+    mode_toggle.set("Broken Lands")
+    mode_toggle.pack(fill=tk.X)
 
     # ============================================================
     # AUTO MODES — Two layouts swapped by mode toggle
     # ============================================================
-    #
-    # BL:   ▼ Combat (Pass, Occupy, Reinforce)  ▼ Farming (Quest, Titans)
-    # Home: ▼ Events (Groot)  ▼ Farming (Titans)  ▼ Combat (Reinforce)
-    #
-    # Toggle bars are created with auto_frame as parent so they can
-    # be re-packed into different section containers via in_=.
-    # Auto Mithril lives below the settings area, separate from modes.
 
-    auto_frame = tk.Frame(window, bg=COLOR_BG)
+    auto_frame = tk.Frame(window, bg=THEME["bg_deep"])
     auto_frame.pack(fill=tk.X, padx=PAD_X, pady=(4, 0))
 
     # -- State variables for all toggles --
@@ -775,44 +899,34 @@ def create_gui():
     mithril_interval_var = tk.StringVar(value=str(settings.get("mithril_interval", 19)))
     config.MITHRIL_INTERVAL = settings.get("mithril_interval", 19)
 
-    # -- helpers to turn each off --
+    # -- helpers to turn each off (simplified — CTkSwitch auto-updates visually) --
     def _stop_quest():
         if auto_quest_var.get():
             auto_quest_var.set(False)
-            quest_frame.config(bg=COLOR_OFF)
-            quest_label.config(text="Auto Quest: OFF", bg=COLOR_OFF)
             stop_all_tasks_matching("_auto_quest")
             log.info("Stopping Auto Quest on all devices")
 
     def _stop_titan():
         if auto_titan_var.get():
             auto_titan_var.set(False)
-            titan_frame.config(bg=COLOR_OFF)
-            titan_label.config(text="Rally Titans: OFF", bg=COLOR_OFF)
             stop_all_tasks_matching("_auto_titan")
             log.info("Stopping Rally Titans on all devices")
 
     def _stop_groot():
         if auto_groot_var.get():
             auto_groot_var.set(False)
-            groot_frame.config(bg=COLOR_OFF)
-            groot_label.config(text="Join Groot: OFF", bg=COLOR_OFF)
             stop_all_tasks_matching("_auto_groot")
             log.info("Stopping Join Groot on all devices")
 
     def _stop_pass_battle():
         if auto_pass_var.get():
             auto_pass_var.set(False)
-            pass_frame.config(bg=COLOR_OFF)
-            pass_label.config(text="Pass Battle: OFF", bg=COLOR_OFF)
             stop_all_tasks_matching("_auto_pass")
             log.info("Stopping Pass Battle on all devices")
 
     def _stop_occupy():
         if auto_occupy_var.get():
             auto_occupy_var.set(False)
-            occupy_frame.config(bg=COLOR_OFF)
-            occupy_label.config(text="Occupy Towers: OFF", bg=COLOR_OFF)
             config.auto_occupy_running = False
             stop_all_tasks_matching("_auto_occupy")
             log.info("Stopping Occupy Towers on all devices")
@@ -820,8 +934,6 @@ def create_gui():
     def _stop_reinforce_throne():
         if auto_reinforce_var.get():
             auto_reinforce_var.set(False)
-            reinforce_frame.config(bg=COLOR_OFF)
-            reinforce_label.config(text="Reinforce Throne: OFF", bg=COLOR_OFF)
             stop_all_tasks_matching("_auto_reinforce")
             log.info("Stopping Reinforce Throne on all devices")
 
@@ -830,42 +942,38 @@ def create_gui():
         config.MITHRIL_DEPLOY_TIME.clear()
         if auto_mithril_var.get():
             auto_mithril_var.set(False)
-            mithril_frame.config(bg=COLOR_OFF)
-            mithril_label.config(text="Mine Mithril: OFF", bg=COLOR_OFF)
             stop_all_tasks_matching("_auto_mithril")
             log.info("Stopping Mine Mithril on all devices")
 
     def _stop_gold():
         if auto_gold_var.get():
             auto_gold_var.set(False)
-            gold_frame.config(bg=COLOR_OFF)
-            gold_label.config(text="Mine Gold: OFF", bg=COLOR_OFF)
             stop_all_tasks_matching("_auto_gold")
             log.info("Stopping Mine Gold on all devices")
 
     # ── Collapsible section helper ──
     def _make_section(parent, title, expanded=True):
         """Create a collapsible section with clickable header. Returns (container, inner)."""
-        container = tk.Frame(parent, bg=COLOR_BG)
-        inner = tk.Frame(container, bg=COLOR_BG, pady=3)
+        container = tk.Frame(parent, bg=THEME["bg_deep"])
+        inner = tk.Frame(container, bg=THEME["bg_deep"])
         vis = tk.BooleanVar(value=expanded)
         arrow = "\u25BC" if expanded else "\u25B6"
-        btn = tk.Button(container, text=f"  {arrow}  {title.upper()}",
-                         font=(_FONT_FAMILY, 8, "bold"), relief=tk.FLAT,
-                         bg=COLOR_SECTION_BG, activebackground="#ddd", anchor=tk.W,
-                         fg="#555")
+        btn = ctk.CTkButton(container, text=f"  {arrow}  {title.upper()}",
+                            font=ctk.CTkFont(family=_FONT_FAMILY, size=10, weight="bold"),
+                            fg_color=THEME["bg_section"], hover_color=THEME["bg_hover"],
+                            text_color=THEME["accent_cyan"], anchor="w",
+                            corner_radius=6, height=28)
         def toggle_section():
             if vis.get():
                 inner.pack_forget()
                 vis.set(False)
-                btn.config(text=f"  \u25B6  {title.upper()}")
+                btn.configure(text=f"  \u25B6  {title.upper()}")
             else:
                 inner.pack(fill=tk.X)
                 vis.set(True)
-                btn.config(text=f"  \u25BC  {title.upper()}")
-            window.update_idletasks()
-            window.geometry(f"{WIN_WIDTH}x{window.winfo_reqheight()}")
-        btn.config(command=toggle_section)
+                btn.configure(text=f"  \u25BC  {title.upper()}")
+            _resize_window()
+        btn.configure(command=toggle_section)
         btn.pack(fill=tk.X)
         if expanded:
             inner.pack(fill=tk.X)
@@ -878,17 +986,19 @@ def create_gui():
     rw_farming_ctr, rw_farming_inner = _make_section(auto_frame, "Farming")
     rw_combat_ctr, rw_combat_inner = _make_section(auto_frame, "Combat")
 
-    # ── Toggle bars (all parented to auto_frame, re-packed into sections) ──
+    # ── Row frames for side-by-side switch layout ──
+    bl_combat_row1 = tk.Frame(auto_frame, bg=THEME["bg_deep"])
+    bl_farming_row1 = tk.Frame(auto_frame, bg=THEME["bg_deep"])
+    bl_farming_row2 = tk.Frame(auto_frame, bg=THEME["bg_deep"])
+    rw_farming_row1 = tk.Frame(auto_frame, bg=THEME["bg_deep"])
+
+    # ── Toggle switches (CTkSwitch — toggles variable BEFORE command fires) ──
 
     def toggle_auto_pass():
-        active_devices = get_active_devices()
-        if not auto_pass_var.get():
+        if auto_pass_var.get():  # User just turned ON
             _stop_quest()
             _stop_occupy()
-            auto_pass_var.set(True)
-            pass_frame.config(bg=COLOR_ON)
-            pass_label.config(text="Pass Battle: ON", bg=COLOR_ON)
-            for device in active_devices:
+            for device in get_active_devices():
                 task_key = f"{device}_auto_pass"
                 if task_key not in running_tasks:
                     stop_event = threading.Event()
@@ -901,18 +1011,14 @@ def create_gui():
         else:
             _stop_pass_battle()
 
-    pass_frame, pass_label = make_toggle_bar(
-        auto_frame, "Pass Battle: OFF", FONT_TOGGLE, toggle_auto_pass)
+    pass_switch = ctk.CTkSwitch(auto_frame, text="Pass Battle", variable=auto_pass_var,
+                                command=toggle_auto_pass, **_sw_kw)
 
     def toggle_auto_occupy():
-        active_devices = get_active_devices()
-        if not auto_occupy_var.get():
+        if auto_occupy_var.get():
             _stop_quest()
             _stop_pass_battle()
-            auto_occupy_var.set(True)
-            occupy_frame.config(bg=COLOR_ON)
-            occupy_label.config(text="Occupy Towers: ON", bg=COLOR_ON)
-            for device in active_devices:
+            for device in get_active_devices():
                 task_key = f"{device}_auto_occupy"
                 if task_key not in running_tasks:
                     stop_event = threading.Event()
@@ -922,16 +1028,12 @@ def create_gui():
         else:
             _stop_occupy()
 
-    occupy_frame, occupy_label = make_toggle_bar(
-        auto_frame, "Occupy Towers: OFF", FONT_TOGGLE, toggle_auto_occupy)
+    occupy_switch = ctk.CTkSwitch(auto_frame, text="Occupy Towers", variable=auto_occupy_var,
+                                  command=toggle_auto_occupy, **_sw_kw)
 
     def toggle_auto_reinforce():
-        active_devices = get_active_devices()
-        if not auto_reinforce_var.get():
-            auto_reinforce_var.set(True)
-            reinforce_frame.config(bg=COLOR_ON)
-            reinforce_label.config(text="Reinforce Throne: ON", bg=COLOR_ON)
-            for device in active_devices:
+        if auto_reinforce_var.get():
+            for device in get_active_devices():
                 task_key = f"{device}_auto_reinforce"
                 if task_key not in running_tasks:
                     stop_event = threading.Event()
@@ -943,19 +1045,15 @@ def create_gui():
         else:
             _stop_reinforce_throne()
 
-    reinforce_frame, reinforce_label = make_toggle_bar(
-        auto_frame, "Reinforce Throne: OFF", FONT_TOGGLE, toggle_auto_reinforce)
+    reinforce_switch = ctk.CTkSwitch(auto_frame, text="Reinforce Throne", variable=auto_reinforce_var,
+                                     command=toggle_auto_reinforce, **_sw_kw)
 
     def toggle_auto_quest():
-        active_devices = get_active_devices()
-        if not auto_quest_var.get():
+        if auto_quest_var.get():
             _stop_pass_battle()
             _stop_occupy()
             _stop_gold()
-            auto_quest_var.set(True)
-            quest_frame.config(bg=COLOR_ON)
-            quest_label.config(text="Auto Quest: ON", bg=COLOR_ON)
-            for device in active_devices:
+            for device in get_active_devices():
                 task_key = f"{device}_auto_quest"
                 if task_key not in running_tasks:
                     stop_event = threading.Event()
@@ -965,18 +1063,14 @@ def create_gui():
         else:
             _stop_quest()
 
-    quest_frame, quest_label = make_toggle_bar(
-        auto_frame, "Auto Quest: OFF", FONT_TOGGLE, toggle_auto_quest)
+    quest_switch = ctk.CTkSwitch(auto_frame, text="Auto Quest", variable=auto_quest_var,
+                                 command=toggle_auto_quest, **_sw_kw)
 
     def toggle_auto_titan():
-        active_devices = get_active_devices()
-        if not auto_titan_var.get():
+        if auto_titan_var.get():
             _stop_groot()
             _stop_gold()
-            auto_titan_var.set(True)
-            titan_frame.config(bg=COLOR_ON)
-            titan_label.config(text="Rally Titans: ON", bg=COLOR_ON)
-            for device in active_devices:
+            for device in get_active_devices():
                 task_key = f"{device}_auto_titan"
                 if task_key not in running_tasks:
                     stop_event = threading.Event()
@@ -988,17 +1082,13 @@ def create_gui():
         else:
             _stop_titan()
 
-    titan_frame, titan_label = make_toggle_bar(
-        auto_frame, "Rally Titans: OFF", FONT_TOGGLE, toggle_auto_titan)
+    titan_switch = ctk.CTkSwitch(auto_frame, text="Rally Titans", variable=auto_titan_var,
+                                 command=toggle_auto_titan, **_sw_kw)
 
     def toggle_auto_groot():
-        active_devices = get_active_devices()
-        if not auto_groot_var.get():
+        if auto_groot_var.get():
             _stop_titan()
-            auto_groot_var.set(True)
-            groot_frame.config(bg=COLOR_ON)
-            groot_label.config(text="Join Groot: ON", bg=COLOR_ON)
-            for device in active_devices:
+            for device in get_active_devices():
                 task_key = f"{device}_auto_groot"
                 if task_key not in running_tasks:
                     stop_event = threading.Event()
@@ -1010,18 +1100,14 @@ def create_gui():
         else:
             _stop_groot()
 
-    groot_frame, groot_label = make_toggle_bar(
-        auto_frame, "Join Groot: OFF", FONT_TOGGLE, toggle_auto_groot)
+    groot_switch = ctk.CTkSwitch(auto_frame, text="Join Groot", variable=auto_groot_var,
+                                 command=toggle_auto_groot, **_sw_kw)
 
     def toggle_auto_mithril():
-        active_devices = get_active_devices()
-        if not auto_mithril_var.get():
-            auto_mithril_var.set(True)
-            mithril_frame.config(bg=COLOR_ON)
-            mithril_label.config(text="Mine Mithril: ON", bg=COLOR_ON)
+        if auto_mithril_var.get():
             config.MITHRIL_ENABLED = True
             config.MITHRIL_INTERVAL = int(mithril_interval_var.get())
-            for device in active_devices:
+            for device in get_active_devices():
                 task_key = f"{device}_auto_mithril"
                 if task_key not in running_tasks:
                     stop_event = threading.Event()
@@ -1031,18 +1117,14 @@ def create_gui():
         else:
             _stop_mithril()
 
-    mithril_frame, mithril_label = make_toggle_bar(
-        auto_frame, "Mine Mithril: OFF", FONT_TOGGLE, toggle_auto_mithril)
+    mithril_switch = ctk.CTkSwitch(auto_frame, text="Mine Mithril", variable=auto_mithril_var,
+                                   command=toggle_auto_mithril, **_sw_kw)
 
     def toggle_auto_gold():
-        active_devices = get_active_devices()
-        if not auto_gold_var.get():
+        if auto_gold_var.get():
             _stop_quest()
             _stop_titan()
-            auto_gold_var.set(True)
-            gold_frame.config(bg=COLOR_ON)
-            gold_label.config(text="Mine Gold: ON", bg=COLOR_ON)
-            for device in active_devices:
+            for device in get_active_devices():
                 task_key = f"{device}_auto_gold"
                 if task_key not in running_tasks:
                     stop_event = threading.Event()
@@ -1052,51 +1134,46 @@ def create_gui():
         else:
             _stop_gold()
 
-    gold_frame, gold_label = make_toggle_bar(
-        auto_frame, "Mine Gold: OFF", FONT_TOGGLE, toggle_auto_gold)
+    gold_switch = ctk.CTkSwitch(auto_frame, text="Mine Gold", variable=auto_gold_var,
+                                command=toggle_auto_gold, **_sw_kw)
 
-    # ── Row frames for side-by-side layout (children of their section inners) ──
-    bl_combat_row1 = tk.Frame(bl_combat_inner, bg=COLOR_BG)     # Pass + Occupy
-    bl_combat_row1.pack(fill=tk.X, pady=(0, 3))
-    bl_farming_row1 = tk.Frame(bl_farming_inner, bg=COLOR_BG)   # Quest + Titans
-    bl_farming_row1.pack(fill=tk.X, pady=(0, 3))
-    bl_farming_row2 = tk.Frame(bl_farming_inner, bg=COLOR_BG)   # Gold + Mithril
-    bl_farming_row2.pack(fill=tk.X, pady=(0, 3))
-    rw_farming_row1 = tk.Frame(rw_farming_inner, bg=COLOR_BG)   # Gold + Mithril
-    rw_farming_row1.pack(fill=tk.X)
-
-    # ── Layout helpers — pack toggle bars into the right sections ──
+    # ── Layout helpers — pack switches into the right sections ──
 
     def _layout_bl():
         """Pack BL mode: Combat (Pass+Occupy, Reinforce) then Farming (Quest+Titans, Gold+Mithril)."""
         bl_combat_ctr.pack(fill=tk.X, in_=auto_frame)
-        pass_frame.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=(0, 2), in_=bl_combat_row1)
-        occupy_frame.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=(2, 0), in_=bl_combat_row1)
-        reinforce_frame.pack(fill=tk.X, in_=bl_combat_inner)
+        bl_combat_row1.pack(fill=tk.X, padx=4, pady=2, in_=bl_combat_inner)
+        pass_switch.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=4, in_=bl_combat_row1)
+        occupy_switch.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=4, in_=bl_combat_row1)
+        reinforce_switch.pack(fill=tk.X, padx=8, pady=2, in_=bl_combat_inner)
 
         bl_farming_ctr.pack(fill=tk.X, pady=(4, 0), in_=auto_frame)
-        quest_frame.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=(0, 2), in_=bl_farming_row1)
-        titan_frame.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=(2, 0), in_=bl_farming_row1)
-        gold_frame.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=(0, 2), in_=bl_farming_row2)
-        mithril_frame.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=(2, 0), in_=bl_farming_row2)
+        bl_farming_row1.pack(fill=tk.X, padx=4, pady=2, in_=bl_farming_inner)
+        quest_switch.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=4, in_=bl_farming_row1)
+        titan_switch.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=4, in_=bl_farming_row1)
+        bl_farming_row2.pack(fill=tk.X, padx=4, pady=2, in_=bl_farming_inner)
+        gold_switch.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=4, in_=bl_farming_row2)
+        mithril_switch.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=4, in_=bl_farming_row2)
 
     def _layout_rw():
-        """Pack Home Server mode: Events (Groot), Farming (Titans, Gold+Mithril), Combat (Reinforce)."""
+        """Pack Home Server mode: Events (Groot), Farming (Titans+Gold, Mithril), Combat (Reinforce)."""
         rw_events_ctr.pack(fill=tk.X, in_=auto_frame)
-        groot_frame.pack(fill=tk.X, in_=rw_events_inner)
+        groot_switch.pack(fill=tk.X, padx=8, pady=2, in_=rw_events_inner)
 
         rw_farming_ctr.pack(fill=tk.X, pady=(4, 0), in_=auto_frame)
-        titan_frame.pack(fill=tk.X, in_=rw_farming_inner)
-        gold_frame.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=(0, 2), in_=rw_farming_row1)
-        mithril_frame.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=(2, 0), in_=rw_farming_row1)
+        rw_farming_row1.pack(fill=tk.X, padx=4, pady=2, in_=rw_farming_inner)
+        titan_switch.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=4, in_=rw_farming_row1)
+        gold_switch.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=4, in_=rw_farming_row1)
+        mithril_switch.pack(fill=tk.X, padx=8, pady=2, in_=rw_farming_inner)
 
         rw_combat_ctr.pack(fill=tk.X, pady=(4, 0), in_=auto_frame)
-        reinforce_frame.pack(fill=tk.X, in_=rw_combat_inner)
+        reinforce_switch.pack(fill=tk.X, padx=8, pady=2, in_=rw_combat_inner)
 
     def _forget_all_toggles():
-        """Forget all toggle bars and section containers from layout."""
-        for w in [pass_frame, occupy_frame, reinforce_frame, quest_frame,
-                  titan_frame, groot_frame, mithril_frame, gold_frame,
+        """Forget all toggle switches, row frames, and section containers from layout."""
+        for w in [pass_switch, occupy_switch, reinforce_switch, quest_switch,
+                  titan_switch, groot_switch, mithril_switch, gold_switch,
+                  bl_combat_row1, bl_farming_row1, bl_farming_row2, rw_farming_row1,
                   bl_combat_ctr, bl_farming_ctr,
                   rw_events_ctr, rw_farming_ctr, rw_combat_ctr]:
             w.pack_forget()
@@ -1107,30 +1184,19 @@ def create_gui():
         if mode_var.get() == new_mode:
             return
 
-        # Don't stop running tasks on mode switch — they continue in the
-        # background and their toggle bars reflect the real state when the
-        # user switches back.  Only stop tasks exclusive to the OTHER mode
-        # that genuinely conflict (currently none do).
-
         mode_var.set(new_mode)
         _forget_all_toggles()
 
         if new_mode == "rw":
             _layout_rw()
             bl_settings_row.pack_forget()
-            rw_mode_btn.config(bg=COLOR_MODE_ACTIVE, fg="white")
-            bl_mode_btn.config(bg=COLOR_MODE_INACTIVE, fg="#555")
+            mode_toggle.set("Home Server")
         else:
             _layout_bl()
-            bl_settings_row.pack(fill=tk.X, pady=(2, 0), in_=intervals_group, before=rw_settings_row)
-            bl_mode_btn.config(bg=COLOR_MODE_ACTIVE, fg="white")
-            rw_mode_btn.config(bg=COLOR_MODE_INACTIVE, fg="#555")
+            bl_settings_row.pack(fill=tk.X, padx=8, pady=(2, 0), in_=intervals_group, before=rw_settings_row)
+            mode_toggle.set("Broken Lands")
 
-        window.update_idletasks()
-        window.geometry(f"{WIN_WIDTH}x{window.winfo_reqheight()}")
-
-    rw_mode_btn.bind("<Button-1>", lambda e: switch_mode("rw"))
-    bl_mode_btn.bind("<Button-1>", lambda e: switch_mode("bl"))
+        _resize_window()
 
     # Pack initial layout (BL default)
     _layout_bl()
@@ -1139,28 +1205,45 @@ def create_gui():
     # SETTINGS (grouped, mode-aware)
     # ============================================================
 
-    COLOR_GROUP_HEADER = "#666"
+    settings_container = tk.Frame(window, bg=THEME["bg_deep"])
+    settings_container.pack(fill=tk.X, padx=PAD_X, pady=(6, 4))
+
+    settings_visible = tk.BooleanVar(value=False)
+    settings_card = ctk.CTkFrame(settings_container, fg_color=THEME["bg_card"], corner_radius=14,
+                                 border_width=1, border_color=THEME["border_subtle"])
+
+    def toggle_settings():
+        if settings_visible.get():
+            settings_card.pack_forget()
+            settings_visible.set(False)
+            settings_btn.configure(text="\u2699  Settings  \u25B6")
+        else:
+            settings_card.pack(fill=tk.X, pady=(0, 4))
+            settings_visible.set(True)
+            settings_btn.configure(text="\u2699  Settings  \u25BC")
+        _resize_window()
+
+    settings_btn = ctk.CTkButton(settings_container, text="\u2699  Settings  \u25B6",
+                                 command=toggle_settings,
+                                 font=ctk.CTkFont(family=_FONT_FAMILY, size=11, weight="bold"),
+                                 fg_color=THEME["bg_section"], hover_color=THEME["bg_hover"],
+                                 text_color=THEME["accent_cyan"], corner_radius=8, height=30)
+    settings_btn.pack(fill=tk.X)
 
     def _make_group(parent, title):
         """Create a settings group frame with a header label."""
-        frame = tk.Frame(parent, bg=COLOR_SECTION_BG)
-        tk.Label(frame, text=title, font=(_FONT_FAMILY, 8, "bold"),
-                 bg=COLOR_SECTION_BG, fg=COLOR_GROUP_HEADER,
-                 anchor=tk.W).pack(fill=tk.X)
+        frame = ctk.CTkFrame(parent, fg_color=THEME["bg_section"], corner_radius=8)
+        ctk.CTkLabel(frame, text=title,
+                     font=ctk.CTkFont(family=_FONT_FAMILY, size=9, weight="bold"),
+                     text_color=THEME["text_muted"]).pack(anchor=tk.W, padx=8, pady=(4, 0))
         return frame
 
-    settings_frame = tk.Frame(window, bg=COLOR_SECTION_BG, padx=10, pady=6)
-    settings_frame.pack(fill=tk.X, padx=PAD_X, pady=(6, 4))
-
-    tk.Label(settings_frame, text="\u2699  Settings", font=(_FONT_FAMILY, 9, "bold"),
-             bg=COLOR_SECTION_BG, fg="#444", anchor=tk.W).pack(fill=tk.X, pady=(0, 2))
-
     # ── General ──
-    general_group = _make_group(settings_frame, "General")
-    general_group.pack(fill=tk.X, pady=(2, 4))
+    general_group = _make_group(settings_card, "General")
+    general_group.pack(fill=tk.X, padx=10, pady=(2, 4))
 
-    general_row = tk.Frame(general_group, bg=COLOR_SECTION_BG)
-    general_row.pack(fill=tk.X)
+    general_row = ctk.CTkFrame(general_group, fg_color="transparent")
+    general_row.pack(fill=tk.X, padx=8, pady=(0, 4))
 
     auto_heal_var = tk.BooleanVar(value=settings["auto_heal"])
     set_auto_heal(settings["auto_heal"])
@@ -1169,9 +1252,8 @@ def create_gui():
         set_auto_heal(auto_heal_var.get())
         save_current_settings()
 
-    tk.Checkbutton(general_row, text="Auto Heal", variable=auto_heal_var,
-                   command=toggle_auto_heal, font=(_FONT_FAMILY, 9),
-                   bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.LEFT)
+    ctk.CTkCheckBox(general_row, text="Auto Heal", variable=auto_heal_var,
+                    command=toggle_auto_heal, **_cb_kw).pack(side=tk.LEFT)
 
     verbose_var = tk.BooleanVar(value=settings.get("verbose_logging", False))
     from botlog import set_console_verbose
@@ -1219,19 +1301,17 @@ def create_gui():
                     f"http://{_ip}:8080")
         save_current_settings()
 
-    tk.Checkbutton(general_row, text="Web", variable=web_dash_var,
-                   command=toggle_web_dashboard, font=(_FONT_FAMILY, 9),
-                   bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.RIGHT)
-    tk.Checkbutton(general_row, text="Verbose Log", variable=verbose_var,
-                   command=toggle_verbose, font=(_FONT_FAMILY, 9),
-                   bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.RIGHT)
+    ctk.CTkCheckBox(general_row, text="Web", variable=web_dash_var,
+                    command=toggle_web_dashboard, **_cb_kw).pack(side=tk.RIGHT)
+    ctk.CTkCheckBox(general_row, text="Verbose Log", variable=verbose_var,
+                    command=toggle_verbose, **_cb_kw).pack(side=tk.RIGHT, padx=(0, 8))
 
     # ── Auto Quest ──
-    aq_group = _make_group(settings_frame, "Auto Quest")
-    aq_group.pack(fill=tk.X, pady=(0, 4))
+    aq_group = _make_group(settings_card, "Auto Quest")
+    aq_group.pack(fill=tk.X, padx=10, pady=(0, 4))
 
-    aq_row1 = tk.Frame(aq_group, bg=COLOR_SECTION_BG)
-    aq_row1.pack(fill=tk.X)
+    aq_row1 = ctk.CTkFrame(aq_group, fg_color="transparent")
+    aq_row1.pack(fill=tk.X, padx=8)
 
     eg_rally_own_var = tk.BooleanVar(value=settings.get("eg_rally_own", True))
     set_eg_rally_own(settings.get("eg_rally_own", True))
@@ -1240,9 +1320,8 @@ def create_gui():
         set_eg_rally_own(eg_rally_own_var.get())
         save_current_settings()
 
-    tk.Checkbutton(aq_row1, text="Rally Own EG", variable=eg_rally_own_var,
-                   command=toggle_eg_rally_own, font=(_FONT_FAMILY, 9),
-                   bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.LEFT)
+    ctk.CTkCheckBox(aq_row1, text="Rally Own EG", variable=eg_rally_own_var,
+                    command=toggle_eg_rally_own, **_cb_kw).pack(side=tk.LEFT)
 
     titan_rally_own_var = tk.BooleanVar(value=settings.get("titan_rally_own", True))
     set_titan_rally_own(settings.get("titan_rally_own", True))
@@ -1251,12 +1330,11 @@ def create_gui():
         set_titan_rally_own(titan_rally_own_var.get())
         save_current_settings()
 
-    tk.Checkbutton(aq_row1, text="Rally Own Titans", variable=titan_rally_own_var,
-                   command=toggle_titan_rally_own, font=(_FONT_FAMILY, 9),
-                   bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.LEFT, padx=(6, 0))
+    ctk.CTkCheckBox(aq_row1, text="Rally Own Titans", variable=titan_rally_own_var,
+                    command=toggle_titan_rally_own, **_cb_kw).pack(side=tk.LEFT, padx=(6, 0))
 
-    aq_row2 = tk.Frame(aq_group, bg=COLOR_SECTION_BG)
-    aq_row2.pack(fill=tk.X, pady=(2, 0))
+    aq_row2 = ctk.CTkFrame(aq_group, fg_color="transparent")
+    aq_row2.pack(fill=tk.X, padx=8, pady=(2, 0))
 
     gather_enabled_var = tk.BooleanVar(value=settings.get("gather_enabled", True))
     gather_mine_level_var = tk.StringVar(value=str(settings.get("gather_mine_level", 4)))
@@ -1265,7 +1343,7 @@ def create_gui():
                        settings.get("gather_mine_level", 4),
                        settings.get("gather_max_troops", 3))
 
-    def update_gather_options():
+    def update_gather_options(*_args):
         try:
             level = int(gather_mine_level_var.get())
             max_t = int(gather_max_troops_var.get())
@@ -1274,25 +1352,24 @@ def create_gui():
         except ValueError:
             pass
 
-    tk.Checkbutton(aq_row2, text="Gather Gold", variable=gather_enabled_var,
-                   command=update_gather_options, font=(_FONT_FAMILY, 9),
-                   bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.LEFT)
-    tk.Label(aq_row2, text="Mine Lv", font=(_FONT_FAMILY, 8),
-             bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT, padx=(8, 0))
-    ttk.Combobox(aq_row2, textvariable=gather_mine_level_var,
-                 values=["4", "5", "6"], width=3, state="readonly",
-                 font=(_FONT_FAMILY, 8)).pack(side=tk.LEFT, padx=(2, 4))
-    tk.Label(aq_row2, text="Max Troops", font=(_FONT_FAMILY, 8),
-             bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT, padx=(4, 0))
-    ttk.Combobox(aq_row2, textvariable=gather_max_troops_var,
-                 values=["1", "2", "3", "4", "5"], width=3, state="readonly",
-                 font=(_FONT_FAMILY, 8)).pack(side=tk.LEFT, padx=(2, 4))
-    tk.Button(aq_row2, text="Set", command=update_gather_options,
-              font=(_FONT_FAMILY, 7)).pack(side=tk.LEFT, padx=(2, 0))
+    ctk.CTkCheckBox(aq_row2, text="Gather Gold", variable=gather_enabled_var,
+                    command=update_gather_options, **_cb_kw).pack(side=tk.LEFT)
+    ctk.CTkLabel(aq_row2, text="Mine Lv",
+                 font=ctk.CTkFont(family=_FONT_FAMILY, size=10),
+                 text_color=THEME["text_muted"]).pack(side=tk.LEFT, padx=(8, 0))
+    ctk.CTkOptionMenu(aq_row2, variable=gather_mine_level_var,
+                      values=["4", "5", "6"], command=update_gather_options,
+                      **_om_kw, width=50).pack(side=tk.LEFT, padx=(2, 4))
+    ctk.CTkLabel(aq_row2, text="Max Troops",
+                 font=ctk.CTkFont(family=_FONT_FAMILY, size=10),
+                 text_color=THEME["text_muted"]).pack(side=tk.LEFT, padx=(4, 0))
+    ctk.CTkOptionMenu(aq_row2, variable=gather_max_troops_var,
+                      values=["1", "2", "3", "4", "5"], command=update_gather_options,
+                      **_om_kw, width=50).pack(side=tk.LEFT, padx=(2, 4))
 
     # Tower quest toggle
-    aq_row3 = tk.Frame(aq_group, bg=COLOR_SECTION_BG)
-    aq_row3.pack(fill=tk.X, pady=(2, 0))
+    aq_row3 = ctk.CTkFrame(aq_group, fg_color="transparent")
+    aq_row3.pack(fill=tk.X, padx=8, pady=(2, 4))
 
     tower_quest_var = tk.BooleanVar(value=settings.get("tower_quest_enabled", False))
     set_tower_quest_enabled(settings.get("tower_quest_enabled", False))
@@ -1300,29 +1377,28 @@ def create_gui():
     def update_tower_quest():
         enabled = tower_quest_var.get()
         if enabled:
-            from tkinter import messagebox
             messagebox.showinfo("Tower Quest Setup",
                                 "Mark your hive tower with the target marker in-game, then click OK.")
         set_tower_quest_enabled(enabled)
         save_current_settings()
 
-    tk.Checkbutton(aq_row3, text="Tower Quest", variable=tower_quest_var,
-                   command=update_tower_quest, font=(_FONT_FAMILY, 9),
-                   bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.LEFT)
-    tk.Label(aq_row3, text="(mark tower with target marker first)", font=(_FONT_FAMILY, 8),
-             bg=COLOR_SECTION_BG, fg="#888").pack(side=tk.LEFT, padx=(4, 0))
+    ctk.CTkCheckBox(aq_row3, text="Tower Quest", variable=tower_quest_var,
+                    command=update_tower_quest, **_cb_kw).pack(side=tk.LEFT)
+    ctk.CTkLabel(aq_row3, text="(mark tower with target marker first)",
+                 font=ctk.CTkFont(family=_FONT_FAMILY, size=10),
+                 text_color=THEME["text_muted"]).pack(side=tk.LEFT, padx=(4, 0))
 
     # ── AP Restoration ──
-    ap_group = _make_group(settings_frame, "AP Restoration")
-    ap_group.pack(fill=tk.X, pady=(0, 4))
+    ap_group = _make_group(settings_card, "AP Restoration")
+    ap_group.pack(fill=tk.X, padx=10, pady=(0, 4))
 
-    ap_toggle_row = tk.Frame(ap_group, bg=COLOR_SECTION_BG)
-    ap_toggle_row.pack(fill=tk.X)
+    ap_toggle_row = ctk.CTkFrame(ap_group, fg_color="transparent")
+    ap_toggle_row.pack(fill=tk.X, padx=8)
 
     auto_restore_ap_var = tk.BooleanVar(value=settings["auto_restore_ap"])
     set_auto_restore_ap(settings["auto_restore_ap"])
 
-    ap_settings_row = tk.Frame(ap_group, bg=COLOR_SECTION_BG)
+    ap_settings_row = ctk.CTkFrame(ap_group, fg_color="transparent")
 
     ap_use_free_var = tk.BooleanVar(value=settings["ap_use_free"])
     ap_use_potions_var = tk.BooleanVar(value=settings["ap_use_potions"])
@@ -1342,56 +1418,55 @@ def create_gui():
             ap_allow_large_var.get(), ap_use_gems_var.get(), gem_limit)
         save_current_settings()
 
-    tk.Checkbutton(ap_settings_row, text="Free", variable=ap_use_free_var,
-                   command=update_ap_options, font=(_FONT_FAMILY, 8),
-                   bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.LEFT)
-    tk.Checkbutton(ap_settings_row, text="Potions", variable=ap_use_potions_var,
-                   command=update_ap_options, font=(_FONT_FAMILY, 8),
-                   bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.LEFT)
-    tk.Checkbutton(ap_settings_row, text="Large Potions", variable=ap_allow_large_var,
-                   command=update_ap_options, font=(_FONT_FAMILY, 8),
-                   bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.LEFT)
-    tk.Checkbutton(ap_settings_row, text="Gems", variable=ap_use_gems_var,
-                   command=update_ap_options, font=(_FONT_FAMILY, 8),
-                   bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.LEFT)
-    tk.Label(ap_settings_row, text="Limit:", font=(_FONT_FAMILY, 8),
-             bg=COLOR_SECTION_BG).pack(side=tk.LEFT, padx=(4, 0))
-    tk.Entry(ap_settings_row, textvariable=ap_gem_limit_var, width=5,
-             font=(_FONT_FAMILY, 8)).pack(side=tk.LEFT, padx=(2, 0))
-    tk.Button(ap_settings_row, text="Set", command=update_ap_options,
-              font=(_FONT_FAMILY, 7)).pack(side=tk.LEFT, padx=(2, 0))
+    _ap_cb = dict(_cb_kw)
+    _ap_cb["font"] = ctk.CTkFont(family=_FONT_FAMILY, size=11)
+    ctk.CTkCheckBox(ap_settings_row, text="Free", variable=ap_use_free_var,
+                    command=update_ap_options, **_ap_cb).pack(side=tk.LEFT)
+    ctk.CTkCheckBox(ap_settings_row, text="Potions", variable=ap_use_potions_var,
+                    command=update_ap_options, **_ap_cb).pack(side=tk.LEFT)
+    ctk.CTkCheckBox(ap_settings_row, text="Large", variable=ap_allow_large_var,
+                    command=update_ap_options, **_ap_cb).pack(side=tk.LEFT)
+    ctk.CTkCheckBox(ap_settings_row, text="Gems", variable=ap_use_gems_var,
+                    command=update_ap_options, **_ap_cb).pack(side=tk.LEFT)
+    ctk.CTkLabel(ap_settings_row, text="Limit:",
+                 font=ctk.CTkFont(family=_FONT_FAMILY, size=10),
+                 text_color=THEME["text_muted"]).pack(side=tk.LEFT, padx=(4, 0))
+    ctk.CTkEntry(ap_settings_row, textvariable=ap_gem_limit_var, width=50, **_entry_kw).pack(side=tk.LEFT, padx=(2, 0))
+    ctk.CTkButton(ap_settings_row, text="Set", command=update_ap_options,
+                  font=ctk.CTkFont(family=_FONT_FAMILY, size=10),
+                  fg_color=THEME["btn_default"], hover_color=THEME["bg_hover"],
+                  corner_radius=6, height=24, width=40).pack(side=tk.LEFT, padx=(2, 0))
 
     def toggle_auto_restore_ap():
         enabled = auto_restore_ap_var.get()
         set_auto_restore_ap(enabled)
         if enabled:
-            ap_settings_row.pack(fill=tk.X, pady=(2, 0))
+            ap_settings_row.pack(fill=tk.X, padx=8, pady=(2, 4))
         else:
             ap_settings_row.pack_forget()
-        window.update_idletasks()
-        window.geometry(f"{WIN_WIDTH}x{window.winfo_reqheight()}")
+        _resize_window()
         save_current_settings()
 
-    tk.Checkbutton(ap_toggle_row, text="Auto Restore AP", variable=auto_restore_ap_var,
-                   command=toggle_auto_restore_ap, font=(_FONT_FAMILY, 9),
-                   bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.LEFT)
+    ctk.CTkCheckBox(ap_toggle_row, text="Auto Restore AP", variable=auto_restore_ap_var,
+                    command=toggle_auto_restore_ap, **_cb_kw).pack(side=tk.LEFT)
 
     if settings["auto_restore_ap"]:
-        ap_settings_row.pack(fill=tk.X, pady=(2, 0))
+        ap_settings_row.pack(fill=tk.X, padx=8, pady=(2, 4))
 
     # ── Troops ──
-    troops_group = _make_group(settings_frame, "Troops")
-    troops_group.pack(fill=tk.X, pady=(0, 4))
+    troops_group = _make_group(settings_card, "Troops")
+    troops_group.pack(fill=tk.X, padx=10, pady=(0, 4))
 
-    troops_row = tk.Frame(troops_group, bg=COLOR_SECTION_BG)
-    troops_row.pack(fill=tk.X)
+    troops_row = ctk.CTkFrame(troops_group, fg_color="transparent")
+    troops_row.pack(fill=tk.X, padx=8, pady=(0, 4))
 
-    tk.Label(troops_row, text="Min Troops:", font=(_FONT_FAMILY, 9),
-             bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
+    ctk.CTkLabel(troops_row, text="Min Troops:",
+                 font=ctk.CTkFont(family=_FONT_FAMILY, size=12),
+                 text_color=THEME["text_primary"]).pack(side=tk.LEFT)
     min_troops_var = tk.StringVar(value=str(settings["min_troops"]))
     set_min_troops(settings["min_troops"])
-    tk.Entry(troops_row, textvariable=min_troops_var, width=4, justify="center",
-             font=(_FONT_FAMILY, 9)).pack(side=tk.LEFT, padx=(4, 4))
+    ctk.CTkEntry(troops_row, textvariable=min_troops_var, width=50, justify="center",
+                 **_entry_kw).pack(side=tk.LEFT, padx=(4, 4))
 
     def update_min_troops():
         try:
@@ -1400,120 +1475,107 @@ def create_gui():
         except:
             pass
 
-    tk.Button(troops_row, text="Set", command=update_min_troops,
-              font=(_FONT_FAMILY, 8)).pack(side=tk.LEFT)
+    ctk.CTkButton(troops_row, text="Set", command=update_min_troops,
+                  font=ctk.CTkFont(family=_FONT_FAMILY, size=10),
+                  fg_color=THEME["btn_default"], hover_color=THEME["bg_hover"],
+                  corner_radius=6, height=24, width=40).pack(side=tk.LEFT)
 
     variation_var = tk.StringVar(value=str(settings["variation"]))
-    tk.Label(troops_row, text="Randomize \u00b1", font=(_FONT_FAMILY, 9),
-             bg=COLOR_SECTION_BG).pack(side=tk.LEFT, padx=(16, 0))
-    tk.Entry(troops_row, textvariable=variation_var, width=4, justify="center",
-             font=(_FONT_FAMILY, 9)).pack(side=tk.LEFT, padx=(4, 1))
-    tk.Label(troops_row, text="s", font=(_FONT_FAMILY, 9),
-             bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
+    ctk.CTkLabel(troops_row, text="Randomize \u00b1",
+                 font=ctk.CTkFont(family=_FONT_FAMILY, size=12),
+                 text_color=THEME["text_primary"]).pack(side=tk.LEFT, padx=(16, 0))
+    ctk.CTkEntry(troops_row, textvariable=variation_var, width=50, justify="center",
+                 **_entry_kw).pack(side=tk.LEFT, padx=(4, 1))
+    ctk.CTkLabel(troops_row, text="s",
+                 font=ctk.CTkFont(family=_FONT_FAMILY, size=12),
+                 text_color=THEME["text_muted"]).pack(side=tk.LEFT)
 
     # ── Intervals ──
-    intervals_group = _make_group(settings_frame, "Intervals")
-    intervals_group.pack(fill=tk.X, pady=(0, 4))
+    intervals_group = _make_group(settings_card, "Intervals")
+    intervals_group.pack(fill=tk.X, padx=10, pady=(0, 4))
 
     # Pass mode & interval (BL only)
-    bl_settings_row = tk.Frame(intervals_group, bg=COLOR_SECTION_BG)
+    bl_settings_row = ctk.CTkFrame(intervals_group, fg_color="transparent")
 
-    tk.Label(bl_settings_row, text="Pass", font=(_FONT_FAMILY, 9),
-             bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
-    ttk.Combobox(bl_settings_row, textvariable=pass_mode_var,
-                 values=["Rally Joiner", "Rally Starter"],
-                 width=12, state="readonly", font=(_FONT_FAMILY, 8)).pack(side=tk.LEFT, padx=(4, 4))
-    tk.Entry(bl_settings_row, textvariable=pass_interval_var, width=4, justify="center",
-             font=(_FONT_FAMILY, 9)).pack(side=tk.LEFT, padx=(0, 1))
-    tk.Label(bl_settings_row, text="s", font=(_FONT_FAMILY, 9),
-             bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
+    ctk.CTkLabel(bl_settings_row, text="Pass",
+                 font=ctk.CTkFont(family=_FONT_FAMILY, size=12),
+                 text_color=THEME["text_muted"]).pack(side=tk.LEFT)
+    ctk.CTkOptionMenu(bl_settings_row, variable=pass_mode_var,
+                      values=["Rally Joiner", "Rally Starter"],
+                      **_om_kw, width=120).pack(side=tk.LEFT, padx=(4, 4))
+    ctk.CTkEntry(bl_settings_row, textvariable=pass_interval_var, width=50, justify="center",
+                 **_entry_kw).pack(side=tk.LEFT, padx=(0, 1))
+    ctk.CTkLabel(bl_settings_row, text="s",
+                 font=ctk.CTkFont(family=_FONT_FAMILY, size=12),
+                 text_color=THEME["text_muted"]).pack(side=tk.LEFT)
 
     # Titan / Groot / Reinforce / Mithril intervals (always visible)
-    rw_settings_row = tk.Frame(intervals_group, bg=COLOR_SECTION_BG)
+    rw_settings_row = ctk.CTkFrame(intervals_group, fg_color="transparent")
 
-    tk.Label(rw_settings_row, text="Titan", font=(_FONT_FAMILY, 9),
-             bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
-    tk.Entry(rw_settings_row, textvariable=titan_interval_var, width=4, justify="center",
-             font=(_FONT_FAMILY, 9)).pack(side=tk.LEFT, padx=(4, 1))
-    tk.Label(rw_settings_row, text="s", font=(_FONT_FAMILY, 9),
-             bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
+    for lbl_text, var, unit in [("Titan", titan_interval_var, "s"),
+                                 ("Groot", groot_interval_var, "s"),
+                                 ("Reinf", reinforce_interval_var, "s"),
+                                 ("Mithril", mithril_interval_var, "m")]:
+        ctk.CTkLabel(rw_settings_row, text=lbl_text,
+                     font=ctk.CTkFont(family=_FONT_FAMILY, size=12),
+                     text_color=THEME["text_muted"]).pack(side=tk.LEFT, padx=(6, 0))
+        ctk.CTkEntry(rw_settings_row, textvariable=var, width=50, justify="center",
+                     **_entry_kw).pack(side=tk.LEFT, padx=(4, 1))
+        ctk.CTkLabel(rw_settings_row, text=unit,
+                     font=ctk.CTkFont(family=_FONT_FAMILY, size=12),
+                     text_color=THEME["text_muted"]).pack(side=tk.LEFT)
 
-    tk.Frame(rw_settings_row, width=12, bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
-
-    tk.Label(rw_settings_row, text="Groot", font=(_FONT_FAMILY, 9),
-             bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
-    tk.Entry(rw_settings_row, textvariable=groot_interval_var, width=4, justify="center",
-             font=(_FONT_FAMILY, 9)).pack(side=tk.LEFT, padx=(4, 1))
-    tk.Label(rw_settings_row, text="s", font=(_FONT_FAMILY, 9),
-             bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
-
-    tk.Frame(rw_settings_row, width=12, bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
-
-    tk.Label(rw_settings_row, text="Reinf", font=(_FONT_FAMILY, 9),
-             bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
-    tk.Entry(rw_settings_row, textvariable=reinforce_interval_var, width=4, justify="center",
-             font=(_FONT_FAMILY, 9)).pack(side=tk.LEFT, padx=(4, 1))
-    tk.Label(rw_settings_row, text="s", font=(_FONT_FAMILY, 9),
-             bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
-
-    tk.Frame(rw_settings_row, width=12, bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
-
-    tk.Label(rw_settings_row, text="Mithril", font=(_FONT_FAMILY, 9),
-             bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
-    tk.Entry(rw_settings_row, textvariable=mithril_interval_var, width=4, justify="center",
-             font=(_FONT_FAMILY, 9)).pack(side=tk.LEFT, padx=(4, 1))
-    tk.Label(rw_settings_row, text="m", font=(_FONT_FAMILY, 9),
-             bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
-
-    bl_settings_row.pack(fill=tk.X, pady=(2, 0))
-    rw_settings_row.pack(fill=tk.X, pady=(2, 0))
-
-    # (Gather Gold moved into Auto Quest group above)
+    bl_settings_row.pack(fill=tk.X, padx=8, pady=(2, 0))
+    rw_settings_row.pack(fill=tk.X, padx=8, pady=(2, 4))
 
     # Apply saved mode (hides BL-only widgets if Home Server)
     if settings["mode"] == "rw":
         switch_mode("rw")
 
     # ── Territory (collapsible) ──
-    territory_container = tk.Frame(window, bg=COLOR_BG)
+    territory_container = tk.Frame(window, bg=THEME["bg_deep"])
     territory_container.pack(fill=tk.X, padx=PAD_X, pady=(0, 2))
 
     territory_visible = tk.BooleanVar(value=False)
-    territory_inner = tk.Frame(territory_container, padx=8, pady=6, bg=COLOR_SECTION_BG)
+    territory_inner = ctk.CTkFrame(territory_container, fg_color=THEME["bg_section"],
+                                   corner_radius=8)
 
     def toggle_territory():
         if territory_visible.get():
             territory_inner.pack_forget()
             territory_visible.set(False)
-            territory_btn.config(text="Territory Settings  \u25B6")
-            window.update_idletasks()
-            window.geometry(f"{WIN_WIDTH}x{window.winfo_reqheight()}")
+            territory_btn.configure(text="Territory Settings  \u25B6")
         else:
-            territory_inner.pack(fill=tk.X)
+            territory_inner.pack(fill=tk.X, padx=4, pady=(0, 4))
             territory_visible.set(True)
-            territory_btn.config(text="Territory Settings  \u25BC")
-            window.update_idletasks()
-            window.geometry(f"{WIN_WIDTH}x{window.winfo_reqheight()}")
+            territory_btn.configure(text="Territory Settings  \u25BC")
+        _resize_window()
 
-    territory_btn = tk.Button(territory_container, text="Territory Settings  \u25B6",
-                               command=toggle_territory, font=(_FONT_FAMILY, 9, "bold"),
-                               relief=tk.FLAT, bg=COLOR_SECTION_BG, activebackground="#ddd")
+    territory_btn = ctk.CTkButton(territory_container, text="Territory Settings  \u25B6",
+                                  command=toggle_territory,
+                                  font=ctk.CTkFont(family=_FONT_FAMILY, size=11, weight="bold"),
+                                  fg_color=THEME["bg_section"], hover_color=THEME["bg_hover"],
+                                  text_color=THEME["accent_cyan"], corner_radius=8, height=30)
     territory_btn.pack(fill=tk.X)
 
-    teams_row = tk.Frame(territory_inner, bg=COLOR_SECTION_BG)
-    teams_row.pack(fill=tk.X, pady=2)
-    tk.Label(teams_row, text="My Team:", font=(_FONT_FAMILY, 9),
-             bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
+    teams_row = ctk.CTkFrame(territory_inner, fg_color="transparent")
+    teams_row.pack(fill=tk.X, padx=8, pady=(6, 2))
+    ctk.CTkLabel(teams_row, text="My Team:",
+                 font=ctk.CTkFont(family=_FONT_FAMILY, size=12),
+                 text_color=THEME["text_primary"]).pack(side=tk.LEFT)
     my_team_var = tk.StringVar(value=settings["my_team"])
-    ttk.Combobox(teams_row, textvariable=my_team_var,
-                 values=["yellow", "red", "blue", "green"],
-                 width=7, state="readonly", font=(_FONT_FAMILY, 8)).pack(side=tk.LEFT, padx=(4, 12))
-    tk.Label(teams_row, text="Attack:", font=(_FONT_FAMILY, 9),
-             bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
+    ctk.CTkOptionMenu(teams_row, variable=my_team_var,
+                      values=["yellow", "red", "blue", "green"],
+                      command=lambda _: update_territory_config(),
+                      width=80, **_om_kw).pack(side=tk.LEFT, padx=(4, 12))
+    ctk.CTkLabel(teams_row, text="Attack:",
+                 font=ctk.CTkFont(family=_FONT_FAMILY, size=12),
+                 text_color=THEME["text_primary"]).pack(side=tk.LEFT)
     enemy_var = tk.StringVar(value=settings["enemy_team"])
-    ttk.Combobox(teams_row, textvariable=enemy_var,
-                 values=["green", "red", "blue", "yellow"],
-                 width=7, state="readonly", font=(_FONT_FAMILY, 8)).pack(side=tk.LEFT, padx=(4, 6))
+    ctk.CTkOptionMenu(teams_row, variable=enemy_var,
+                      values=["green", "red", "blue", "yellow"],
+                      command=lambda _: update_territory_config(),
+                      width=80, **_om_kw).pack(side=tk.LEFT, padx=(4, 6))
 
     set_territory_config(settings["my_team"], [settings["enemy_team"]])
 
@@ -1521,16 +1583,16 @@ def create_gui():
         set_territory_config(my_team_var.get(), [enemy_var.get()])
         save_current_settings()
 
-    tk.Button(teams_row, text="Set", command=update_territory_config,
-              font=(_FONT_FAMILY, 8)).pack(side=tk.LEFT)
-
     def open_territory_mgr():
         active = get_active_devices()
         if active:
             threading.Thread(target=open_territory_manager, args=(active[0],), daemon=True).start()
 
-    tk.Button(territory_inner, text="Territory Square Manager",
-              command=open_territory_mgr, font=(_FONT_FAMILY, 9)).pack(fill=tk.X, pady=(4, 0))
+    ctk.CTkButton(territory_inner, text="Territory Square Manager",
+                  command=open_territory_mgr,
+                  font=ctk.CTkFont(family=_FONT_FAMILY, size=11),
+                  fg_color=THEME["btn_default"], hover_color=THEME["bg_hover"],
+                  corner_radius=8, height=30).pack(fill=tk.X, padx=8, pady=(4, 8))
 
     # ============================================================
     # SETTINGS PERSISTENCE
@@ -1585,50 +1647,50 @@ def create_gui():
     # MORE ACTIONS (collapsed by default)
     # ============================================================
 
-    actions_container = tk.Frame(window, bg=COLOR_BG)
-    actions_container.pack(fill=tk.BOTH, expand=True, padx=PAD_X, pady=(2, 0))
+    actions_container = tk.Frame(window, bg=THEME["bg_deep"])
+    actions_container.pack(fill=tk.X, padx=PAD_X, pady=(2, 0))
 
     actions_visible = tk.BooleanVar(value=False)
-    actions_inner = tk.Frame(actions_container, bg=COLOR_SECTION_BG)
+    actions_inner = ctk.CTkFrame(actions_container, fg_color=THEME["bg_section"],
+                                 corner_radius=8)
 
     def toggle_actions():
         if actions_visible.get():
             actions_inner.pack_forget()
             actions_visible.set(False)
-            actions_toggle_btn.config(text="More Actions  \u25B6")
-            window.update_idletasks()
-            window.geometry(f"{WIN_WIDTH}x{window.winfo_reqheight()}")
+            actions_toggle_btn.configure(text="More Actions  \u25B6")
         else:
-            actions_inner.pack(fill=tk.BOTH, expand=True)
+            actions_inner.pack(fill=tk.X, padx=4, pady=(0, 4))
             actions_visible.set(True)
-            actions_toggle_btn.config(text="More Actions  \u25BC")
-            window.update_idletasks()
-            window.geometry(f"{WIN_WIDTH}x{window.winfo_reqheight()}")
+            actions_toggle_btn.configure(text="More Actions  \u25BC")
+        _resize_window()
 
-    actions_toggle_btn = tk.Button(actions_container, text="More Actions  \u25B6",
-                                    command=toggle_actions, font=(_FONT_FAMILY, 9, "bold"),
-                                    relief=tk.FLAT, bg=COLOR_SECTION_BG, activebackground="#ddd")
+    actions_toggle_btn = ctk.CTkButton(actions_container, text="More Actions  \u25B6",
+                                       command=toggle_actions,
+                                       font=ctk.CTkFont(family=_FONT_FAMILY, size=11, weight="bold"),
+                                       fg_color=THEME["bg_section"], hover_color=THEME["bg_hover"],
+                                       text_color=THEME["accent_cyan"], corner_radius=8, height=30)
     actions_toggle_btn.pack(fill=tk.X)
 
     # Tabs inside collapsible section
-    tab_style = ttk.Style()
-    tab_style.configure("Bold.TNotebook.Tab", font=(_FONT_FAMILY, 10, "bold"), padding=[12, 6])
+    tabs = ctk.CTkTabview(actions_inner, fg_color=THEME["bg_card"],
+                          segmented_button_fg_color=THEME["mode_inactive"],
+                          segmented_button_selected_color=THEME["mode_active"],
+                          segmented_button_selected_hover_color=THEME["bg_hover"],
+                          segmented_button_unselected_color=THEME["mode_inactive"],
+                          segmented_button_unselected_hover_color=THEME["bg_hover"],
+                          text_color=THEME["text_primary"], corner_radius=8)
+    tabs.pack(fill=tk.X, pady=(4, 4), padx=4)
 
-    tabs = ttk.Notebook(actions_inner, style="Bold.TNotebook")
-    tabs.pack(fill=tk.BOTH, expand=True, pady=(4, 4), padx=4)
-
-    farm_tab = tk.Frame(tabs, padx=4, pady=4)
-    war_tab = tk.Frame(tabs, padx=4, pady=4)
-    debug_tab = tk.Frame(tabs, padx=4, pady=4)
-    tabs.add(farm_tab, text="  Farm  ")
-    tabs.add(war_tab, text="  War  ")
-    tabs.add(debug_tab, text="  Debug  ")
+    farm_tab = tabs.add("  Farm  ")
+    war_tab = tabs.add("  War  ")
+    debug_tab = tabs.add("  Debug  ")
 
     # ── Task row helpers ──
     task_row_enabled_vars = []
 
     def add_task_row(parent, name, default_interval):
-        frame = tk.Frame(parent)
+        frame = ctk.CTkFrame(parent, fg_color="transparent")
         frame.pack(pady=2, fill=tk.X)
 
         enabled = tk.BooleanVar()
@@ -1655,10 +1717,15 @@ def create_gui():
                     task_key = f"{device}_repeat:{name}"
                     stop_task(task_key)
 
-        tk.Checkbutton(frame, variable=enabled, command=toggle).pack(side=tk.LEFT)
-        tk.Entry(frame, textvariable=interval, width=4, justify="center",
-                 font=(_FONT_FAMILY, 8)).pack(side=tk.LEFT, padx=(2, 0))
-        tk.Label(frame, text="s", font=(_FONT_FAMILY, 8)).pack(side=tk.LEFT, padx=(1, 4))
+        ctk.CTkCheckBox(frame, text="", variable=enabled, command=toggle,
+                        width=20, height=20, fg_color=THEME["accent_cyan"],
+                        hover_color=THEME["bg_hover"], border_color=THEME["border_subtle"],
+                        checkmark_color=THEME["bg_deep"], corner_radius=4).pack(side=tk.LEFT)
+        ctk.CTkEntry(frame, textvariable=interval, width=50, justify="center",
+                     **_entry_kw).pack(side=tk.LEFT, padx=(2, 0))
+        ctk.CTkLabel(frame, text="s",
+                     font=ctk.CTkFont(family=_FONT_FAMILY, size=10),
+                     text_color=THEME["text_muted"]).pack(side=tk.LEFT, padx=(1, 4))
 
         def do_run_once():
             enabled.set(False)
@@ -1673,18 +1740,24 @@ def create_gui():
                 launch_task(device, f"once:{name}",
                             run_once, stop_event, args=(device, name, func))
 
-        tk.Button(frame, text=name, command=do_run_once,
-                  font=(_FONT_FAMILY, 9)).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ctk.CTkButton(frame, text=name, command=do_run_once,
+                      font=ctk.CTkFont(family=_FONT_FAMILY, size=11),
+                      fg_color=THEME["btn_default"], hover_color=THEME["bg_hover"],
+                      text_color=THEME["text_primary"], corner_radius=8,
+                      height=28).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 0))
 
     def add_debug_button(parent, name, function):
         def do_run_once():
             for device in get_active_devices():
                 threading.Thread(target=function, args=(device,), daemon=True).start()
 
-        tk.Button(parent, text=name, command=do_run_once,
-                  font=(_FONT_FAMILY, 9)).pack(pady=2, fill=tk.X)
+        ctk.CTkButton(parent, text=name, command=do_run_once,
+                      font=ctk.CTkFont(family=_FONT_FAMILY, size=11),
+                      fg_color=THEME["btn_default"], hover_color=THEME["bg_hover"],
+                      text_color=THEME["text_primary"], corner_radius=8,
+                      height=28).pack(pady=2, fill=tk.X)
 
-    # Farm tab (Rally Titan is a top-level toggle, not listed here)
+    # Farm tab
     add_task_row(farm_tab, "Rally Evil Guard", 30)
     add_task_row(farm_tab, "Join Titan Rally", 30)
     add_task_row(farm_tab, "Join Evil Guard Rally", 30)
@@ -1741,16 +1814,20 @@ def create_gui():
     add_debug_button(debug_tab, "Sample Specific Squares", sample_specific_squares)
     add_debug_button(debug_tab, "Mine Mithril", mine_mithril)
 
-    tk.Frame(debug_tab, height=1, bg="gray80").pack(fill=tk.X, pady=6)
+    ctk.CTkFrame(debug_tab, height=1, fg_color=THEME["border_subtle"]).pack(fill=tk.X, pady=6)
 
-    tap_row = tk.Frame(debug_tab)
+    tap_row = ctk.CTkFrame(debug_tab, fg_color="transparent")
     tap_row.pack(fill=tk.X, pady=2)
-    tk.Label(tap_row, text="Tap X:", font=(_FONT_FAMILY, 9)).pack(side=tk.LEFT)
+    ctk.CTkLabel(tap_row, text="Tap X:",
+                 font=ctk.CTkFont(family=_FONT_FAMILY, size=12),
+                 text_color=THEME["text_primary"]).pack(side=tk.LEFT)
     x_var = tk.StringVar()
-    tk.Entry(tap_row, textvariable=x_var, width=5, font=(_FONT_FAMILY, 8)).pack(side=tk.LEFT, padx=(2, 8))
-    tk.Label(tap_row, text="Y:", font=(_FONT_FAMILY, 9)).pack(side=tk.LEFT)
+    ctk.CTkEntry(tap_row, textvariable=x_var, width=60, **_entry_kw).pack(side=tk.LEFT, padx=(2, 8))
+    ctk.CTkLabel(tap_row, text="Y:",
+                 font=ctk.CTkFont(family=_FONT_FAMILY, size=12),
+                 text_color=THEME["text_primary"]).pack(side=tk.LEFT)
     y_var = tk.StringVar()
-    tk.Entry(tap_row, textvariable=y_var, width=5, font=(_FONT_FAMILY, 8)).pack(side=tk.LEFT, padx=(2, 8))
+    ctk.CTkEntry(tap_row, textvariable=y_var, width=60, **_entry_kw).pack(side=tk.LEFT, padx=(2, 8))
 
     def test_tap():
         try:
@@ -1761,7 +1838,10 @@ def create_gui():
         except ValueError:
             log.warning("Invalid coordinates!")
 
-    tk.Button(tap_row, text="Tap", command=test_tap, font=(_FONT_FAMILY, 8)).pack(side=tk.LEFT)
+    ctk.CTkButton(tap_row, text="Tap", command=test_tap,
+                  font=ctk.CTkFont(family=_FONT_FAMILY, size=10),
+                  fg_color=THEME["btn_default"], hover_color=THEME["bg_hover"],
+                  corner_radius=6, height=24, width=50).pack(side=tk.LEFT)
 
     # ============================================================
     # STOP ALL / QUIT
@@ -1775,6 +1855,7 @@ def create_gui():
         _stop_occupy()
         _stop_reinforce_throne()
         _stop_mithril()
+        _stop_gold()
         for var in task_row_enabled_vars:
             var.set(False)
         for key in list(running_tasks.keys()):
@@ -1783,15 +1864,13 @@ def create_gui():
         status_var.set("")
         log.info("=== ALL TASKS STOPPED ===")
 
-    stop_frame = tk.Frame(window, bg="#333333", cursor="hand2")
-    stop_label = tk.Label(stop_frame, text="STOP ALL", font=(_FONT_FAMILY, 11, "bold"),
-                          bg="#333333", fg="white", pady=8)
-    stop_label.pack(fill=tk.X)
-    stop_frame.bind("<Button-1>", lambda e: stop_all())
-    stop_label.bind("<Button-1>", lambda e: stop_all())
-    stop_frame.pack(fill=tk.X, padx=PAD_X, pady=(6, 2))
+    ctk.CTkButton(window, text="STOP ALL",
+                  font=ctk.CTkFont(family=_FONT_FAMILY, size=13, weight="bold"),
+                  fg_color=THEME["btn_danger"], hover_color=THEME["btn_danger_hover"],
+                  text_color=THEME["text_white"], corner_radius=10, height=44,
+                  command=stop_all).pack(fill=tk.X, padx=PAD_X, pady=(6, 2))
 
-    quit_row = tk.Frame(window, bg=COLOR_BG)
+    quit_row = tk.Frame(window, bg=THEME["bg_deep"])
     quit_row.pack(pady=(4, 8))
 
     def restart():
@@ -1874,12 +1953,13 @@ def create_gui():
             log.error("Failed to export bug report: %s", e)
             messagebox.showerror("Bug Report", f"Failed to export bug report:\n{e}")
 
-    tk.Button(quit_row, text="Restart", command=restart,
-              font=(_FONT_FAMILY, 9), bg=COLOR_BG).pack(side=tk.LEFT, padx=(0, 8))
-    tk.Button(quit_row, text="Bug Report", command=export_bug_report,
-              font=(_FONT_FAMILY, 9), bg=COLOR_BG).pack(side=tk.LEFT, padx=(0, 8))
-    tk.Button(quit_row, text="Quit", command=lambda: on_close(),
-              font=(_FONT_FAMILY, 9), bg=COLOR_BG).pack(side=tk.LEFT)
+    _bottom_btn_kw = dict(font=ctk.CTkFont(family=_FONT_FAMILY, size=11),
+                          fg_color=THEME["bg_section"], hover_color=THEME["bg_hover"],
+                          text_color=THEME["text_primary"], corner_radius=8, height=30,
+                          border_width=1, border_color=THEME["border_subtle"])
+    ctk.CTkButton(quit_row, text="Restart", command=restart, **_bottom_btn_kw).pack(side=tk.LEFT, padx=(0, 8))
+    ctk.CTkButton(quit_row, text="Bug Report", command=export_bug_report, **_bottom_btn_kw).pack(side=tk.LEFT, padx=(0, 8))
+    ctk.CTkButton(quit_row, text="Quit", command=lambda: on_close(), **_bottom_btn_kw).pack(side=tk.LEFT)
 
     # ============================================================
     # PERIODIC CLEANUP
@@ -1895,47 +1975,25 @@ def create_gui():
             if thread and not thread.is_alive():
                 del running_tasks[key]
 
+        # Auto-reset toggle vars when their threads die (CTkSwitch auto-updates visually)
         if auto_quest_var.get() and not any(k.endswith("_auto_quest") for k in running_tasks):
             auto_quest_var.set(False)
-            quest_frame.config(bg=COLOR_OFF)
-            quest_label.config(text="Auto Quest: OFF", bg=COLOR_OFF)
-
         if auto_titan_var.get() and not any(k.endswith("_auto_titan") for k in running_tasks):
             auto_titan_var.set(False)
-            titan_frame.config(bg=COLOR_OFF)
-            titan_label.config(text="Rally Titans: OFF", bg=COLOR_OFF)
-
         if auto_groot_var.get() and not any(k.endswith("_auto_groot") for k in running_tasks):
             auto_groot_var.set(False)
-            groot_frame.config(bg=COLOR_OFF)
-            groot_label.config(text="Join Groot: OFF", bg=COLOR_OFF)
-
         if auto_pass_var.get() and not any(k.endswith("_auto_pass") for k in running_tasks):
             auto_pass_var.set(False)
-            pass_frame.config(bg=COLOR_OFF)
-            pass_label.config(text="Pass Battle: OFF", bg=COLOR_OFF)
-
         if auto_occupy_var.get() and not any(k.endswith("_auto_occupy") for k in running_tasks):
             auto_occupy_var.set(False)
-            occupy_frame.config(bg=COLOR_OFF)
-            occupy_label.config(text="Occupy Towers: OFF", bg=COLOR_OFF)
-
         if auto_reinforce_var.get() and not any(k.endswith("_auto_reinforce") for k in running_tasks):
             auto_reinforce_var.set(False)
-            reinforce_frame.config(bg=COLOR_OFF)
-            reinforce_label.config(text="Reinforce Throne: OFF", bg=COLOR_OFF)
-
         if auto_mithril_var.get() and not any(k.endswith("_auto_mithril") for k in running_tasks):
             auto_mithril_var.set(False)
-            mithril_frame.config(bg=COLOR_OFF)
-            mithril_label.config(text="Mine Mithril: OFF", bg=COLOR_OFF)
             config.MITHRIL_ENABLED = False
             config.MITHRIL_DEPLOY_TIME.clear()
-
         if auto_gold_var.get() and not any(k.endswith("_auto_gold") for k in running_tasks):
             auto_gold_var.set(False)
-            gold_frame.config(bg=COLOR_OFF)
-            gold_label.config(text="Mine Gold: OFF", bg=COLOR_OFF)
 
         try:
             while True:
@@ -1951,33 +2009,89 @@ def create_gui():
 
     window.after(3000, cleanup_dead_tasks)
 
-    _status_instance_cache = {}
-    _status_cache_time = [0.0]
+    _pill_font = ctk.CTkFont(family=_FONT_FAMILY, size=10, weight="bold")
+    _quest_font = ctk.CTkFont(family=_FONT_FAMILY, size=10)
 
-    def update_status_line():
-        """Poll config.DEVICE_STATUS and update the GUI status label."""
+    def update_device_cards():
+        """Update per-device status text, troop pills, and quest pills."""
+        for dev_id, refs in device_display.items():
+            # ── Status text ──
+            msg = config.DEVICE_STATUS.get(dev_id, "Idle")
+            lbl = refs["status_label"]
+            lbl.configure(text=msg)
+            if msg == "Idle":
+                lbl.configure(text_color=THEME["text_muted"])
+            elif "Waiting" in msg:
+                lbl.configure(text_color=THEME["accent_amber"])
+            elif "Navigating" in msg:
+                lbl.configure(text_color=THEME["text_muted"])
+            else:
+                lbl.configure(text_color=THEME["accent_cyan"])
+
+            # ── Troop pills ──
+            troop_frame = refs["troop_frame"]
+            for child in troop_frame.winfo_children():
+                child.destroy()
+
+            snapshot = get_troop_status(dev_id)
+            if snapshot and snapshot.troops:
+                for t in snapshot.troops:
+                    bg, fg = TROOP_PILL_COLORS.get(t.action, ("#1a2540", "#64b5f6"))
+                    if t.is_home:
+                        text = "Home"
+                    elif t.time_left is not None and t.time_left > 0:
+                        m, s = divmod(t.time_left, 60)
+                        text = f"{t.action.value} {m}:{s:02d}"
+                    else:
+                        text = t.action.value
+                    ctk.CTkLabel(troop_frame, text=text, font=_pill_font,
+                                 fg_color=bg, text_color=fg,
+                                 corner_radius=10, height=20,
+                                 padx=8, pady=0).pack(side=tk.LEFT, padx=(0, 4))
+
+                age = int(snapshot.age_seconds)
+                if age > 5:
+                    age_text = f"{age}s ago" if age < 60 else f"{age // 60}m ago"
+                    ctk.CTkLabel(troop_frame, text=age_text,
+                                 font=ctk.CTkFont(family=_FONT_FAMILY, size=9),
+                                 text_color="#556677").pack(side=tk.RIGHT)
+
+            # ── Quest pills ──
+            quest_frame = refs["quest_frame"]
+            for child in quest_frame.winfo_children():
+                child.destroy()
+
+            quests = get_quest_tracking_state(dev_id)
+            if quests:
+                for q in quests:
+                    raw = q["quest_type"].replace("QuestType.", "")
+                    label = QUEST_LABELS.get(q["quest_type"], raw)
+                    seen = q.get("last_seen") or 0
+                    tgt = q.get("target")
+                    pend = q.get("pending", 0)
+                    # Skip completed quests
+                    if tgt is not None and seen >= tgt and pend == 0:
+                        continue
+                    val_text = f"{label} {seen}"
+                    if tgt is not None:
+                        val_text += f"/{tgt}"
+                    if pend > 0:
+                        val_text += f" +{pend}"
+                    tk.Label(quest_frame, text=val_text, bg="#1e1e38",
+                             fg="#8899bb", font=(_FONT_FAMILY, 9),
+                             padx=8, pady=2).pack(side=tk.LEFT, padx=(0, 4), pady=(2, 0))
+
+        # Also update the global status line (for web dashboard URL etc.)
         statuses = config.DEVICE_STATUS
         if statuses:
-            # Refresh instance map at most every 30s (avoids per-second adb+win32 calls)
-            now = time.time()
-            if now - _status_cache_time[0] > 30:
-                _status_instance_cache.clear()
-                _status_instance_cache.update(get_emulator_instances())
-                _status_cache_time[0] = now
-            # Show all active device statuses joined by " | "
-            parts = []
-            for dev, msg in list(statuses.items()):
-                if len(statuses) > 1:
-                    name = _status_instance_cache.get(dev, dev.split(":")[-1])
-                    parts.append(f"{name}: {msg}")
-                else:
-                    parts.append(msg)
-            status_var.set(" | ".join(parts))
+            parts = [msg for msg in statuses.values()]
+            status_var.set(" | ".join(parts) if len(parts) > 1 else parts[0])
         else:
             status_var.set("")
-        window.after(1000, update_status_line)
 
-    window.after(1000, update_status_line)
+        window.after(2000, update_device_cards)
+
+    window.after(2000, update_device_cards)
 
     _last_settings_mtime = [0.0]
 
@@ -2032,13 +2146,14 @@ def create_gui():
     window.after(5000, _sync_settings_timer)
 
     def update_mithril_timer():
-        """Update the mithril button text with elapsed time since deploy."""
+        """Update the mithril switch text with elapsed time since deploy."""
         if auto_mithril_var.get() and config.MITHRIL_DEPLOY_TIME:
             earliest = min(config.MITHRIL_DEPLOY_TIME.values())
             elapsed = int(time.time() - earliest)
             mm, ss = divmod(elapsed, 60)
-            mithril_label.config(text=f"Mine Mithril: ON ({mm:02d}:{ss:02d})",
-                                 bg=COLOR_ON)
+            mithril_switch.configure(text=f"Mine Mithril ({mm:02d}:{ss:02d})")
+        elif auto_mithril_var.get():
+            mithril_switch.configure(text="Mine Mithril")
         window.after(1000, update_mithril_timer)
 
     window.after(1000, update_mithril_timer)
@@ -2052,6 +2167,11 @@ def create_gui():
             stop_all()
         except Exception as e:
             print(f"Failed to stop tasks: {e}")
+        try:
+            from tunnel import stop_tunnel
+            stop_tunnel()
+        except Exception:
+            pass
         # Save session stats and print summary
         try:
             from botlog import stats, get_logger
@@ -2108,8 +2228,46 @@ def create_gui():
         except Exception as e:
             log.warning("Failed to start web dashboard: %s", e)
 
-    window.update_idletasks()
-    window.geometry(f"{WIN_WIDTH}x{window.winfo_reqheight()}")
+    # ============================================================
+    # RELAY TUNNEL (opt-in, connects to remote relay server)
+    # ============================================================
+
+    if settings.get("relay_enabled", False):
+        _relay_url = settings.get("relay_url", "")
+        _relay_secret = settings.get("relay_secret", "")
+        _relay_bot = settings.get("relay_bot_name", "")
+        if _relay_url and _relay_secret and _relay_bot:
+            try:
+                from tunnel import start_tunnel, tunnel_status
+                start_tunnel(_relay_url, _relay_secret, _relay_bot)
+                _relay_display = _relay_url.replace("ws://", "").replace("wss://", "")
+                _relay_display = _relay_display.split("/")[0]  # just host:port
+                _cur = status_var.get()
+                if _cur:
+                    status_var.set(f"{_cur}  |  Relay: {_relay_display}")
+                else:
+                    status_var.set(f"Relay: {_relay_display}")
+
+                def _update_relay_status():
+                    st = tunnel_status()
+                    _cur = status_var.get()
+                    # Update the relay portion of the status bar
+                    if "Relay:" in _cur:
+                        base = _cur.split("Relay:")[0].rstrip(" |")
+                        label = "Connected" if st == "connected" else "Reconnecting..."
+                        new = f"{base}  |  Relay: {label}"
+                        if new != _cur:
+                            status_var.set(new)
+                    window.after(3000, _update_relay_status)
+
+                window.after(3000, _update_relay_status)
+            except ImportError:
+                log.info("Relay tunnel enabled but 'websockets' not installed. "
+                         "Install with: pip install websockets")
+            except Exception as e:
+                log.warning("Failed to start relay tunnel: %s", e)
+
+    _resize_window()
 
     window.mainloop()
 

@@ -476,6 +476,10 @@ DEFAULTS = {
     "gather_mine_level": 4,
     "gather_max_troops": 3,
     "tower_quest_enabled": False,
+    "relay_enabled": False,
+    "relay_url": "",
+    "relay_secret": "",
+    "relay_bot_name": "",
 }
 
 def _load_settings():
@@ -760,7 +764,7 @@ def create_app():
         for key in ["auto_heal", "auto_restore_ap", "ap_use_free", "ap_use_potions",
                      "ap_allow_large_potions", "ap_use_gems", "verbose_logging",
                      "eg_rally_own", "titan_rally_own", "web_dashboard", "gather_enabled",
-                     "tower_quest_enabled"]:
+                     "tower_quest_enabled", "relay_enabled"]:
             settings[key] = key in request.form
 
         for key in ["ap_gem_limit", "min_troops", "variation", "titan_interval",
@@ -770,9 +774,10 @@ def create_app():
             if val.isdigit():
                 settings[key] = int(val)
 
-        for key in ["pass_mode", "my_team", "enemy_team", "mode"]:
+        for key in ["pass_mode", "my_team", "enemy_team", "mode",
+                     "relay_url", "relay_secret", "relay_bot_name"]:
             val = request.form.get(key)
-            if val:
+            if val is not None:
                 settings[key] = val
 
         # Per-device troop counts (form fields named dt_<device_id>)

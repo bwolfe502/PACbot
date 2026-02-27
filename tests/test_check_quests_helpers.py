@@ -2,8 +2,10 @@
 
 Tests _deduplicate_quests (pure function) and _get_actionable_quests.
 """
+from unittest.mock import patch
+
 from config import QuestType
-from actions import _deduplicate_quests, _get_actionable_quests, _quest_rallies_pending
+from actions import _deduplicate_quests, _get_actionable_quests, _all_quests_visually_complete, _quest_rallies_pending
 
 
 # ============================================================
@@ -134,3 +136,75 @@ class TestGetActionableQuests:
             {"quest_type": None, "current": 0, "target": 5, "completed": False},
         ]
         assert _get_actionable_quests(mock_device, quests) == []
+
+
+# ============================================================
+# _all_quests_visually_complete
+# ============================================================
+
+class TestAllQuestsVisuallyComplete:
+    def test_all_complete(self, mock_device):
+        quests = [
+            {"quest_type": QuestType.TITAN, "current": 15, "target": 15, "completed": False},
+            {"quest_type": QuestType.EVIL_GUARD, "current": 3, "target": 3, "completed": False},
+        ]
+        assert _all_quests_visually_complete(mock_device, quests) is True
+
+    def test_completed_flag_counts(self, mock_device):
+        quests = [
+            {"quest_type": QuestType.TITAN, "current": 15, "target": 15, "completed": True},
+        ]
+        assert _all_quests_visually_complete(mock_device, quests) is True
+
+    def test_incomplete_quest_blocks(self, mock_device):
+        quests = [
+            {"quest_type": QuestType.TITAN, "current": 10, "target": 15, "completed": False},
+        ]
+        assert _all_quests_visually_complete(mock_device, quests) is False
+
+    def test_ignores_pending_rallies(self, mock_device):
+        """Gold should mine even when pending rallies exist — only visual matters."""
+        _quest_rallies_pending[(mock_device, QuestType.TITAN)] = 5
+        quests = [
+            {"quest_type": QuestType.TITAN, "current": 15, "target": 15, "completed": False},
+        ]
+        assert _all_quests_visually_complete(mock_device, quests) is True
+
+    @patch("actions._is_troop_defending", return_value=True)
+    def test_tower_ok_if_defending(self, mock_defending, mock_device):
+        quests = [
+            {"quest_type": QuestType.TITAN, "current": 15, "target": 15, "completed": False},
+            {"quest_type": QuestType.TOWER, "current": 10, "target": 30, "completed": False},
+        ]
+        assert _all_quests_visually_complete(mock_device, quests) is True
+
+    @patch("actions._is_troop_defending", return_value=False)
+    def test_tower_blocks_if_not_defending(self, mock_defending, mock_device):
+        quests = [
+            {"quest_type": QuestType.TITAN, "current": 15, "target": 15, "completed": False},
+            {"quest_type": QuestType.TOWER, "current": 10, "target": 30, "completed": False},
+        ]
+        assert _all_quests_visually_complete(mock_device, quests) is False
+
+    @patch("actions._is_troop_defending", return_value=True)
+    def test_fortress_ok_if_defending(self, mock_defending, mock_device):
+        quests = [
+            {"quest_type": QuestType.FORTRESS, "current": 5, "target": 30, "completed": False},
+        ]
+        assert _all_quests_visually_complete(mock_device, quests) is True
+
+    def test_empty_quests_returns_true(self, mock_device):
+        assert _all_quests_visually_complete(mock_device, []) is True
+
+    def test_unknown_type_ignored(self, mock_device):
+        quests = [
+            {"quest_type": None, "current": 0, "target": 5, "completed": False},
+        ]
+        assert _all_quests_visually_complete(mock_device, quests) is True
+
+    def test_mixed_complete_and_incomplete(self, mock_device):
+        quests = [
+            {"quest_type": QuestType.TITAN, "current": 15, "target": 15, "completed": False},
+            {"quest_type": QuestType.PVP, "current": 0, "target": 1, "completed": False},
+        ]
+        assert _all_quests_visually_complete(mock_device, quests) is False

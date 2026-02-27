@@ -397,12 +397,22 @@ def read_panel_statuses(device, screen=None) -> Optional[DeviceTroopSnapshot]:
         pixel = screen[y, _TROOP_X].astype(np.int16)
         return np.all(np.abs(pixel - _TROOP_COLOR) < _TROOP_TOLERANCE)
 
-    avail_raw = 5  # Default: no pattern matched = all home
+    avail_raw = None
     for count, pattern in _SLOT_PATTERNS.items():
         if (all(is_yellow(y) for y in pattern["match"]) and
                 all(not is_yellow(y) for y in pattern["no_match"])):
             avail_raw = count
             break
+
+    if avail_raw is None:
+        # Check if all troops are truly home (no yellow at any known position)
+        all_positions = {640, 720, 800, 880, 960, 1040, 1110, 1200, 1270}
+        if not any(is_yellow(y) for y in all_positions):
+            avail_raw = 5  # All home
+        else:
+            # Screen may be in transition; keep previous snapshot
+            log.debug("read_panel_statuses: no slot pattern matched — keeping previous snapshot")
+            return _get_snapshot(device)
 
     avail = max(0, avail_raw - offset)
     deployed_count = total - avail

@@ -3,6 +3,7 @@ import numpy as np
 import time
 import random
 import tkinter as tk
+import customtkinter as ctk
 from PIL import Image, ImageTk
 
 import config
@@ -53,27 +54,28 @@ def open_territory_manager(device):
     adjusted_offset_y = GRID_OFFSET_Y - crop_y1
 
     # Create manager window
-    manager = tk.Toplevel()
+    manager = ctk.CTkToplevel()
     manager.title(f"Territory Square Manager - {device}")
+    manager.configure(fg_color="#0c0c18")
 
     # Instructions
-    instructions = tk.Label(
+    ctk.CTkLabel(
         manager,
         text="Click squares: GREEN = Force Attack | RED = Ignore | None = Auto",
-        font=("Arial", 9),
-        bg="lightgray",
-        pady=5
-    )
-    instructions.pack(fill=tk.X)
+        font=ctk.CTkFont(family="Segoe UI", size=11),
+        text_color="#e0e0f0", fg_color="#14142a",
+        corner_radius=6, height=30
+    ).pack(fill=tk.X, padx=6, pady=(6, 2))
 
     # Stats display
     stats_var = tk.StringVar()
     stats_var.set(f"Attack: {len(config.MANUAL_ATTACK_SQUARES)} | Ignore: {len(config.MANUAL_IGNORE_SQUARES)}")
-    stats_label = tk.Label(manager, textvariable=stats_var, font=("Arial", 8))
-    stats_label.pack(pady=2)
+    ctk.CTkLabel(manager, textvariable=stats_var,
+                 font=ctk.CTkFont(family="Segoe UI", size=10),
+                 text_color="#8899aa").pack(pady=2)
 
     # Create canvas with the territory image
-    canvas_frame = tk.Frame(manager)
+    canvas_frame = ctk.CTkFrame(manager, fg_color="transparent")
     canvas_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
     # Scale down to 0.75x
@@ -176,7 +178,7 @@ def open_territory_manager(device):
     canvas.bind("<Button-1>", on_canvas_click)
 
     # Buttons
-    button_frame = tk.Frame(manager)
+    button_frame = ctk.CTkFrame(manager, fg_color="transparent")
     button_frame.pack(pady=5)
 
     def clear_all():
@@ -198,10 +200,16 @@ def open_territory_manager(device):
         stats_var.set(f"Attack: {len(config.MANUAL_ATTACK_SQUARES)} | Ignore: {len(config.MANUAL_IGNORE_SQUARES)}")
         _log.debug("Cleared manual ignore selections")
 
-    tk.Button(button_frame, text="Clear All", command=clear_all, width=10, bg="orange", font=("Arial", 8)).pack(side=tk.LEFT, padx=2)
-    tk.Button(button_frame, text="Clear Attack", command=clear_attack, width=10, font=("Arial", 8)).pack(side=tk.LEFT, padx=2)
-    tk.Button(button_frame, text="Clear Ignore", command=clear_ignore, width=10, font=("Arial", 8)).pack(side=tk.LEFT, padx=2)
-    tk.Button(button_frame, text="Close", command=manager.destroy, width=10, font=("Arial", 8)).pack(side=tk.LEFT, padx=2)
+    _btn_kw = dict(font=ctk.CTkFont(family="Segoe UI", size=10),
+                   fg_color="#1e3a5f", hover_color="#1a3a4a",
+                   text_color="#e0e0f0", corner_radius=8, height=28, width=90)
+    ctk.CTkButton(button_frame, text="Clear All", command=clear_all,
+                  fg_color="#c62828", hover_color="#d32f2f",
+                  font=ctk.CTkFont(family="Segoe UI", size=10),
+                  text_color="#ffffff", corner_radius=8, height=28, width=90).pack(side=tk.LEFT, padx=2)
+    ctk.CTkButton(button_frame, text="Clear Attack", command=clear_attack, **_btn_kw).pack(side=tk.LEFT, padx=2)
+    ctk.CTkButton(button_frame, text="Clear Ignore", command=clear_ignore, **_btn_kw).pack(side=tk.LEFT, padx=2)
+    ctk.CTkButton(button_frame, text="Close", command=manager.destroy, **_btn_kw).pack(side=tk.LEFT, padx=2)
 
     # Draw initial overlay
     draw_overlay()

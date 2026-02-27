@@ -536,6 +536,30 @@ def _get_actionable_quests(device, quests):
     return actionable
 
 
+def _all_quests_visually_complete(device, quests):
+    """Check if all quests are visually complete based on OCR counters.
+
+    Uses current >= target (ignoring pending rally tracking).
+    Tower/fortress quests are considered OK if a troop is already defending.
+    Returns True if gold mining is appropriate."""
+    for q in quests:
+        qt = q["quest_type"]
+        if qt not in (QuestType.TITAN, QuestType.EVIL_GUARD, QuestType.PVP,
+                       QuestType.GATHER, QuestType.FORTRESS, QuestType.TOWER):
+            continue
+        if q["completed"]:
+            continue
+        if qt in (QuestType.TOWER, QuestType.FORTRESS):
+            # Tower is OK as long as a troop is defending
+            if _is_troop_defending(device):
+                continue
+            return False
+        # For all other quests, check visual counter
+        if q["current"] < q["target"]:
+            return False
+    return True
+
+
 def _run_rally_loop(device, actionable, stop_check=None):
     """Execute the rally join/start loop for EG and Titan quests.
     Tries to join rallies first, then starts own rallies if none found.
@@ -744,21 +768,23 @@ def check_quests(device, stop_check=None):
             if config.TOWER_QUEST_ENABLED:
                 _run_tower_quest(device, quests, stop_check)
 
-            pending_types = [qt for (dev, qt), cnt in _quest_rallies_pending.items() if dev == device and cnt > 0]
-            if pending_types:
-                pending_str = ", ".join(f"{qt} ({_quest_rallies_pending[(device, qt)]})" for qt in pending_types)
-                if config.RALLY_PANEL_WAIT_ENABLED:
-                    log.info("Pending rallies: %s — watching troop panel", pending_str)
-                    if navigate(Screen.MAP, device):
-                        _wait_for_rallies(device, stop_check)
-                else:
-                    log.info("Waiting for pending rallies to complete: %s", pending_str)
+            # Gold fallback: use visual OCR counters, not pending rally tracking
+            if config.GATHER_ENABLED and _all_quests_visually_complete(device, quests):
+                log.info("All quests visually complete — gathering gold as fallback")
+                if navigate(Screen.MAP, device):
+                    gather_gold_loop(device, stop_check)
             else:
-                log.info("No actionable quests remaining (all complete or skip-only)")
-                if config.GATHER_ENABLED:
-                    log.info("All quests complete — gathering gold as fallback")
-                    if navigate(Screen.MAP, device):
-                        gather_gold_loop(device, stop_check)
+                pending_types = [qt for (dev, qt), cnt in _quest_rallies_pending.items() if dev == device and cnt > 0]
+                if pending_types:
+                    pending_str = ", ".join(f"{qt} ({_quest_rallies_pending[(device, qt)]})" for qt in pending_types)
+                    if config.RALLY_PANEL_WAIT_ENABLED:
+                        log.info("Pending rallies: %s — watching troop panel", pending_str)
+                        if navigate(Screen.MAP, device):
+                            _wait_for_rallies(device, stop_check)
+                    else:
+                        log.info("Waiting for pending rallies to complete: %s", pending_str)
+                else:
+                    log.info("No actionable quests remaining (all complete or skip-only)")
             return True
 
         remaining_str = ", ".join(
@@ -1650,16 +1676,12 @@ def join_rally(rally_types, device, skip_heal=False, stop_check=None):
                             continue
                         last_screen = s
 
-                        # Check full rally first (appears quickly)
-                        if find_image(s, "full_rally.png", threshold=0.8):
-                            rally_full = True
-                            break
-
                         # Check for depart button — confirms detail screen loaded
                         if not detail_loaded and find_image(s, "depart.png", threshold=0.8):
                             detail_loaded = True
 
-                        # Check for empty slot at multiple thresholds
+                        # Check for empty slot BEFORE full_rally — a rally can
+                        # show full_rally.png while still having an open slot
                         match = find_image(s, "slot.png", threshold=0.8)
                         if match is None:
                             match = find_image(s, "slot.png", threshold=0.65)
@@ -1676,6 +1698,11 @@ def join_rally(rally_types, device, skip_heal=False, stop_check=None):
                             log.debug("Found slot at (%d, %d), confidence %.0f%%", cx, cy, max_val * 100)
                             adb_tap(device, cx, cy)
                             slot_found = True
+                            break
+
+                        # Only check full_rally after confirming no open slot
+                        if find_image(s, "full_rally.png", threshold=0.8):
+                            rally_full = True
                             break
                         time.sleep(0.5)
 
@@ -2866,28 +2893,43 @@ def rally_eg(device, stop_check=None):
     if not dismiss_and_verify_map(6):
         return False
 
-    # Ensure a troop is available for the EG rally — the P5 troop may still
-    # be stationed at the last dark priest.  Wait up to 300s for it to return.
-    if troops_avail(device) <= config.MIN_TROOPS_AVAILABLE:
-        log.info("P6: no troop available yet — waiting for one to free up")
-        wait_start = time.time()
-        while time.time() - wait_start < 300:
-            if stop_check and stop_check():
-                log.info("P6: troop wait aborted (stop requested)")
-                return False
-            snapshot = read_panel_statuses(device)
-            if snapshot:
-                deployed = [t for t in snapshot.troops if not t.is_home]
-                summary = ", ".join(t.action.value for t in deployed)
-                log.debug("P6: waiting for troop — current: %s", summary)
-            if troops_avail(device) > config.MIN_TROOPS_AVAILABLE:
-                log.info("P6: troop now available — proceeding with EG rally")
-                break
-            time.sleep(3)
-        else:
-            log.warning("P6: no troop available after 300s — aborting EG rally")
-            save_failure_screenshot(device, "eg_no_troop_for_p6")
+    # Ensure a troop is available for the EG rally — troops may still be
+    # returning from dark priest rallies.  Always poll instead of gating on
+    # troops_avail(), which can return 5 (fallback) when pixel patterns
+    # don't match and falsely skip the wait.
+    config.set_device_status(device, "Waiting for Troop to Return...")
+    log.info("P6: checking troop availability before EG rally...")
+    wait_start = time.time()
+    while time.time() - wait_start < 300:
+        if stop_check and stop_check():
+            log.info("P6: troop wait aborted (stop requested)")
             return False
+
+        # Primary check: panel status (OCR-based, more reliable)
+        snapshot = read_panel_statuses(device)
+        if snapshot:
+            deployed = [t for t in snapshot.troops if not t.is_home]
+            summary = ", ".join(t.action.value for t in deployed)
+            if snapshot.home_count > 0:
+                log.info("P6: %d troop(s) home (panel) — proceeding with EG rally [%s]",
+                         snapshot.home_count, summary)
+                break
+            log.debug("P6: waiting for troop — %d deployed: %s", len(deployed), summary)
+
+        # Secondary check: pixel-based (skip if it returns max, likely fallback)
+        total = config.DEVICE_TOTAL_TROOPS.get(device, 5)
+        avail = troops_avail(device)
+        if 0 < avail < total:
+            log.info("P6: %d troop(s) available (pixel) — proceeding with EG rally", avail)
+            break
+
+        if _interruptible_sleep(3, stop_check):
+            log.info("P6: troop wait aborted (stop requested during sleep)")
+            return False
+    else:
+        log.warning("P6: no troop available after 300s — aborting EG rally")
+        save_failure_screenshot(device, "eg_no_troop_for_p6")
+        return False
 
     # P6 uses a two-tap sequence: tap EG boss, then tap attack confirm.
     # Verify the dialog opened by checking for depart/checked/unchecked/defending.
