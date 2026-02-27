@@ -13,16 +13,51 @@
             Auto Heal
         </label>
         <label class="setting-row">
-            <input type="checkbox" name="eg_rally_own" {% if settings.eg_rally_own %}checked{% endif %}>
-            Rally Own Evil Guard
-        </label>
-        <label class="setting-row">
             <input type="checkbox" name="verbose_logging" {% if settings.verbose_logging %}checked{% endif %}>
             Verbose Logging
         </label>
         <label class="setting-row">
             <input type="checkbox" name="web_dashboard" {% if settings.web_dashboard %}checked{% endif %}>
             Web Dashboard Enabled
+        </label>
+    </div>
+
+    <!-- Auto Quest -->
+    <div class="card">
+        <h3>Auto Quest</h3>
+        <label class="setting-row">
+            <input type="checkbox" name="eg_rally_own" {% if settings.eg_rally_own %}checked{% endif %}>
+            Rally Own Evil Guard
+        </label>
+        <label class="setting-row">
+            <input type="checkbox" name="titan_rally_own" {% if settings.titan_rally_own %}checked{% endif %}>
+            Rally Own Titans
+        </label>
+        <label class="setting-row">
+            <input type="checkbox" name="gather_enabled" {% if settings.gather_enabled %}checked{% endif %}>
+            Gather Gold
+        </label>
+        <div class="setting-row indent">
+            <label>Mine Level:
+                <select name="gather_mine_level" class="select-sm">
+                    {% for lv in [4, 5, 6] %}
+                    <option value="{{ lv }}" {% if settings.gather_mine_level == lv %}selected{% endif %}>{{ lv }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+        </div>
+        <div class="setting-row indent">
+            <label>Max Troops:
+                <select name="gather_max_troops" class="select-sm">
+                    {% for n in [1, 2, 3, 4, 5] %}
+                    <option value="{{ n }}" {% if settings.gather_max_troops == n %}selected{% endif %}>{{ n }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+        </div>
+        <label class="setting-row">
+            <input type="checkbox" name="tower_quest_enabled" {% if settings.tower_quest_enabled %}checked{% endif %}>
+            Tower Quest <span style="color:#888;font-size:0.8em">(mark tower with target marker first)</span>
         </label>
     </div>
 
@@ -152,6 +187,23 @@
                 </select>
             </label>
         </div>
+    </div>
+
+    <!-- Device Troops -->
+    <div class="card">
+        <h3>Device Troops</h3>
+        {% if device_troops %}
+        {% for dev_id, count in device_troops.items() %}
+        <div class="setting-row">
+            <label>{{ dev_id }}:
+                <input type="number" name="dt_{{ dev_id }}" value="{{ count }}"
+                       min="1" max="5" class="input-sm">
+            </label>
+        </div>
+        {% endfor %}
+        {% else %}
+        <p class="muted">No devices detected yet.</p>
+        {% endif %}
     </div>
 
     <button type="submit" class="btn btn-primary btn-full">Save Settings</button>

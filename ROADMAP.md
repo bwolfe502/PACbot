@@ -31,10 +31,11 @@ Build confidence that everything works before shipping updates.
 
 Clean up the interface and codebase structure for long-term maintainability.
 
+- [x] Web dashboard — mobile-friendly Flask remote control (toggle switches, action chips, device cards)
+- [x] Status text system — Title Case, expanded abbreviations, phase-specific statuses for rally_eg
 - [ ] Clean up settings layout — currently cluttered
 - [ ] Reorganize "More Actions" section
 - [ ] Clean up file and folder structure — organize `elements/`, consolidate debug dirs
-- [ ] Better status display and multi-device management
 - [ ] Refactor main.py — extract GUI from task runner logic
 - [ ] Split actions.py (~3000 lines) into focused modules (rally, quest, utility actions)
 

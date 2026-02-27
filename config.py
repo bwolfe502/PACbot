@@ -152,6 +152,7 @@ MIN_TROOPS_AVAILABLE = 0
 AUTO_HEAL_ENABLED = False
 AUTO_RESTORE_AP_ENABLED = False
 EG_RALLY_OWN_ENABLED = True    # If False, only join EG rallies — never start own
+TITAN_RALLY_OWN_ENABLED = True # If False, only join Titan rallies — never start own
 
 # AP restore source options
 AP_USE_FREE = True           # Use free AP restores (25 AP each, 2x daily)
@@ -186,6 +187,14 @@ MITHRIL_ENABLED = False
 MITHRIL_INTERVAL = 19        # minutes between refresh cycles
 LAST_MITHRIL_TIME = {}       # {device_id: timestamp} — last mine_mithril run
 MITHRIL_DEPLOY_TIME = {}     # {device_id: timestamp} — when troops were deployed to mines
+
+# Gather gold
+GATHER_ENABLED = True
+GATHER_MINE_LEVEL = 4            # Gold mine level to search for (4, 5, or 6)
+GATHER_MAX_TROOPS = 3            # Max troops to send gathering simultaneously
+
+# Tower quest
+TOWER_QUEST_ENABLED = False      # Occupy tower for alliance quest (requires target marker on tower)
 
 # Per-device lock — prevents concurrent tasks from controlling the same device
 import threading
@@ -249,7 +258,10 @@ SETTINGS_RULES = {
     "ap_use_gems":           {"type": bool},
     "verbose_logging":       {"type": bool},
     "eg_rally_own":          {"type": bool},
+    "titan_rally_own":       {"type": bool},
     "web_dashboard":         {"type": bool},
+    "gather_enabled":        {"type": bool},
+    "tower_quest_enabled":   {"type": bool},
     # Ints — type + optional min/max
     "ap_gem_limit":          {"type": int, "min": 0, "max": 3500},
     "min_troops":            {"type": int, "min": 0, "max": 5},
@@ -259,6 +271,8 @@ SETTINGS_RULES = {
     "reinforce_interval":    {"type": int, "min": 1},
     "pass_interval":         {"type": int, "min": 1},
     "mithril_interval":      {"type": int, "min": 1},
+    "gather_mine_level":     {"type": int, "min": 4, "max": 6},
+    "gather_max_troops":     {"type": int, "min": 1, "max": 5},
     # Strings — type + allowed values
     "pass_mode":             {"type": str, "choices": ["Rally Joiner", "Rally Starter"]},
     "my_team":               {"type": str, "choices": ["yellow", "red", "blue", "green"]},
@@ -376,6 +390,27 @@ def set_eg_rally_own(enabled):
     global EG_RALLY_OWN_ENABLED
     EG_RALLY_OWN_ENABLED = enabled
     _log.info("EG rally own: %s", "enabled" if enabled else "disabled")
+
+def set_titan_rally_own(enabled):
+    """Set whether the bot can start its own Titan rallies (vs join-only)"""
+    global TITAN_RALLY_OWN_ENABLED
+    TITAN_RALLY_OWN_ENABLED = enabled
+    _log.info("Titan rally own: %s", "enabled" if enabled else "disabled")
+
+def set_tower_quest_enabled(enabled):
+    """Set the tower quest enabled state."""
+    global TOWER_QUEST_ENABLED
+    TOWER_QUEST_ENABLED = enabled
+    _log.info("Tower quest: %s", "enabled" if enabled else "disabled")
+
+def set_gather_options(enabled, mine_level, max_troops):
+    """Set gather gold preferences."""
+    global GATHER_ENABLED, GATHER_MINE_LEVEL, GATHER_MAX_TROOPS
+    GATHER_ENABLED = enabled
+    GATHER_MINE_LEVEL = max(4, min(mine_level, 6))
+    GATHER_MAX_TROOPS = max(1, min(max_troops, 5))
+    _log.info("Gather config: enabled=%s, mine_level=%d, max_troops=%d",
+              GATHER_ENABLED, GATHER_MINE_LEVEL, GATHER_MAX_TROOPS)
 
 def set_territory_config(my_team, enemy_teams):
     """Set which team you are and which teams to attack"""

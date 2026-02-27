@@ -2,13 +2,8 @@
 {% block title_suffix %} - Dashboard{% endblock %}
 
 {% block content %}
-<h1>Dashboard</h1>
 
-<div class="summary-bar">
-    <span class="badge">{{ devices|length }} device{{ 's' if devices|length != 1 }}</span>
-    <span class="badge {% if task_count > 0 %}badge-active{% endif %}">{{ task_count }} task{{ 's' if task_count != 1 }} running</span>
-</div>
-
+<!-- Device Cards -->
 {% if not devices %}
 <div class="card">
     <p class="muted">No devices found. Start your emulator and refresh.</p>
@@ -24,63 +19,126 @@
         <strong>{{ dev.name }}</strong>
         <span class="device-troops">{{ dev.troops }} troops</span>
     </div>
-    <div class="device-status {% if dev.status != 'Idle' %}status-active{% endif %}">
-        {{ dev.status }}
+    <div class="device-status-bar">
+        <span class="status-indicator {% if dev.status != 'Idle' %}active{% endif %}"></span>
+        <span class="status-text">{{ dev.status }}</span>
     </div>
+    <div class="section-label">Troops</div>
     <div class="troop-slots"></div>
+    <div class="section-label quest-header" style="display:none">Quests</div>
     <div class="quest-tracking"></div>
 </div>
 {% endfor %}
 
+<!-- Device Selector (multi-device) -->
+{% if devices|length > 1 %}
+<div class="card" style="padding:12px 16px">
+    <div class="device-select">
+        {% for dev in devices %}
+        <label class="device-option">
+            <input type="checkbox" name="device_select" value="{{ dev.id }}"
+                   checked
+                   onchange="updateDeviceForms()">
+            {{ dev.name }}
+        </label>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<!-- Auto Modes -->
+<div class="auto-columns">
+{% for group in auto_groups %}
+<div class="auto-column">
+    <div class="section-header">{{ group.group }}</div>
+    <div class="auto-list">
+    {% for mode in group.modes %}
+        {% set mode_running = [] %}{% for t in active_tasks %}{% if t.endswith('_' + mode.key) %}{% if mode_running.append(t) %}{% endif %}{% endif %}{% endfor %}
+        <div class="auto-row" data-mode="{{ mode.key }}">
+            <span class="auto-label">{{ mode.label }}</span>
+            {% if mode_running %}
+            <form method="post" action="/tasks/stop-mode" class="inline-form">
+                <input type="hidden" name="mode_key" value="{{ mode.key }}">
+                <button type="submit" class="toggle on" title="Stop {{ mode.label }}"></button>
+            </form>
+            {% else %}
+            <form method="post" action="/tasks/start" class="inline-form device-form">
+                <input type="hidden" name="device" value="{% if devices %}{{ devices[0].id }}{% endif %}">
+                <input type="hidden" name="task_name" value="{{ mode.key }}">
+                <input type="hidden" name="task_type" value="auto">
+                <button type="submit" class="toggle" title="Start {{ mode.label }}"></button>
+            </form>
+            {% endif %}
+        </div>
+    {% endfor %}
+    </div>
+</div>
+{% endfor %}
+</div>
+
+<!-- Quick Actions -->
+<div class="section-header" style="margin-top:24px">Actions</div>
+<div class="action-grid">
+{% for name in oneshot_farm %}
+<form method="post" action="/tasks/start" class="device-form">
+    <input type="hidden" name="device" value="{% if devices %}{{ devices[0].id }}{% endif %}">
+    <input type="hidden" name="task_name" value="{{ name }}">
+    <input type="hidden" name="task_type" value="oneshot">
+    <button type="submit" class="action-chip">{{ name }}</button>
+</form>
+{% endfor %}
+{% for name in oneshot_war %}
+<form method="post" action="/tasks/start" class="device-form">
+    <input type="hidden" name="device" value="{% if devices %}{{ devices[0].id }}{% endif %}">
+    <input type="hidden" name="task_name" value="{{ name }}">
+    <input type="hidden" name="task_type" value="oneshot">
+    <button type="submit" class="action-chip action-chip-war">{{ name }}</button>
+</form>
+{% endfor %}
+</div>
+
+<!-- Running Tasks -->
 {% if tasks %}
-<h2>Running Tasks</h2>
+<div class="section-header" style="margin-top:24px">Running</div>
+<div class="running-list">
 {% for task in tasks %}
-<div class="card task-card">
-    <span class="task-name">{{ task }}</span>
-    <form method="post" action="/tasks/stop" style="display:inline">
+<div class="running-row">
+    <span class="running-name">{{ task }}</span>
+    <form method="post" action="/tasks/stop" class="inline-form">
         <input type="hidden" name="task_key" value="{{ task }}">
-        <button type="submit" class="btn btn-stop btn-sm">Stop</button>
+        <button type="submit" class="running-stop">&times;</button>
     </form>
 </div>
 {% endfor %}
-<form method="post" action="/tasks/stop-all">
-    <button type="submit" class="btn btn-danger">Stop All Tasks</button>
-</form>
+</div>
 {% endif %}
 
-<div class="quick-actions">
-    <a href="/tasks" class="btn btn-primary">Start Tasks</a>
-    <form method="post" action="/api/devices/refresh" style="display:inline">
-        <button type="submit" class="btn">Refresh Devices</button>
+<!-- Bottom -->
+<div class="bottom-bar">
+    <form method="post" action="/tasks/stop-all" style="flex:1">
+        <button type="submit" class="bottom-btn bottom-btn-danger">Stop All</button>
     </form>
+    <form method="post" action="/api/devices/refresh" style="flex:1">
+        <button type="submit" class="bottom-btn">Refresh</button>
+    </form>
+    <button type="button" class="bottom-btn bottom-btn-danger" style="flex:1" id="restart-btn" onclick="confirmRestart()">Restart</button>
 </div>
 
-<div class="quick-actions" style="margin-top:8px">
-    <button type="button" class="btn btn-danger" id="restart-btn" onclick="confirmRestart()">Restart PACbot</button>
-</div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-function fmtTime(sec) {
-    if (sec == null) return '';
-    var m = Math.floor(sec / 60), s = sec % 60;
-    return m + ':' + (s < 10 ? '0' : '') + s;
-}
-
 function renderTroops(container, troops, age) {
     if (!troops || troops.length === 0) {
-        container.innerHTML = '<span class="muted" style="font-size:12px">No troop data yet</span>';
+        container.innerHTML = '<span class="muted" style="font-size:11px">No troop data yet</span>';
         return;
     }
     var html = '';
     troops.forEach(function(t) {
         var isHome = t.action === 'Home';
-        var cls = isHome ? 'troop-home' : 'troop-deployed';
+        var cls = ACTION_CLASSES[t.action] || 'troop-deployed';
         var label = t.action;
-        if (!isHome && t.time_left != null) {
-            label += ' ' + fmtTime(t.time_left);
-        }
+        if (!isHome && t.time_left != null) label += ' ' + fmtTime(t.time_left);
         html += '<span class="troop-slot ' + cls + '">' + label + '</span>';
     });
     if (age != null) {
@@ -89,23 +147,36 @@ function renderTroops(container, troops, age) {
     container.innerHTML = html;
 }
 
+function fmtNum(n) {
+    if (n == null) return '?';
+    return n.toLocaleString();
+}
+
 function renderQuests(container, quests) {
+    var header = container.previousElementSibling;
     if (!quests || quests.length === 0) {
         container.innerHTML = '';
+        if (header) header.style.display = 'none';
         return;
     }
-    var html = '';
+    if (header) header.style.display = '';
+    var html = '<div class="dp-quests">';
     quests.forEach(function(q) {
-        var type = q.quest_type.replace('QuestType.', '');
-        var seen = q.last_seen != null ? q.last_seen : '?';
-        var pend = q.pending > 0
-            ? ' <span class="quest-pending">+' + q.pending + ' pending</span>'
-            : '';
-        html += '<div class="quest-row">'
-            + '<span class="quest-type">' + type + '</span>'
-            + '<span class="quest-count">' + seen + pend + '</span>'
-            + '</div>';
+        var raw = q.quest_type.replace('QuestType.', '');
+        var label = QUEST_LABELS[raw] || raw;
+        var seen = q.last_seen != null ? q.last_seen : 0;
+        var target = q.target;
+        var pend = q.pending || 0;
+        // Hide completed quests (seen >= target, no pending rallies)
+        if (target != null && seen >= target && pend === 0) return;
+        html += '<div class="quest-pill">';
+        html += '<span class="quest-label">' + label + '</span>';
+        html += '<span class="quest-val">' + fmtNum(seen);
+        if (target != null) html += '/' + fmtNum(target);
+        if (pend > 0) html += '<span class="quest-pend">+' + pend + '</span>';
+        html += '</span></div>';
     });
+    html += '</div>';
     container.innerHTML = html;
 }
 
@@ -117,40 +188,66 @@ function refreshStatus() {
             data.devices.forEach(function(dev) {
                 var card = document.querySelector('.device-card[data-device="' + dev.id + '"]');
                 if (!card) return;
-                // Status text
-                var status = card.querySelector('.device-status');
-                if (status) {
-                    status.textContent = dev.status;
-                    if (dev.status !== 'Idle') {
-                        status.classList.add('status-active');
-                    } else {
-                        status.classList.remove('status-active');
+                var statusBar = card.querySelector('.device-status-bar');
+                if (statusBar) {
+                    var dot = statusBar.querySelector('.status-indicator');
+                    var text = statusBar.querySelector('.status-text');
+                    if (text) {
+                        text.textContent = dev.status;
+                        text.classList.remove('status-active', 'status-waiting', 'status-navigating');
+                        if (dev.status === 'Idle') {
+                            // default gray
+                        } else if (dev.status.indexOf('Waiting') !== -1) {
+                            text.classList.add('status-waiting');
+                        } else if (dev.status.indexOf('Navigating') !== -1) {
+                            text.classList.add('status-navigating');
+                        } else {
+                            text.classList.add('status-active');
+                        }
+                    }
+                    if (dot) {
+                        if (dev.status !== 'Idle') dot.classList.add('active');
+                        else dot.classList.remove('active');
                     }
                 }
-                // Troop slots
                 var troopEl = card.querySelector('.troop-slots');
                 if (troopEl) renderTroops(troopEl, dev.troops, dev.snapshot_age);
-                // Quest tracking
                 var questEl = card.querySelector('.quest-tracking');
                 if (questEl) renderQuests(questEl, dev.quests);
             });
-            // Update task count badge
-            var badges = document.querySelectorAll('.badge');
-            if (badges.length > 1) {
-                var count = data.tasks ? data.tasks.length : 0;
-                badges[1].textContent = count + ' task' + (count !== 1 ? 's' : '') + ' running';
-                if (count > 0) {
-                    badges[1].classList.add('badge-active');
-                } else {
-                    badges[1].classList.remove('badge-active');
-                }
-            }
+            // Update auto mode toggles
+            document.querySelectorAll('.auto-row[data-mode]').forEach(function(row) {
+                var key = row.getAttribute('data-mode');
+                var toggle = row.querySelector('.toggle');
+                if (!toggle) return;
+                var isRunning = data.tasks.some(function(t) { return t.endsWith('_' + key); });
+                if (isRunning) toggle.classList.add('on');
+                else toggle.classList.remove('on');
+            });
         })
         .catch(function() {});
 }
-
 refreshStatus();
 setInterval(refreshStatus, 3000);
+
+function getSelectedDevices() {
+    var checkboxes = document.querySelectorAll('input[name="device_select"]:checked');
+    if (checkboxes.length > 0) {
+        return Array.prototype.map.call(checkboxes, function(cb) { return cb.value; });
+    }
+    // Single device (no selector shown) — read from first form
+    var input = document.querySelector('.device-form input[name="device"]');
+    return input ? [input.value] : [];
+}
+function updateDeviceForms() {
+    var devices = getSelectedDevices();
+    var val = devices.join(',');
+    document.querySelectorAll('.device-form').forEach(function(form) {
+        var input = form.querySelector('input[name="device"]');
+        if (input) input.value = val;
+    });
+}
+document.addEventListener('DOMContentLoaded', updateDeviceForms);
 
 function confirmRestart() {
     if (!confirm('Restart PACbot? All running tasks will be stopped.')) return;
@@ -158,7 +255,6 @@ function confirmRestart() {
     btn.disabled = true;
     btn.textContent = 'Restarting...';
     fetch('/api/restart', {method: 'POST'}).catch(function() {});
-    // Poll until the server is back up, then reload
     function waitForServer() {
         fetch('/api/status')
             .then(function(r) {

@@ -88,13 +88,13 @@ class TestGetActionableQuests:
         ]
         assert _get_actionable_quests(mock_device, quests) == []
 
-    def test_filters_non_actionable_types(self, mock_device):
+    def test_tower_fortress_are_actionable(self, mock_device):
         quests = [
-            {"quest_type": QuestType.GATHER, "current": 0, "target": 5, "completed": False},
-            {"quest_type": QuestType.FORTRESS, "current": 0, "target": 3, "completed": False},
-            {"quest_type": QuestType.TOWER, "current": 0, "target": 2, "completed": False},
+            {"quest_type": QuestType.FORTRESS, "current": 0, "target": 30, "completed": False},
+            {"quest_type": QuestType.TOWER, "current": 0, "target": 30, "completed": False},
         ]
-        assert _get_actionable_quests(mock_device, quests) == []
+        result = _get_actionable_quests(mock_device, quests)
+        assert len(result) == 2
 
     def test_returns_actionable(self, mock_device):
         quests = [
@@ -117,13 +117,14 @@ class TestGetActionableQuests:
         quests = [
             {"quest_type": QuestType.TITAN, "current": 15, "target": 15, "completed": True},  # done
             {"quest_type": QuestType.EVIL_GUARD, "current": 1, "target": 3, "completed": False},  # actionable
-            {"quest_type": QuestType.GATHER, "current": 0, "target": 5, "completed": False},  # skip type
+            {"quest_type": QuestType.GATHER, "current": 0, "target": 1000000, "completed": False},  # actionable
+            {"quest_type": QuestType.FORTRESS, "current": 0, "target": 30, "completed": False},  # actionable
             {"quest_type": QuestType.PVP, "current": 0, "target": 1, "completed": False},  # actionable
         ]
         result = _get_actionable_quests(mock_device, quests)
-        assert len(result) == 2
+        assert len(result) == 4
         types = {q["quest_type"] for q in result}
-        assert types == {QuestType.EVIL_GUARD, QuestType.PVP}
+        assert types == {QuestType.EVIL_GUARD, QuestType.GATHER, QuestType.PVP, QuestType.FORTRESS}
 
     def test_empty_list(self, mock_device):
         assert _get_actionable_quests(mock_device, []) == []

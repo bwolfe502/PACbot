@@ -16,6 +16,7 @@ Runs on Windows with BlueStacks or MuMu Player emulators. GUI built with tkinter
 | `config.py` | Global mutable state, enums, constants | `QuestType`, `RallyType`, `Screen`, ADB path, thresholds, team colors |
 | `devices.py` | ADB device detection + emulator window mapping | `auto_connect_emulators`, `get_devices`, `get_emulator_instances` |
 | `botlog.py` | Logging, metrics, timing | `setup_logging`, `get_logger`, `set_console_verbose`, `StatsTracker`, `timed_action`, `stats` |
+| `web/dashboard.py` | Flask web dashboard (mobile remote control) | `create_app`, `launch_task`, `stop_task`, auto-mode runners |
 
 ## Dependency Graph
 
@@ -29,6 +30,10 @@ main.py (GUI)
   ├─ actions ─────┘
   ├─ territory ── actions (teleport)
   └─ botlog (standalone)
+
+web/dashboard.py (Flask)
+  ├─ config, devices, navigation, vision, troops, actions, territory, botlog
+  └─ Duplicates task runners from main.py (to avoid circular imports)
 ```
 
 `botlog.py` and `config.py` have no internal dependencies (safe to import anywhere).
@@ -167,6 +172,72 @@ Controlled by `AP_USE_FREE`, `AP_USE_POTIONS`, `AP_ALLOW_LARGE_POTIONS`, `AP_USE
 `settings.json` stores user preferences (auto-heal, AP options, intervals, territory teams).
 Loaded on startup, saved on quit/restart. `DEFAULTS` dict provides fallback values.
 
+### Web Dashboard (web/dashboard.py)
+Mobile-friendly Flask app for remote control from any browser. Runs alongside tkinter GUI
+in a background thread — both share the same process (`config.running_tasks`, `DEVICE_STATUS`, etc.).
+
+**Enable**: `"web_dashboard": true` in `settings.json`, then access `http://<your-ip>:8080`.
+
+**Architecture**:
+- `create_app()` factory returns Flask app; started via `threading.Thread` in `main.py`
+- Duplicates task runner functions (`run_auto_quest`, `run_auto_titan`, etc.) from `main.py`
+  to avoid circular imports — both must be kept in sync
+- `AUTO_RUNNERS` dict maps auto-mode keys → runner lambdas
+- `TASK_FUNCTIONS` dict maps one-shot action names → callable functions
+- Device list cached for 15s (`_DEVICE_CACHE_TTL`) to avoid spamming ADB on every poll
+- CSS cache busting: `style.css?v=N` in `base.html` — bump on every CSS change
+
+**Pages**: Dashboard (`/`), Settings (`/settings`), Logs (`/logs`)
+
+**API endpoints**:
+- `GET /api/status` — device statuses, troop snapshots, quest tracking, active tasks (polled every 3s)
+- `POST /api/devices/refresh` — reconnect ADB devices
+- `POST /tasks/start` — launch auto-mode or one-shot task
+- `POST /tasks/stop` — stop a specific task
+- `POST /tasks/stop-all` — stop all tasks
+- `POST /settings` — save settings form
+- `POST /api/restart` — save settings, stop all, `os.execv` restart
+- `GET /api/logs` — last 150 log lines as JSON
+
+**Dashboard UI components**:
+- **Device card**: status dot (pulsing green when active), status text (color-coded), troop slots, quest pills
+- **Auto mode toggles**: iOS-style toggle switches in 2-column grid, grouped by category (Combat/Farming/Events)
+- **Action chips**: minimal bordered buttons in 3-column grid, farm actions (blue accent) and war actions (red accent)
+- **Running tasks list**: active task names with circular stop (×) buttons
+- **Bottom bar**: Stop All, Refresh, Restart — three equal compact buttons
+
+**Auto mode groups** (vary by game mode):
+- Broken Lands (`bl`): Combat (Pass Battle, Occupy Towers, Reinforce Throne) + Farming (Auto Quest, Rally Titans, Mine Mithril)
+- Home Server (`rw`): Events (Join Groot) + Farming (Rally Titans, Mine Mithril) + Combat (Reinforce Throne)
+
+**Templates**: `base.html` (nav, shared JS), `index.html` (dashboard), `settings.html`, `logs.html`
+
+### Device Status System (config.py + all runners)
+`config.DEVICE_STATUS[device]` holds the current status string displayed in both the tkinter GUI
+and the web dashboard. Updated via `config.set_device_status(device, msg)`, cleared via
+`config.clear_device_status(device)`.
+
+**Conventions**:
+- Title Case for all status strings: `"Rallying Titan..."`, `"Checking Quests..."`
+- Expanded abbreviations: `"Evil Guard"` not `"EG"`
+- Trailing ellipsis for active states: `"Mining Mithril..."`
+- `"Idle"` when between cycles (default / fallback)
+
+**Status text colors** (web dashboard JS classification):
+- Cyan (`#64d8ff`): active/working — any status not matching below
+- Amber (`#ffb74d`): waiting — status contains `"Waiting"`
+- Gray (`#aab`): navigating — status contains `"Navigating"`
+- Default gray (`#667`): idle
+
+**rally_eg phase statuses** (detailed breakdown):
+1. `"Searching for Evil Guard..."` — opening Evil Guard map
+2. `"Killing Dark Priests (1/5)..."` — first priest probe attack
+3. `"Marching to Dark Priest (1/5)..."` — waiting for first rally (long march)
+4. `"Killing Dark Priests (N/5)..."` — priests 2-5 attack
+5. `"Waiting for Rally (N/5)..."` — waiting for priests 2-5 rally completion
+6. `"Retrying Missing Priests..."` — retry section for missed priests
+7. `"Rallying Evil Guard..."` — final boss rally (P6)
+
 ## Debug & Observability
 
 | Directory | Contents | Retention |
@@ -242,6 +313,15 @@ PACbot/
 ├── elements/            # Template images for matching
 │   └── statuses/        # Troop status icon templates
 ├── platform-tools/      # Bundled ADB executable
+├── web/                 # Flask web dashboard
+│   ├── dashboard.py     # App factory, routes, task runners
+│   ├── static/
+│   │   └── style.css    # Mobile-first dark CSS (cache-busted ?v=N)
+│   └── templates/
+│       ├── base.html    # Nav, shared JS (fmtTime, quest labels, action classes)
+│       ├── index.html   # Dashboard: device cards, toggles, actions, running list
+│       ├── settings.html # Settings form
+│       └── logs.html    # Log viewer
 ├── tests/               # pytest suite (~326 tests)
 ├── logs/                # Log files
 ├── stats/               # Session stats JSON

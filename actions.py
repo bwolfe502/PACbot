@@ -13,13 +13,28 @@ from vision import (tap_image, wait_for_image_and_tap, timed_wait,
                     load_screenshot,
                     find_image, get_last_best, find_all_matches, get_template,
                     adb_tap, adb_swipe, logged_tap, clear_click_trail,
-                    save_failure_screenshot, read_ap, read_text,
+                    save_failure_screenshot, read_ap, read_text, read_number,
                     TAP_OFFSETS, _save_click_trail)
 from navigation import navigate, check_screen, DEBUG_DIR
 from troops import (troops_avail, all_troops_home, heal_all,
-                    read_panel_statuses, TroopAction, capture_departing_portrait)
+                    read_panel_statuses, get_troop_status, TroopAction,
+                    capture_departing_portrait)
 
 _log = get_logger("actions")
+
+
+def _interruptible_sleep(seconds, stop_check):
+    """Sleep for `seconds`, checking stop_check every 0.5s.
+    Returns True if stop_check triggered (i.e., should abort)."""
+    if not stop_check:
+        time.sleep(seconds)
+        return False
+    end = time.time() + seconds
+    while time.time() < end:
+        if stop_check():
+            return True
+        time.sleep(min(0.5, max(0, end - time.time())))
+    return False
 
 
 def _on_war_screen(device):
@@ -44,6 +59,7 @@ def _on_war_screen(device):
 
 _quest_rallies_pending = {}   # e.g. {("127.0.0.1:5555", "titan"): 2}
 _quest_last_seen = {}         # e.g. {("127.0.0.1:5555", "titan"): 10}
+_quest_target = {}            # e.g. {("127.0.0.1:5555", "titan"): 20}
 _quest_pending_since = {}     # e.g. {("127.0.0.1:5555", "titan"): 1708123456.0}
 
 # Troop slot tracking — which troop slots are associated with pending rallies.
@@ -53,11 +69,17 @@ _quest_rally_slots = {}       # {(device, quest_type): [slot_id, ...]}
 
 PENDING_TIMEOUT_S = config.QUEST_PENDING_TIMEOUT
 
+# ---- Tower quest state ----
+# Tracks whether we have a troop defending a tower for quest purposes.
+_tower_quest_state = {}   # {device: {"deployed_at": float}}
 
-def _track_quest_progress(device, quest_type, current):
+
+def _track_quest_progress(device, quest_type, current, target=None):
     """Update pending rally count based on OCR counter progress.
     When the counter advances, we know some pending rallies completed."""
     key = (device, quest_type)
+    if target is not None:
+        _quest_target[key] = target
     last = _quest_last_seen.get(key)
     if last is not None and current > last:
         completed = current - last
@@ -132,6 +154,7 @@ def get_quest_tracking_state(device):
         result.append({
             "quest_type": str(qtype),
             "last_seen": _quest_last_seen.get((dev, qtype)),
+            "target": _quest_target.get((dev, qtype)),
             "pending": count,
             "pending_age": round(time.time() - since, 1) if since else None,
         })
@@ -142,6 +165,7 @@ def get_quest_tracking_state(device):
         result.append({
             "quest_type": str(qtype),
             "last_seen": last,
+            "target": _quest_target.get((dev, qtype)),
             "pending": 0,
             "pending_age": None,
         })
@@ -154,9 +178,11 @@ def reset_quest_tracking(device=None):
     if device is None:
         _quest_rallies_pending.clear()
         _quest_last_seen.clear()
+        _quest_target.clear()
         _quest_pending_since.clear()
         _quest_rally_slots.clear()
         _last_depart_slot.clear()
+        _tower_quest_state.clear()
     else:
         for d in list(_quest_rallies_pending):
             if d[0] == device:
@@ -164,6 +190,9 @@ def reset_quest_tracking(device=None):
         for d in list(_quest_last_seen):
             if d[0] == device:
                 del _quest_last_seen[d]
+        for d in list(_quest_target):
+            if d[0] == device:
+                del _quest_target[d]
         for d in list(_quest_pending_since):
             if d[0] == device:
                 del _quest_pending_since[d]
@@ -171,6 +200,7 @@ def reset_quest_tracking(device=None):
             if d[0] == device:
                 del _quest_rally_slots[d]
         _last_depart_slot.pop(device, None)
+        _tower_quest_state.pop(device, None)
 
 
 # ---- Rally owner blacklist ----
@@ -361,6 +391,8 @@ def _ocr_quest_rows(device):
             target = 15
         elif quest_type == QuestType.EVIL_GUARD:
             target = 3
+        elif quest_type == QuestType.GATHER:
+            target = 1000000
 
         completed = current >= target
 
@@ -375,7 +407,7 @@ def _ocr_quest_rows(device):
 
         remaining = target - current
         status = "DONE" if completed else f"{remaining} remaining"
-        skip = " (skip)" if quest_type in (QuestType.GATHER, QuestType.FORTRESS, QuestType.TOWER, None) else ""
+        skip = " (skip)" if quest_type is None else ""
         cap_note = f" (OCR showed {ocr_target}, cap overridden)" if target != ocr_target else ""
         log.debug("  %s: %d/%d — %s%s%s", quest_type or "unknown", current, target, status, skip, cap_note)
 
@@ -425,13 +457,13 @@ def _check_quests_legacy(device, stop_check):
         if quest_img in ("eg.png", "titans.png"):
             if has_eg and has_titan:
                 log.info("Both EG and Titan quests active — joining any available rally...")
-                joined = join_rally([QuestType.EVIL_GUARD, QuestType.TITAN], device)
+                joined = join_rally([QuestType.EVIL_GUARD, QuestType.TITAN], device, stop_check=stop_check)
             elif quest_img == "eg.png":
                 log.info("Attempting to join an Evil Guard rally...")
-                joined = join_rally(QuestType.EVIL_GUARD, device)
+                joined = join_rally(QuestType.EVIL_GUARD, device, stop_check=stop_check)
             else:
                 log.info("Attempting to join a Titan rally...")
-                joined = join_rally(QuestType.TITAN, device)
+                joined = join_rally(QuestType.TITAN, device, stop_check=stop_check)
 
             if not joined:
                 if quest_img == "eg.png":
@@ -442,9 +474,12 @@ def _check_quests_legacy(device, stop_check):
                     else:
                         log.info("No EG rally to join — own rally disabled, skipping")
                 else:
-                    log.info("No rally to join, starting own Titan rally")
-                    if navigate(Screen.MAP, device):
-                        rally_titan(device)
+                    if config.TITAN_RALLY_OWN_ENABLED:
+                        log.info("No rally to join, starting own Titan rally")
+                        if navigate(Screen.MAP, device):
+                            rally_titan(device)
+                    else:
+                        log.info("No Titan rally to join — own rally disabled, skipping")
             break
         elif quest_img == "pvp.png":
             if navigate(Screen.MAP, device):
@@ -493,7 +528,7 @@ def _get_actionable_quests(device, quests):
     Returns a list of quest dicts."""
     actionable = []
     for q in quests:
-        if q["completed"] or q["quest_type"] not in (QuestType.TITAN, QuestType.EVIL_GUARD, QuestType.PVP):
+        if q["completed"] or q["quest_type"] not in (QuestType.TITAN, QuestType.EVIL_GUARD, QuestType.PVP, QuestType.GATHER, QuestType.FORTRESS, QuestType.TOWER):
             continue
         eff = _effective_remaining(device, q["quest_type"], q["current"], q["target"])
         if eff > 0:
@@ -545,9 +580,9 @@ def _run_rally_loop(device, actionable, stop_check=None):
 
         needed_str = ", ".join(f"{t} ({_effective_remaining(device, t, *quest_info[t])})" for t in types_to_join)
         log.info("Looking for %s rally (%s needed)...", "/".join(types_to_join), needed_str)
-        type_names = "/".join("titan" if t == QuestType.TITAN else "EG" for t in types_to_join)
-        config.set_device_status(device, f"Joining {type_names} rally...")
-        joined_type = join_rally(types_to_join, device, skip_heal=True)
+        type_names = "/".join("Titan" if t == QuestType.TITAN else "Evil Guard" for t in types_to_join)
+        config.set_device_status(device, f"Joining {type_names} Rally...")
+        joined_type = join_rally(types_to_join, device, skip_heal=True, stop_check=stop_check)
         if stop_check and stop_check():
             return True
 
@@ -558,18 +593,21 @@ def _run_rally_loop(device, actionable, stop_check=None):
         # No rally to join — start own rally
         started = False
         if titan_needed > 0:
-            log.info("No rally to join, starting own Titan rally")
-            config.set_device_status(device, "Rallying titan...")
-            if navigate(Screen.MAP, device):
-                if rally_titan(device):
-                    _record_rally_started(device, QuestType.TITAN)
-                    started = True
+            if config.TITAN_RALLY_OWN_ENABLED:
+                log.info("No rally to join, starting own Titan rally")
+                config.set_device_status(device, "Rallying Titan...")
+                if navigate(Screen.MAP, device):
+                    if rally_titan(device):
+                        _record_rally_started(device, QuestType.TITAN)
+                        started = True
+            else:
+                log.info("No Titan rally to join — own rally disabled, skipping")
             if stop_check and stop_check():
                 return True
         elif eg_needed > 0:
             if config.EG_RALLY_OWN_ENABLED:
                 log.info("No rally to join, starting own EG rally")
-                config.set_device_status(device, "Rallying EG...")
+                config.set_device_status(device, "Rallying Evil Guard...")
                 if navigate(Screen.MAP, device):
                     if rally_eg(device, stop_check=stop_check):
                         _record_rally_started(device, QuestType.EVIL_GUARD)
@@ -594,7 +632,7 @@ def _wait_for_rallies(device, stop_check):
 
     Must be called while on map screen.
     """
-    config.set_device_status(device, "Waiting for rallies...")
+    config.set_device_status(device, "Waiting for Rallies...")
     log = get_logger("actions", device)
     wait_start = time.time()
 
@@ -609,8 +647,7 @@ def _wait_for_rallies(device, stop_check):
 
     if initial_count == 0:
         # No rallying troops — confirm with a second read before clearing
-        time.sleep(config.RALLY_WAIT_POLL_INTERVAL)
-        if stop_check and stop_check():
+        if _interruptible_sleep(config.RALLY_WAIT_POLL_INTERVAL, stop_check):
             return
         snapshot2 = read_panel_statuses(device)
         if snapshot2 is None:
@@ -641,8 +678,7 @@ def _wait_for_rallies(device, stop_check):
             log.warning("Rally wait timed out after %.0fs", elapsed)
             return
 
-        time.sleep(config.RALLY_WAIT_POLL_INTERVAL)
-        if stop_check and stop_check():
+        if _interruptible_sleep(config.RALLY_WAIT_POLL_INTERVAL, stop_check):
             return
 
         snapshot = read_panel_statuses(device)
@@ -698,12 +734,16 @@ def check_quests(device, stop_check=None):
 
         # Update tracking with latest counter values
         for q in quests:
-            if q["quest_type"] in (QuestType.TITAN, QuestType.EVIL_GUARD, QuestType.PVP):
-                _track_quest_progress(device, q["quest_type"], q["current"])
+            if q["quest_type"] in (QuestType.TITAN, QuestType.EVIL_GUARD, QuestType.PVP, QuestType.GATHER, QuestType.TOWER, QuestType.FORTRESS):
+                _track_quest_progress(device, q["quest_type"], q["current"], q.get("target"))
 
         actionable = _get_actionable_quests(device, quests)
 
         if not actionable:
+            # Recall tower troop if all tower quests are done
+            if config.TOWER_QUEST_ENABLED:
+                _run_tower_quest(device, quests, stop_check)
+
             pending_types = [qt for (dev, qt), cnt in _quest_rallies_pending.items() if dev == device and cnt > 0]
             if pending_types:
                 pending_str = ", ".join(f"{qt} ({_quest_rallies_pending[(device, qt)]})" for qt in pending_types)
@@ -726,6 +766,14 @@ def check_quests(device, stop_check=None):
         has_eg = QuestType.EVIL_GUARD in types_active
         has_titan = QuestType.TITAN in types_active
         has_pvp = QuestType.PVP in types_active
+        has_gather = QuestType.GATHER in types_active and config.GATHER_ENABLED
+        has_tower = (QuestType.TOWER in types_active or QuestType.FORTRESS in types_active) and config.TOWER_QUEST_ENABLED
+
+        # Handle tower quest first (low cost: 1 troop, no AP, quick deploy)
+        if has_tower:
+            _run_tower_quest(device, quests, stop_check)
+            if stop_check and stop_check():
+                return True
 
         if has_eg or has_titan:
             if _run_rally_loop(device, actionable, stop_check):
@@ -738,6 +786,17 @@ def check_quests(device, stop_check=None):
                 if stop_check and stop_check():
                     return True
                 attack(device)
+            # After PVP, deploy gather troops if also needed
+            if has_gather and not (stop_check and stop_check()):
+                if navigate(Screen.MAP, device):
+                    _run_gather_loop(device, stop_check)
+            return True
+
+        elif has_gather:
+            if navigate(Screen.MAP, device):
+                _run_gather_loop(device, stop_check)
+            return True
+
         return True
     else:
         # OCR failed — fall back to PNG matching
@@ -773,12 +832,15 @@ def attack(device):
         log.warning("Not enough troops available (have %d, need more than %d)", troops, config.MIN_TROOPS_AVAILABLE)
 
 @timed_action("phantom_clash_attack")
-def phantom_clash_attack(device):
+def phantom_clash_attack(device, stop_check=None):
     """Heal all troops first (if auto heal enabled), then attack in Phantom Clash mode"""
     log = get_logger("actions", device)
     clear_click_trail()
     if config.AUTO_HEAL_ENABLED:
         heal_all(device)
+
+    if stop_check and stop_check():
+        return
 
     # Determine if we need to attack based on troop statuses
     screen = load_screenshot(device)
@@ -805,7 +867,8 @@ def phantom_clash_attack(device):
             cx, cy = mx + w // 2, my + h // 2
             log.info("Found returning troops at (%d, %d), dragging to (560, 1200)", cx, cy)
             adb_swipe(device, cx, cy, 560, 1200, duration_ms=500)
-            time.sleep(1)
+            if _interruptible_sleep(1, stop_check):
+                return
 
     logged_tap(device, 550, 450, "phantom_clash_attack_selection")
 
@@ -813,6 +876,8 @@ def phantom_clash_attack(device):
     start = time.time()
     menu_open = False
     while time.time() - start < 31:
+        if stop_check and stop_check():
+            return
         screen = load_screenshot(device)
         # Always check for attack button even while waiting for menu
         match = find_image(screen, "esb_attack.png")
@@ -828,7 +893,8 @@ def phantom_clash_attack(device):
         else:
             log.debug("Attack menu not detected, retapping king")
             logged_tap(device, 550, 450, "phantom_clash_attack_selection")
-        time.sleep(1)
+        if _interruptible_sleep(1, stop_check):
+            return
 
     if not menu_open:
         log.warning("Timed out waiting for attack menu after 31s")
@@ -837,6 +903,8 @@ def phantom_clash_attack(device):
     # Menu is open but attack button wasn't found yet — keep polling
     if not find_image(load_screenshot(device), "esb_attack.png"):
         while time.time() - start < 31:
+            if stop_check and stop_check():
+                return
             screen = load_screenshot(device)
             match = find_image(screen, "esb_attack.png")
             if match:
@@ -844,7 +912,8 @@ def phantom_clash_attack(device):
                 adb_tap(device, mx + w // 2, my + h // 2)
                 log.debug("Tapped esb_attack.png")
                 break
-            time.sleep(1)
+            if _interruptible_sleep(1, stop_check):
+                return
         else:
             log.warning("Timed out waiting for esb_attack.png after 31s")
             return
@@ -878,6 +947,217 @@ def reinforce_throne(device):
         tap_image("depart.png", device)
     else:
         log.warning("Not enough troops available (have %d, need more than %d)", troops, config.MIN_TROOPS_AVAILABLE)
+
+# ============================================================
+# TOWER QUEST — occupy a tower for alliance quest
+# ============================================================
+
+def _is_troop_defending(device):
+    """Check if any troop is currently defending (for tower quest).
+    Uses cached snapshot if fresh (<30s), otherwise reads panel."""
+    snapshot = get_troop_status(device)
+    if snapshot is not None and snapshot.age_seconds < 30:
+        return snapshot.any_doing(TroopAction.DEFENDING)
+    # Need fresh read — must be on map screen
+    snapshot = read_panel_statuses(device)
+    if snapshot is None:
+        return False
+    return snapshot.any_doing(TroopAction.DEFENDING)
+
+
+def _navigate_to_tower(device):
+    """Navigate to the tower marked with the in-game target marker.
+    Uses the same target menu flow as target() but without heal.
+    Returns True if map is now centered on the tower, False on failure."""
+    log = get_logger("actions", device)
+
+    if check_screen(device) != Screen.MAP:
+        if not navigate(Screen.MAP, device):
+            log.warning("Failed to navigate to map screen")
+            return False
+
+    if not tap_image("target_menu.png", device):
+        log.warning("Tower nav: target_menu.png not found")
+        return False
+    time.sleep(1)
+
+    # Tap the Enemy tab (tower marker is stored here)
+    logged_tap(device, 740, 330, "tower_target_enemy_tab")
+    time.sleep(1)
+
+    # Check that a target marker exists
+    marker_found = False
+    start_time = time.time()
+    while time.time() - start_time < 3:
+        screen = load_screenshot(device)
+        if screen is not None and find_image(screen, "target_marker.png", threshold=0.7):
+            marker_found = True
+            break
+        time.sleep(0.5)
+
+    if not marker_found:
+        log.warning("Tower nav: no target marker found — is the tower marked?")
+        return False
+
+    # Tap the target to center map on the tower
+    logged_tap(device, 350, 476, "tower_target_select")
+    time.sleep(2)
+
+    log.info("Navigated to tower via target marker")
+    return True
+
+
+@timed_action("occupy_tower")
+def occupy_tower(device, stop_check=None):
+    """Occupy a tower for the tower/fortress alliance quest.
+
+    Flow: navigate to marked tower -> tap tower -> reinforce -> depart.
+    Returns True if troop deployed or already defending, False on failure.
+    """
+    log = get_logger("actions", device)
+
+    # Check if already defending
+    if navigate(Screen.MAP, device):
+        if _is_troop_defending(device):
+            log.info("Troop already defending tower — no action needed")
+            return True
+
+    if stop_check and stop_check():
+        return False
+
+    # Need at least 1 troop
+    troops = troops_avail(device)
+    if troops < 1:
+        log.warning("No troops available to occupy tower")
+        return False
+
+    if stop_check and stop_check():
+        return False
+
+    # Navigate to the tower via target marker
+    config.set_device_status(device, "Tower Quest: Navigating...")
+    if not _navigate_to_tower(device):
+        log.warning("Failed to navigate to tower")
+        return False
+
+    if stop_check and stop_check():
+        return False
+
+    # Tap the tower
+    config.set_device_status(device, "Tower Quest: Deploying...")
+    logged_tap(device, 540, 900, "tower_tap")
+    time.sleep(1.5)
+
+    # Tap reinforce
+    logged_tap(device, 730, 1430, "tower_reinforce")
+    time.sleep(1)
+
+    if stop_check and stop_check():
+        return False
+
+    # Tap depart
+    if tap_image("depart.png", device):
+        log.info("Tower troop deployed!")
+        _tower_quest_state[device] = {"deployed_at": time.time()}
+        return True
+    else:
+        log.warning("Depart button not found after tower reinforce")
+        save_failure_screenshot(device, "tower_depart_missing")
+        return False
+
+
+@timed_action("recall_tower")
+def recall_tower_troop(device, stop_check=None):
+    """Recall a troop defending a tower.
+
+    7-step sequence: tap defending icon -> tap tower -> Detail ->
+    Recall troops -> Confirm -> close X -> dismiss.
+    Returns True on success, False on failure.
+    """
+    log = get_logger("actions", device)
+
+    if not navigate(Screen.MAP, device):
+        log.warning("Failed to navigate to map for tower recall")
+        return False
+
+    if stop_check and stop_check():
+        return False
+
+    config.set_device_status(device, "Recalling Tower Troop...")
+
+    # Step 1: Tap the defending icon on troop panel to center tower
+    if not tap_image("statuses/defending.png", device):
+        log.warning("Tower recall: no defending icon found on troop panel")
+        return False
+    time.sleep(1.5)
+
+    # Step 2: Tap the tower (now centered on screen)
+    logged_tap(device, 540, 900, "recall_tower_tap")
+    time.sleep(1)
+
+    # Step 3: Tap Detail
+    logged_tap(device, 360, 1430, "recall_detail")
+    time.sleep(1)
+
+    if stop_check and stop_check():
+        return False
+
+    # Step 4: Tap Recall troops
+    logged_tap(device, 180, 330, "recall_troops_btn")
+    time.sleep(1)
+
+    # Step 5: Tap red Confirm
+    logged_tap(device, 315, 1080, "recall_confirm")
+    time.sleep(0.5)
+
+    # Step 6: Tap close X
+    tap_image("close_x.png", device)
+    time.sleep(0.5)
+
+    # Step 7: Tap to dismiss remaining menu
+    logged_tap(device, 540, 900, "recall_dismiss")
+
+    _tower_quest_state.pop(device, None)
+    log.info("Tower troop recalled")
+    return True
+
+
+def _run_tower_quest(device, quests, stop_check=None):
+    """Handle tower/fortress quest: deploy if needed, recall when done.
+
+    If troop is already defending, does nothing.
+    If quest is complete and troop is defending, recalls.
+    """
+    log = get_logger("actions", device)
+
+    # Separate active vs completed tower quests
+    tower_quests = [q for q in quests
+                    if q["quest_type"] in (QuestType.TOWER, QuestType.FORTRESS)]
+    if not tower_quests:
+        return
+
+    active = [q for q in tower_quests if not q["completed"]]
+    all_done = len(active) == 0
+
+    if all_done:
+        # All tower quests completed — recall troop if defending
+        if _is_troop_defending(device):
+            log.info("Tower quests complete — recalling troop")
+            recall_tower_troop(device, stop_check)
+        return
+
+    # Tower quest is active
+    if _is_troop_defending(device):
+        log.info("Tower quest active, troop already defending — skipping")
+        config.set_device_status(device, "Tower Quest: Defending...")
+        return
+
+    # Need to deploy
+    config.set_device_status(device, "Tower Quest: Deploying...")
+    success = occupy_tower(device, stop_check)
+    if not success:
+        log.warning("Tower quest: failed to deploy troop")
+
 
 @timed_action("target")
 def target(device):
@@ -1096,11 +1376,12 @@ def teleport(device):
 # RALLY FUNCTIONS
 # ============================================================
 
-def join_rally(rally_types, device, skip_heal=False):
+def join_rally(rally_types, device, skip_heal=False, stop_check=None):
     """Join a rally of any given type(s) by looking for icons on the war screen.
     rally_types: string or list of strings (e.g. "eg" or ["eg", "titan"]).
     Checks all types simultaneously on each scroll position.
     skip_heal: if True, skip the heal_all call (caller already healed).
+    stop_check: optional callable that returns True if we should abort immediately.
     Returns the type joined as a string, or False if none found.
     """
     log = get_logger("actions", device)
@@ -1209,8 +1490,9 @@ def join_rally(rally_types, device, skip_heal=False):
     def _ocr_rally_owner(screen, join_y):
         """OCR the rally owner name from a war screen rally card.
         The name appears as "{Name}'s Troop" in the upper-right portion of the card,
-        roughly 100-160px above the join/full button.
-        Returns the owner name (without "'s Troop"), or empty string on failure."""
+        roughly 80-160px above the join/full button.
+        Returns the owner name (without "'s Troop"), or a visual hash fallback
+        like 'crop_a1b2c3d4' if OCR fails — never returns empty string."""
         h, w = screen.shape[:2]
         # The owner name is in the right section of the card, above the troop portraits.
         # join_y is the top-left Y of the join button template match.
@@ -1219,14 +1501,32 @@ def join_rally(rally_types, device, skip_heal=False):
         x_start = 230
         x_end = min(w, 650)
         if y_start >= y_end:
-            return ""
+            return f"pos_{join_y}"
         owner_crop = screen[y_start:y_end, x_start:x_end]
+
+        # Save debug crops so we can verify the region is correct
+        _debug_dir = os.path.join(DEBUG_DIR, "owner_ocr")
+        os.makedirs(_debug_dir, exist_ok=True)
+        _crop_path = os.path.join(_debug_dir, f"owner_crop_y{join_y}.png")
+        cv2.imwrite(_crop_path, owner_crop)
+
         gray = cv2.cvtColor(owner_crop, cv2.COLOR_BGR2GRAY)
-        gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+        # Apply Otsu threshold to isolate text from game background
+        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        upscaled = cv2.resize(thresh, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+
+        # Also save the preprocessed image for debugging
+        cv2.imwrite(os.path.join(_debug_dir, f"owner_thresh_y{join_y}.png"), upscaled)
 
         from vision import ocr_read
-        results = ocr_read(gray, detail=0)
+        results = ocr_read(upscaled, detail=0)
         raw = " ".join(results).strip()
+
+        if raw:
+            log.info("Rally owner OCR (join_y=%d): '%s'", join_y, raw)
+        else:
+            log.warning("Rally owner OCR empty (join_y=%d, crop y:%d-%d x:%d-%d)",
+                        join_y, y_start, y_end, x_start, x_end)
 
         # Extract owner name from "{Name}'s Troop" pattern
         match = re.match(r"(.+?)[''\u2019]s\s+[Tt]roop", raw)
@@ -1234,8 +1534,15 @@ def join_rally(rally_types, device, skip_heal=False):
             return match.group(1).strip()
         # Fallback: if OCR read something but didn't match pattern, return raw
         # (might still be useful for blacklisting)
-        log.debug("Rally owner OCR raw: '%s' (no pattern match)", raw)
-        return raw
+        if raw:
+            log.debug("Rally owner OCR raw: '%s' (no pattern match)", raw)
+            return raw
+        # OCR returned nothing — use visual hash of the crop as fallback ID
+        # so blacklist tracking still works per unique rally card
+        import hashlib
+        crop_hash = hashlib.md5(owner_crop.tobytes()).hexdigest()[:8]
+        log.debug("Rally owner OCR empty — using visual hash: crop_%s", crop_hash)
+        return f"crop_{crop_hash}"
 
     def _text_matches_type(text, expected_type):
         """Check if OCR text contains keywords for the expected rally type."""
@@ -1254,6 +1561,8 @@ def join_rally(rally_types, device, skip_heal=False):
             return False
 
         while retries_left >= 0:
+            if stop_check and stop_check():
+                return False
             join_locs = find_all_matches(screen, "rally/join.png")
             if not join_locs:
                 log.debug("No join buttons visible on war screen")
@@ -1329,6 +1638,8 @@ def join_rally(rally_types, device, skip_heal=False):
                     last_screen = None
                     start_time = time.time()
                     while time.time() - start_time < 6:
+                        if stop_check and stop_check():
+                            return False
                         s = load_screenshot(device)
                         if s is None:
                             time.sleep(0.5)
@@ -2125,6 +2436,7 @@ def rally_eg(device, stop_check=None):
             return False
 
     # Search EG once — centers camera, stays centered for all priests
+    config.set_device_status(device, "Searching for Evil Guard...")
     if not _search_eg_center(device):
         save_failure_screenshot(device, "eg_search_failed")
         return False
@@ -2296,7 +2608,9 @@ def rally_eg(device, stop_check=None):
                         return True
             # Poll interval — recording for optimization analysis
             stats.record_transition_time(device, "eg_poll_troop_interval", 3, 3, False)
-            time.sleep(3)
+            if _interruptible_sleep(3, stop_check):
+                log.info("P%d: poll_troop_ready aborted (stop requested during sleep)", priest_num)
+                return False
         elapsed = time.time() - start_time
         log.warning("P%d: poll_troop_ready TIMED OUT after %.1fs", priest_num, elapsed)
         save_failure_screenshot(device, f"eg_stationed_timeout_p{priest_num}")
@@ -2350,6 +2664,7 @@ def rally_eg(device, stop_check=None):
     # =====================================================
     # PRIEST 1 — EG boss tap (probe verifies dialog opened)
     # =====================================================
+    config.set_device_status(device, "Killing Dark Priests (1/5)...")
     log.info("P1: probing EG boss at (%d,%d)", *EG_PRIEST_POSITIONS[0])
 
     # P1 was already tapped above (eg_boss_on_map) — verify dialog opened
@@ -2382,6 +2697,7 @@ def rally_eg(device, stop_check=None):
             return False
         if not click_depart_with_fallback(1):
             return False
+        config.set_device_status(device, "Marching to Dark Priest (1/5)...")
         if not poll_troop_ready(240, 1):
             return False
         log.info("P1: rally completed")
@@ -2400,6 +2716,7 @@ def rally_eg(device, stop_check=None):
     for i in range(1, 5):  # EG_PRIEST_POSITIONS[1] through [4]
         pnum = i + 1
         x, y = EG_PRIEST_POSITIONS[i]
+        config.set_device_status(device, f"Killing Dark Priests ({pnum}/5)...")
         log.info("P%d: probing at (%d, %d)", pnum, x, y)
 
         # Dismiss any remaining dialog from the previous rally
@@ -2420,6 +2737,7 @@ def rally_eg(device, stop_check=None):
                 continue
             timed_wait(device, lambda: check_screen(device) == Screen.MAP,
                        1, "eg_depart_to_map")
+            config.set_device_status(device, f"Killing Dark Priest ({pnum}/5)...")
             if not poll_troop_ready(60, pnum):
                 log.warning("P%d: stationed timeout — continuing anyway", pnum)
             log.info("P%d: rally completed", pnum)
@@ -2479,6 +2797,7 @@ def rally_eg(device, stop_check=None):
         # Probe at adjusted position
         adj_x = x + nudge_dx
         adj_y = y + nudge_dy
+        config.set_device_status(device, "Retrying Missing Priests...")
         log.info("P%d retry: probing at adjusted (%d, %d)", pnum, adj_x, adj_y)
 
         if _probe_priest(device, adj_x, adj_y, f"P{pnum}_retry"):
@@ -2495,6 +2814,7 @@ def rally_eg(device, stop_check=None):
                 continue
             timed_wait(device, lambda: check_screen(device) == Screen.MAP,
                        1, "eg_depart_to_map")
+            config.set_device_status(device, f"Killing Dark Priest ({pnum}/5)...")
             if not poll_troop_ready(60, pnum):
                 log.warning("P%d retry: stationed timeout — continuing anyway", pnum)
             log.info("P%d retry: rally completed", pnum)
@@ -2525,6 +2845,7 @@ def rally_eg(device, stop_check=None):
 
     pnum = 6
     x6, y6 = EG_PRIEST_POSITIONS[5]
+    config.set_device_status(device, "Rallying Evil Guard...")
     log.info("P6: starting final EG rally at (%d,%d)", x6, y6)
 
     # If retries shifted the camera, reverse the nudge to re-center before P6
@@ -3067,3 +3388,163 @@ def mine_mithril_if_due(device, stop_check=None):
     log.info("Mithril mining due (%.0f min since last) — running between actions",
              elapsed / 60)
     mine_mithril(device, stop_check=stop_check)
+
+
+# ============================================================
+# GATHER GOLD
+# ============================================================
+
+def _set_gather_level(device, target_level):
+    """Tap +/- buttons to set the gold mine level in the search menu.
+    Deterministic approach: tap minus to floor the slider, then tap plus to target.
+    The slider range includes levels 1-6+, so 10 minus taps guarantees we hit bottom."""
+    log = get_logger("actions", device)
+
+    # Floor the slider by tapping minus enough times to reach level 1
+    for _ in range(10):
+        logged_tap(device, 320, 1140, "gather_minus_reset")
+        time.sleep(0.12)
+
+    # Tap plus (target - 1) times to reach target level from level 1
+    for _ in range(target_level - 1):
+        logged_tap(device, 965, 1140, "gather_plus_set")
+        time.sleep(0.12)
+
+    log.debug("Mine level set to %d (reset + %d plus taps)", target_level, target_level - 1)
+
+
+@timed_action("gather_gold")
+def gather_gold(device, stop_check=None):
+    """Search for a gold mine and deploy a troop to gather.
+
+    Flow: MAP -> search button -> gather tab -> set mine level -> search ->
+          tap mine on map -> Gather button -> deploy panel -> depart.
+
+    Returns True if a troop was deployed, False otherwise.
+    """
+    log = get_logger("actions", device)
+
+    if config.AUTO_HEAL_ENABLED:
+        heal_all(device)
+
+    troops = troops_avail(device)
+    if troops <= config.MIN_TROOPS_AVAILABLE:
+        log.warning("Not enough troops (have %d, need more than %d)",
+                    troops, config.MIN_TROOPS_AVAILABLE)
+        return False
+
+    if not navigate(Screen.MAP, device):
+        log.warning("Failed to navigate to map screen")
+        return False
+
+    if stop_check and stop_check():
+        return False
+
+    # Step 1: Open search menu
+    logged_tap(device, 900, 1800, "gather_search_btn")
+    timed_wait(device, lambda: False, 1.0, "gather_search_menu_open")
+
+    # Step 2: Tap gather/resource tab
+    logged_tap(device, 540, 570, "gather_tab")
+    timed_wait(device, lambda: False, 0.8, "gather_tab_load")
+
+    # Step 3: Set mine level
+    _set_gather_level(device, config.GATHER_MINE_LEVEL)
+
+    if stop_check and stop_check():
+        return False
+
+    # Step 4: Tap search
+    logged_tap(device, 670, 1390, "gather_search_execute")
+    timed_wait(
+        device,
+        lambda: check_screen(device) == Screen.MAP,
+        3, "gather_search_complete")
+
+    # Dismiss any popup
+    if check_screen(device) != Screen.MAP:
+        log.info("Popup appeared after gather search — navigating back to map")
+        if not navigate(Screen.MAP, device):
+            log.warning("Failed to dismiss popup and return to map")
+            return False
+
+    if stop_check and stop_check():
+        return False
+
+    # Step 5: Tap the mine on the map (always centered after search)
+    logged_tap(device, 540, 900, "gold_mine_on_map")
+    timed_wait(device, lambda: False, 1.5, "gold_mine_select")
+
+    # Step 6: Tap Gather button
+    logged_tap(device, 540, 1125, "gather_button")
+
+    # Step 7: Wait for deployment panel — poll for depart button
+    depart_match = None
+    depart_screen = None
+    depart_start = time.time()
+    while time.time() - depart_start < 8:
+        if stop_check and stop_check():
+            return False
+        s = load_screenshot(device)
+        if s is not None:
+            match = find_image(s, "depart.png", threshold=0.6)
+            if match is not None:
+                depart_match = match
+                depart_screen = s
+                break
+        time.sleep(0.4)
+
+    if depart_match is not None:
+        timed_wait(device, lambda: False, 1, "gather_depart_settle")
+        # Re-find depart after settle for fresh coordinates
+        s = load_screenshot(device)
+        if s is not None:
+            fresh_match = find_image(s, "depart.png", threshold=0.6)
+            if fresh_match is not None:
+                depart_match = fresh_match
+                depart_screen = s
+        _, max_loc, h, w = depart_match
+        dx, dy = TAP_OFFSETS.get("depart.png", (0, 0))
+        cx, cy = max_loc[0] + w // 2 + dx, max_loc[1] + h // 2 + dy
+        _save_click_trail(depart_screen, device, cx, cy, "depart")
+        adb_tap(device, cx, cy)
+        log.info("Gather Gold troop deployed! (depart at %d,%d)", cx, cy)
+        return True
+
+    log.warning("Failed to find depart button after 8s poll")
+    save_failure_screenshot(device, "gather_depart_fail")
+    return False
+
+
+def _run_gather_loop(device, stop_check=None):
+    """Deploy up to GATHER_MAX_TROOPS troops to gold mines.
+    Returns the number of troops successfully deployed."""
+    log = get_logger("actions", device)
+    max_troops = config.GATHER_MAX_TROOPS
+    deployed = 0
+
+    for i in range(max_troops):
+        if stop_check and stop_check():
+            break
+
+        # Ensure we're on MAP for troop count (pixel detection requires MAP)
+        if i > 0:
+            navigate(Screen.MAP, device)
+
+        troops = troops_avail(device)
+        if troops <= config.MIN_TROOPS_AVAILABLE:
+            log.info("Not enough troops for more gathers (%d available, min %d)",
+                     troops, config.MIN_TROOPS_AVAILABLE)
+            break
+
+        log.info("Deploying gather troop %d/%d", i + 1, max_troops)
+        config.set_device_status(device, f"Gathering Gold ({i+1}/{max_troops})...")
+
+        if gather_gold(device, stop_check=stop_check):
+            deployed += 1
+        else:
+            log.warning("Gather troop %d failed — stopping gather loop", i + 1)
+            break
+
+    log.info("Gather loop complete: deployed %d/%d troops", deployed, max_troops)
+    return deployed

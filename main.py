@@ -15,6 +15,7 @@ import config
 from updater import get_current_version
 from config import (set_min_troops, set_auto_heal, set_auto_restore_ap,
                      set_ap_restore_options, set_territory_config, set_eg_rally_own,
+                     set_titan_rally_own, set_gather_options, set_tower_quest_enabled,
                      running_tasks, QuestType, RallyType, Screen)
 from devices import get_devices, get_emulator_instances, auto_connect_emulators
 from navigation import check_screen, navigate
@@ -23,7 +24,8 @@ from troops import troops_avail, heal_all, read_panel_statuses
 from actions import (attack, phantom_clash_attack, reinforce_throne, target, check_quests, teleport,
                      rally_titan, rally_eg, search_eg_reset, join_rally,
                      join_war_rallies, reset_quest_tracking, reset_rally_blacklist,
-                     test_eg_positions, mine_mithril, mine_mithril_if_due)
+                     test_eg_positions, mine_mithril, mine_mithril_if_due,
+                     gather_gold, occupy_tower)
 from territory import (attack_territory, auto_occupy_loop,
                        open_territory_manager, sample_specific_squares)
 from botlog import get_logger
@@ -54,8 +56,13 @@ DEFAULTS = {
     "mode": "bl",
     "verbose_logging": False,
     "eg_rally_own": True,
+    "titan_rally_own": True,
     "mithril_interval": 19,
     "web_dashboard": False,
+    "gather_enabled": True,
+    "gather_mine_level": 4,
+    "gather_max_troops": 3,
+    "tower_quest_enabled": False,
 }
 
 def load_settings():
@@ -109,6 +116,8 @@ TASK_FUNCTIONS = {
     "Check Screen": check_screen,
     "Sample Specific Squares": sample_specific_squares,
     "Mine Mithril": mine_mithril,
+    "Gather Gold": gather_gold,
+    "Reinforce Tower": occupy_tower,
 }
 
 # ============================================================
@@ -168,15 +177,19 @@ def run_auto_quest(device, stop_event):
                 if not navigate(Screen.MAP, device):
                     dlog.warning("Cannot reach map screen — retrying in 10s")
                     config.set_device_status(device, "Navigating...")
-                    time.sleep(10)
+                    for _ in range(10):
+                        if stop_check():
+                            break
+                        time.sleep(1)
                     continue
+                read_panel_statuses(device)
                 troops = troops_avail(device)
                 if troops > config.MIN_TROOPS_AVAILABLE:
-                    config.set_device_status(device, "Checking quests...")
+                    config.set_device_status(device, "Checking Quests...")
                     check_quests(device, stop_check=stop_check)
                 else:
                     dlog.warning("Not enough troops for quests")
-                    config.set_device_status(device, "Waiting for troops...")
+                    config.set_device_status(device, "Waiting for Troops...")
                     if _smart_wait_for_troops(device, stop_check, dlog):
                         continue  # Troop freed up — retry immediately
             if stop_check():
@@ -184,7 +197,7 @@ def run_auto_quest(device, stop_event):
             # Show "Waiting for troops" if troops are low, otherwise "Idle"
             troops = troops_avail(device) if check_screen(device) == Screen.MAP else 0
             if troops <= config.MIN_TROOPS_AVAILABLE:
-                config.set_device_status(device, "Waiting for troops...")
+                config.set_device_status(device, "Waiting for Troops...")
             else:
                 config.set_device_status(device, "Idle")
             for _ in range(10):
@@ -215,7 +228,10 @@ def run_auto_titan(device, stop_event, interval, variation):
                 if not navigate(Screen.MAP, device):
                     dlog.warning("Cannot reach map screen — retrying")
                     config.set_device_status(device, "Navigating...")
-                    time.sleep(10)
+                    for _ in range(10):
+                        if stop_check():
+                            break
+                        time.sleep(1)
                     continue
                 troops = troops_avail(device)
                 if troops > config.MIN_TROOPS_AVAILABLE:
@@ -224,12 +240,12 @@ def run_auto_titan(device, stop_event, interval, variation):
                         search_eg_reset(device)
                         if stop_check():
                             break
-                    config.set_device_status(device, "Rallying titan...")
+                    config.set_device_status(device, "Rallying Titan...")
                     rally_titan(device)
                     rally_count += 1
                 else:
                     dlog.warning("Not enough troops for Rally Titan")
-                    config.set_device_status(device, "Waiting for troops...")
+                    config.set_device_status(device, "Waiting for Troops...")
                     if _smart_wait_for_troops(device, stop_check, dlog):
                         continue  # Troop freed up — retry immediately
             if stop_check():
@@ -258,15 +274,18 @@ def run_auto_groot(device, stop_event, interval, variation):
                 if not navigate(Screen.MAP, device):
                     dlog.warning("Cannot reach map screen — retrying")
                     config.set_device_status(device, "Navigating...")
-                    time.sleep(10)
+                    for _ in range(10):
+                        if stop_check():
+                            break
+                        time.sleep(1)
                     continue
                 troops = troops_avail(device)
                 if troops > config.MIN_TROOPS_AVAILABLE:
-                    config.set_device_status(device, "Joining groot rally...")
+                    config.set_device_status(device, "Joining Groot Rally...")
                     join_rally(RallyType.GROOT, device)
                 else:
                     dlog.warning("Not enough troops for Rally Groot")
-                    config.set_device_status(device, "Waiting for troops...")
+                    config.set_device_status(device, "Waiting for Troops...")
                     if _smart_wait_for_troops(device, stop_check, dlog):
                         continue  # Troop freed up — retry immediately
             if stop_check():
@@ -280,7 +299,7 @@ def run_auto_groot(device, stop_event, interval, variation):
 
 def run_auto_occupy(device, stop_event):
     config.auto_occupy_running = True
-    config.set_device_status(device, "Occupying towers...")
+    config.set_device_status(device, "Occupying Towers...")
 
     # Monitor stop event in background and set config flag when stopped
     def monitor():
@@ -350,7 +369,7 @@ def run_auto_pass(device, stop_event, pass_mode, pass_interval, variation):
                 mine_mithril_if_due(device, stop_check=stop_check)
                 if stop_check():
                     break
-                config.set_device_status(device, "Pass battle...")
+                config.set_device_status(device, "Pass Battle...")
                 result = target(device)
                 if result == "no_marker":
                     dlog.warning("*** TARGET NOT SET! ***")
@@ -372,7 +391,7 @@ def run_auto_pass(device, stop_event, pass_mode, pass_interval, variation):
                 time.sleep(2)
             elif action == "attack":
                 dlog.info("Enemy owns pass - joining war rallies continuously")
-                config.set_device_status(device, "Joining war rallies...")
+                config.set_device_status(device, "Joining War Rallies...")
                 while not stop_check():
                     with lock:
                         troops = troops_avail(device)
@@ -405,7 +424,7 @@ def run_auto_reinforce(device, stop_event, interval, variation):
                 mine_mithril_if_due(device, stop_check=stop_check)
                 if stop_check():
                     break
-                config.set_device_status(device, "Reinforcing throne...")
+                config.set_device_status(device, "Reinforcing Throne...")
                 reinforce_throne(device)
             if stop_check():
                 break
@@ -426,7 +445,7 @@ def run_auto_mithril(device, stop_event):
     try:
         while not stop_check():
             with lock:
-                config.set_device_status(device, "Mining mithril...")
+                config.set_device_status(device, "Mining Mithril...")
                 mine_mithril_if_due(device, stop_check=stop_check)
             if stop_check():
                 break
@@ -1043,7 +1062,7 @@ def create_gui():
             bl_mode_btn.config(bg=COLOR_MODE_INACTIVE, fg="#555")
         else:
             _layout_bl()
-            bl_settings_row.pack(fill=tk.X, pady=(4, 0), in_=settings_frame, before=rw_settings_row)
+            bl_settings_row.pack(fill=tk.X, pady=(2, 0), in_=intervals_group, before=rw_settings_row)
             bl_mode_btn.config(bg=COLOR_MODE_ACTIVE, fg="white")
             rw_mode_btn.config(bg=COLOR_MODE_INACTIVE, fg="#555")
 
@@ -1057,18 +1076,31 @@ def create_gui():
     _layout_bl()
 
     # ============================================================
-    # SETTINGS BAR (compact, mode-aware)
+    # SETTINGS (grouped, mode-aware)
     # ============================================================
+
+    COLOR_GROUP_HEADER = "#666"
+
+    def _make_group(parent, title):
+        """Create a settings group frame with a header label."""
+        frame = tk.Frame(parent, bg=COLOR_SECTION_BG)
+        tk.Label(frame, text=title, font=(_FONT_FAMILY, 8, "bold"),
+                 bg=COLOR_SECTION_BG, fg=COLOR_GROUP_HEADER,
+                 anchor=tk.W).pack(fill=tk.X)
+        return frame
 
     settings_frame = tk.Frame(window, bg=COLOR_SECTION_BG, padx=10, pady=6)
     settings_frame.pack(fill=tk.X, padx=PAD_X, pady=(6, 4))
 
     tk.Label(settings_frame, text="\u2699  Settings", font=(_FONT_FAMILY, 9, "bold"),
-             bg=COLOR_SECTION_BG, fg="#444", anchor=tk.W).pack(fill=tk.X, pady=(0, 4))
+             bg=COLOR_SECTION_BG, fg="#444", anchor=tk.W).pack(fill=tk.X, pady=(0, 2))
 
-    # Row 1: Auto Heal + Restore AP + EG Rally Own + Verbose
-    row1 = tk.Frame(settings_frame, bg=COLOR_SECTION_BG)
-    row1.pack(fill=tk.X)
+    # ── General ──
+    general_group = _make_group(settings_frame, "General")
+    general_group.pack(fill=tk.X, pady=(2, 4))
+
+    general_row = tk.Frame(general_group, bg=COLOR_SECTION_BG)
+    general_row.pack(fill=tk.X)
 
     auto_heal_var = tk.BooleanVar(value=settings["auto_heal"])
     set_auto_heal(settings["auto_heal"])
@@ -1077,13 +1109,10 @@ def create_gui():
         set_auto_heal(auto_heal_var.get())
         save_current_settings()
 
-    tk.Checkbutton(row1, text="Auto Heal", variable=auto_heal_var,
+    tk.Checkbutton(general_row, text="Auto Heal", variable=auto_heal_var,
                    command=toggle_auto_heal, font=(_FONT_FAMILY, 9),
                    bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.LEFT)
 
-    tk.Frame(row1, width=10, bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
-
-    # Verbose logging toggle
     verbose_var = tk.BooleanVar(value=settings.get("verbose_logging", False))
     from botlog import set_console_verbose
     set_console_verbose(verbose_var.get())
@@ -1092,16 +1121,10 @@ def create_gui():
         set_console_verbose(verbose_var.get())
         save_current_settings()
 
-    tk.Checkbutton(row1, text="Verbose Log", variable=verbose_var,
-                   command=toggle_verbose, font=(_FONT_FAMILY, 9),
-                   bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.RIGHT)
-
-    # Web Dashboard toggle
     web_dash_var = tk.BooleanVar(value=settings.get("web_dashboard", False))
 
     def toggle_web_dashboard():
         if web_dash_var.get():
-            # Check if flask is installed
             import importlib.util
             if importlib.util.find_spec("flask") is None:
                 if messagebox.askyesno(
@@ -1136,15 +1159,110 @@ def create_gui():
                     f"http://{_ip}:8080")
         save_current_settings()
 
-    tk.Checkbutton(row1, text="Web", variable=web_dash_var,
+    tk.Checkbutton(general_row, text="Web", variable=web_dash_var,
                    command=toggle_web_dashboard, font=(_FONT_FAMILY, 9),
                    bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.RIGHT)
+    tk.Checkbutton(general_row, text="Verbose Log", variable=verbose_var,
+                   command=toggle_verbose, font=(_FONT_FAMILY, 9),
+                   bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.RIGHT)
+
+    # ── Auto Quest ──
+    aq_group = _make_group(settings_frame, "Auto Quest")
+    aq_group.pack(fill=tk.X, pady=(0, 4))
+
+    aq_row1 = tk.Frame(aq_group, bg=COLOR_SECTION_BG)
+    aq_row1.pack(fill=tk.X)
+
+    eg_rally_own_var = tk.BooleanVar(value=settings.get("eg_rally_own", True))
+    set_eg_rally_own(settings.get("eg_rally_own", True))
+
+    def toggle_eg_rally_own():
+        set_eg_rally_own(eg_rally_own_var.get())
+        save_current_settings()
+
+    tk.Checkbutton(aq_row1, text="Rally Own EG", variable=eg_rally_own_var,
+                   command=toggle_eg_rally_own, font=(_FONT_FAMILY, 9),
+                   bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.LEFT)
+
+    titan_rally_own_var = tk.BooleanVar(value=settings.get("titan_rally_own", True))
+    set_titan_rally_own(settings.get("titan_rally_own", True))
+
+    def toggle_titan_rally_own():
+        set_titan_rally_own(titan_rally_own_var.get())
+        save_current_settings()
+
+    tk.Checkbutton(aq_row1, text="Rally Own Titans", variable=titan_rally_own_var,
+                   command=toggle_titan_rally_own, font=(_FONT_FAMILY, 9),
+                   bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.LEFT, padx=(6, 0))
+
+    aq_row2 = tk.Frame(aq_group, bg=COLOR_SECTION_BG)
+    aq_row2.pack(fill=tk.X, pady=(2, 0))
+
+    gather_enabled_var = tk.BooleanVar(value=settings.get("gather_enabled", True))
+    gather_mine_level_var = tk.StringVar(value=str(settings.get("gather_mine_level", 4)))
+    gather_max_troops_var = tk.StringVar(value=str(settings.get("gather_max_troops", 3)))
+    set_gather_options(settings.get("gather_enabled", True),
+                       settings.get("gather_mine_level", 4),
+                       settings.get("gather_max_troops", 3))
+
+    def update_gather_options():
+        try:
+            level = int(gather_mine_level_var.get())
+            max_t = int(gather_max_troops_var.get())
+            set_gather_options(gather_enabled_var.get(), level, max_t)
+            save_current_settings()
+        except ValueError:
+            pass
+
+    tk.Checkbutton(aq_row2, text="Gather Gold", variable=gather_enabled_var,
+                   command=update_gather_options, font=(_FONT_FAMILY, 9),
+                   bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.LEFT)
+    tk.Label(aq_row2, text="Mine Lv", font=(_FONT_FAMILY, 8),
+             bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT, padx=(8, 0))
+    ttk.Combobox(aq_row2, textvariable=gather_mine_level_var,
+                 values=["4", "5", "6"], width=3, state="readonly",
+                 font=(_FONT_FAMILY, 8)).pack(side=tk.LEFT, padx=(2, 4))
+    tk.Label(aq_row2, text="Max Troops", font=(_FONT_FAMILY, 8),
+             bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT, padx=(4, 0))
+    ttk.Combobox(aq_row2, textvariable=gather_max_troops_var,
+                 values=["1", "2", "3", "4", "5"], width=3, state="readonly",
+                 font=(_FONT_FAMILY, 8)).pack(side=tk.LEFT, padx=(2, 4))
+    tk.Button(aq_row2, text="Set", command=update_gather_options,
+              font=(_FONT_FAMILY, 7)).pack(side=tk.LEFT, padx=(2, 0))
+
+    # Tower quest toggle
+    aq_row3 = tk.Frame(aq_group, bg=COLOR_SECTION_BG)
+    aq_row3.pack(fill=tk.X, pady=(2, 0))
+
+    tower_quest_var = tk.BooleanVar(value=settings.get("tower_quest_enabled", False))
+    set_tower_quest_enabled(settings.get("tower_quest_enabled", False))
+
+    def update_tower_quest():
+        enabled = tower_quest_var.get()
+        if enabled:
+            from tkinter import messagebox
+            messagebox.showinfo("Tower Quest Setup",
+                                "Mark your hive tower with the target marker in-game, then click OK.")
+        set_tower_quest_enabled(enabled)
+        save_current_settings()
+
+    tk.Checkbutton(aq_row3, text="Tower Quest", variable=tower_quest_var,
+                   command=update_tower_quest, font=(_FONT_FAMILY, 9),
+                   bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.LEFT)
+    tk.Label(aq_row3, text="(mark tower with target marker first)", font=(_FONT_FAMILY, 8),
+             bg=COLOR_SECTION_BG, fg="#888").pack(side=tk.LEFT, padx=(4, 0))
+
+    # ── AP Restoration ──
+    ap_group = _make_group(settings_frame, "AP Restoration")
+    ap_group.pack(fill=tk.X, pady=(0, 4))
+
+    ap_toggle_row = tk.Frame(ap_group, bg=COLOR_SECTION_BG)
+    ap_toggle_row.pack(fill=tk.X)
 
     auto_restore_ap_var = tk.BooleanVar(value=settings["auto_restore_ap"])
     set_auto_restore_ap(settings["auto_restore_ap"])
 
-    # AP restore source options (shown when Auto Restore AP is checked)
-    ap_settings_row = tk.Frame(settings_frame, bg=COLOR_SECTION_BG)
+    ap_settings_row = tk.Frame(ap_group, bg=COLOR_SECTION_BG)
 
     ap_use_free_var = tk.BooleanVar(value=settings["ap_use_free"])
     ap_use_potions_var = tk.BooleanVar(value=settings["ap_use_potions"])
@@ -1152,7 +1270,6 @@ def create_gui():
     ap_use_gems_var = tk.BooleanVar(value=settings["ap_use_gems"])
     ap_gem_limit_var = tk.StringVar(value=str(settings["ap_gem_limit"]))
 
-    # Apply initial config
     set_ap_restore_options(
         settings["ap_use_free"], settings["ap_use_potions"],
         settings["ap_allow_large_potions"], settings["ap_use_gems"],
@@ -1188,42 +1305,32 @@ def create_gui():
         enabled = auto_restore_ap_var.get()
         set_auto_restore_ap(enabled)
         if enabled:
-            ap_settings_row.pack(fill=tk.X, pady=(2, 0), after=row1)
+            ap_settings_row.pack(fill=tk.X, pady=(2, 0))
         else:
             ap_settings_row.pack_forget()
         window.update_idletasks()
         window.geometry(f"{WIN_WIDTH}x{window.winfo_reqheight()}")
         save_current_settings()
 
-    tk.Checkbutton(row1, text="Auto Restore AP", variable=auto_restore_ap_var,
+    tk.Checkbutton(ap_toggle_row, text="Auto Restore AP", variable=auto_restore_ap_var,
                    command=toggle_auto_restore_ap, font=(_FONT_FAMILY, 9),
                    bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.LEFT)
 
-    # EG rally own toggle
-    eg_rally_own_var = tk.BooleanVar(value=settings.get("eg_rally_own", True))
-    set_eg_rally_own(settings.get("eg_rally_own", True))
-
-    def toggle_eg_rally_own():
-        set_eg_rally_own(eg_rally_own_var.get())
-        save_current_settings()
-
-    tk.Checkbutton(row1, text="Rally Own EG", variable=eg_rally_own_var,
-                   command=toggle_eg_rally_own, font=(_FONT_FAMILY, 9),
-                   bg=COLOR_SECTION_BG, activebackground=COLOR_SECTION_BG).pack(side=tk.LEFT)
-
-    # Show AP settings row if auto restore is already enabled
     if settings["auto_restore_ap"]:
-        ap_settings_row.pack(fill=tk.X, pady=(2, 0), after=row1)
+        ap_settings_row.pack(fill=tk.X, pady=(2, 0))
 
-    # Row 1b: Min Troops + Randomize
-    row1b = tk.Frame(settings_frame, bg=COLOR_SECTION_BG)
-    row1b.pack(fill=tk.X, pady=(2, 0))
+    # ── Troops ──
+    troops_group = _make_group(settings_frame, "Troops")
+    troops_group.pack(fill=tk.X, pady=(0, 4))
 
-    tk.Label(row1b, text="Min Troops:", font=(_FONT_FAMILY, 9),
+    troops_row = tk.Frame(troops_group, bg=COLOR_SECTION_BG)
+    troops_row.pack(fill=tk.X)
+
+    tk.Label(troops_row, text="Min Troops:", font=(_FONT_FAMILY, 9),
              bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
     min_troops_var = tk.StringVar(value=str(settings["min_troops"]))
     set_min_troops(settings["min_troops"])
-    tk.Entry(row1b, textvariable=min_troops_var, width=6,
+    tk.Entry(troops_row, textvariable=min_troops_var, width=4, justify="center",
              font=(_FONT_FAMILY, 9)).pack(side=tk.LEFT, padx=(4, 4))
 
     def update_min_troops():
@@ -1233,22 +1340,23 @@ def create_gui():
         except:
             pass
 
-    tk.Button(row1b, text="Set", command=update_min_troops,
+    tk.Button(troops_row, text="Set", command=update_min_troops,
               font=(_FONT_FAMILY, 8)).pack(side=tk.LEFT)
 
     variation_var = tk.StringVar(value=str(settings["variation"]))
-    tk.Frame(row1b, width=20, bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
-    tk.Label(row1b, text="Randomize \u00b1", font=(_FONT_FAMILY, 9),
-             bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
-    tk.Entry(row1b, textvariable=variation_var, width=4, justify="center",
+    tk.Label(troops_row, text="Randomize \u00b1", font=(_FONT_FAMILY, 9),
+             bg=COLOR_SECTION_BG).pack(side=tk.LEFT, padx=(16, 0))
+    tk.Entry(troops_row, textvariable=variation_var, width=4, justify="center",
              font=(_FONT_FAMILY, 9)).pack(side=tk.LEFT, padx=(4, 1))
-    tk.Label(row1b, text="s", font=(_FONT_FAMILY, 9),
+    tk.Label(troops_row, text="s", font=(_FONT_FAMILY, 9),
              bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
 
-    tk.Frame(settings_frame, height=1, bg="#ccc").pack(fill=tk.X, pady=(4, 4))
+    # ── Intervals ──
+    intervals_group = _make_group(settings_frame, "Intervals")
+    intervals_group.pack(fill=tk.X, pady=(0, 4))
 
-    # Row 2 (BL): Pass mode & interval
-    bl_settings_row = tk.Frame(settings_frame, bg=COLOR_SECTION_BG)
+    # Pass mode & interval (BL only)
+    bl_settings_row = tk.Frame(intervals_group, bg=COLOR_SECTION_BG)
 
     tk.Label(bl_settings_row, text="Pass", font=(_FONT_FAMILY, 9),
              bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
@@ -1260,8 +1368,8 @@ def create_gui():
     tk.Label(bl_settings_row, text="s", font=(_FONT_FAMILY, 9),
              bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
 
-    # Row 2: Titan / Groot / Reinforce intervals (always visible)
-    rw_settings_row = tk.Frame(settings_frame, bg=COLOR_SECTION_BG)
+    # Titan / Groot / Reinforce / Mithril intervals (always visible)
+    rw_settings_row = tk.Frame(intervals_group, bg=COLOR_SECTION_BG)
 
     tk.Label(rw_settings_row, text="Titan", font=(_FONT_FAMILY, 9),
              bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
@@ -1270,7 +1378,7 @@ def create_gui():
     tk.Label(rw_settings_row, text="s", font=(_FONT_FAMILY, 9),
              bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
 
-    tk.Frame(rw_settings_row, width=16, bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
+    tk.Frame(rw_settings_row, width=12, bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
 
     tk.Label(rw_settings_row, text="Groot", font=(_FONT_FAMILY, 9),
              bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
@@ -1279,7 +1387,7 @@ def create_gui():
     tk.Label(rw_settings_row, text="s", font=(_FONT_FAMILY, 9),
              bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
 
-    tk.Frame(rw_settings_row, width=16, bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
+    tk.Frame(rw_settings_row, width=12, bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
 
     tk.Label(rw_settings_row, text="Reinf", font=(_FONT_FAMILY, 9),
              bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
@@ -1288,7 +1396,7 @@ def create_gui():
     tk.Label(rw_settings_row, text="s", font=(_FONT_FAMILY, 9),
              bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
 
-    tk.Frame(rw_settings_row, width=16, bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
+    tk.Frame(rw_settings_row, width=12, bg=COLOR_SECTION_BG).pack(side=tk.LEFT)
 
     tk.Label(rw_settings_row, text="Mithril", font=(_FONT_FAMILY, 9),
              bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
@@ -1297,18 +1405,16 @@ def create_gui():
     tk.Label(rw_settings_row, text="m", font=(_FONT_FAMILY, 9),
              bg=COLOR_SECTION_BG, fg="#555").pack(side=tk.LEFT)
 
-    # Pack settings rows (intervals always visible, BL pass row only in BL mode)
-    bl_settings_row.pack(fill=tk.X, pady=(4, 0))
-    rw_settings_row.pack(fill=tk.X, pady=(4, 0))
+    bl_settings_row.pack(fill=tk.X, pady=(2, 0))
+    rw_settings_row.pack(fill=tk.X, pady=(2, 0))
+
+    # (Gather Gold moved into Auto Quest group above)
 
     # Apply saved mode (hides BL-only widgets if Home Server)
     if settings["mode"] == "rw":
         switch_mode("rw")
 
-    # ============================================================
-    # TERRITORY SETTINGS (collapsed by default)
-    # ============================================================
-
+    # ── Territory (collapsible) ──
     territory_container = tk.Frame(window, bg=COLOR_BG)
     territory_container.pack(fill=tk.X, padx=PAD_X, pady=(0, 2))
 
@@ -1334,7 +1440,6 @@ def create_gui():
                                relief=tk.FLAT, bg=COLOR_SECTION_BG, activebackground="#ddd")
     territory_btn.pack(fill=tk.X)
 
-    # Territory content
     teams_row = tk.Frame(territory_inner, bg=COLOR_SECTION_BG)
     teams_row.pack(fill=tk.X, pady=2)
     tk.Label(teams_row, text="My Team:", font=(_FONT_FAMILY, 9),
@@ -1405,8 +1510,13 @@ def create_gui():
             "mode": mode_var.get(),
             "verbose_logging": verbose_var.get(),
             "eg_rally_own": eg_rally_own_var.get(),
+            "titan_rally_own": titan_rally_own_var.get(),
             "mithril_interval": int(mithril_interval_var.get()) if mithril_interval_var.get().isdigit() else 19,
             "web_dashboard": web_dash_var.get(),
+            "gather_enabled": gather_enabled_var.get(),
+            "gather_mine_level": int(gather_mine_level_var.get()) if gather_mine_level_var.get().isdigit() else 4,
+            "gather_max_troops": int(gather_max_troops_var.get()) if gather_max_troops_var.get().isdigit() else 3,
+            "tower_quest_enabled": tower_quest_var.get(),
             "device_troops": dt,
         })
         save_settings(existing)
@@ -1520,6 +1630,7 @@ def create_gui():
     add_task_row(farm_tab, "Join Evil Guard Rally", 30)
     add_task_row(farm_tab, "Join Groot Rally", 30)
     add_task_row(farm_tab, "Heal All", 30)
+    add_task_row(farm_tab, "Gather Gold", 60)
 
     # War tab
     add_task_row(war_tab, "Target", 30)
@@ -1834,8 +1945,12 @@ def create_gui():
                 enemy_var.set(s["enemy_team"])
                 verbose_var.set(s.get("verbose_logging", False))
                 eg_rally_own_var.set(s.get("eg_rally_own", True))
+                titan_rally_own_var.set(s.get("titan_rally_own", True))
                 mithril_interval_var.set(str(s.get("mithril_interval", 19)))
                 web_dash_var.set(s.get("web_dashboard", False))
+                gather_enabled_var.set(s.get("gather_enabled", True))
+                gather_mine_level_var.set(str(s.get("gather_mine_level", 4)))
+                gather_max_troops_var.set(str(s.get("gather_max_troops", 3)))
                 mode_var.set(s.get("mode", "bl"))
         except Exception:
             pass

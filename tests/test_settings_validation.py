@@ -25,8 +25,13 @@ DEFAULTS = {
     "mode": "bl",
     "verbose_logging": False,
     "eg_rally_own": True,
+    "titan_rally_own": True,
     "mithril_interval": 19,
     "web_dashboard": False,
+    "gather_enabled": True,
+    "gather_mine_level": 4,
+    "gather_max_troops": 3,
+    "tower_quest_enabled": False,
 }
 
 
@@ -106,6 +111,8 @@ class TestIntRangeValidation:
         ("min_troops", -1),
         ("titan_interval", 0),
         ("variation", -5),
+        ("gather_mine_level", 3),
+        ("gather_max_troops", 0),
     ])
     def test_int_below_min(self, key, value):
         settings = {**DEFAULTS, key: value}
@@ -117,6 +124,8 @@ class TestIntRangeValidation:
     @pytest.mark.parametrize("key,value", [
         ("ap_gem_limit", 5000),
         ("min_troops", 6),
+        ("gather_mine_level", 7),
+        ("gather_max_troops", 6),
     ])
     def test_int_above_max(self, key, value):
         settings = {**DEFAULTS, key: value}
@@ -151,6 +160,10 @@ class TestIntRangeValidation:
         ("min_troops", 5),
         ("titan_interval", 1),
         ("variation", 0),
+        ("gather_mine_level", 4),
+        ("gather_mine_level", 6),
+        ("gather_max_troops", 1),
+        ("gather_max_troops", 5),
     ])
     def test_int_at_boundary(self, key, value):
         settings = {**DEFAULTS, key: value}

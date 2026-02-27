@@ -22,22 +22,28 @@ def mock_device_b():
 def reset_quest_state():
     """Clear quest tracking and rally blacklist dicts before each test."""
     from actions import (
-        _quest_rallies_pending, _quest_last_seen, _quest_pending_since,
+        _quest_rallies_pending, _quest_last_seen, _quest_target,
+        _quest_pending_since,
         _rally_owner_blacklist, _rally_owner_failures,
         _last_depart_slot, _quest_rally_slots,
+        _tower_quest_state,
     )
     _quest_rallies_pending.clear()
     _quest_last_seen.clear()
+    _quest_target.clear()
     _quest_pending_since.clear()
     _rally_owner_blacklist.clear()
     _rally_owner_failures.clear()
     _last_depart_slot.clear()
     _quest_rally_slots.clear()
+    _tower_quest_state.clear()
     yield
     _quest_rallies_pending.clear()
     _quest_last_seen.clear()
+    _quest_target.clear()
     _quest_pending_since.clear()
     _rally_owner_blacklist.clear()
     _rally_owner_failures.clear()
     _last_depart_slot.clear()
     _quest_rally_slots.clear()
+    _tower_quest_state.clear()

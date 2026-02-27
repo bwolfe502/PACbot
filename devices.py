@@ -170,9 +170,11 @@ def get_emulator_instances():
 # ============================================================
 
 def _get_emulator_instances_windows(devices):
-    """Map ADB devices to emulator window names using Win32 APIs.
+    """Map ADB devices to emulator window names via network connections.
 
-    Supports BlueStacks (HD-Player) and MuMu Player (MuMuVMMHeadless / MuMuPlayer).
+    For each emulator window PID, checks which port it LISTENs on, then
+    matches that port to ADB device IDs (both ``127.0.0.1:port`` and
+    ``emulator-N`` where port = N+1).
     """
     try:
         import win32gui
@@ -185,7 +187,6 @@ def _get_emulator_instances_windows(devices):
     try:
         emulator_windows = {}
 
-        # Process name patterns for supported emulators
         EMULATOR_PROCESS_NAMES = [
             "hd-player",       # BlueStacks
             "bluestacks",      # BlueStacks (alt)
@@ -209,49 +210,55 @@ def _get_emulator_instances_windows(devices):
                                     "name": window_text,
                                     "process": process_name
                                 }
-                                _log.debug("Found emulator window: '%s' (PID: %d, Process: %s)",
-                                          window_text, pid, process_name)
                     except (psutil.NoSuchProcess, psutil.AccessDenied):
                         pass
                 except Exception:
                     pass
 
         win32gui.EnumWindows(enum_callback, emulator_windows)
-        _log.debug("Total emulator windows found: %d", len(emulator_windows))
 
-        device_map = {}
-        _log.debug("Found devices: %s", devices)
-
-        for device in devices:
+        # Build PID → ADB port mapping from network connections
+        pid_to_port = {}
+        for pid in emulator_windows:
             try:
-                if ":" in device:
-                    port = device.split(":")[1]
+                proc = psutil.Process(pid)
+                for conn in proc.net_connections(kind="tcp4"):
+                    if conn.status == "LISTEN" and conn.laddr.ip == "127.0.0.1":
+                        pid_to_port[pid] = conn.laddr.port
+                        break
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
 
-                    for pid, info in emulator_windows.items():
-                        try:
-                            proc = psutil.Process(pid)
-                            cmdline = " ".join(proc.cmdline())
+        # Build device → expected ADB port
+        device_ports = {}
+        for device in devices:
+            if ":" in device:
+                try:
+                    device_ports[device] = int(device.split(":")[1])
+                except (IndexError, ValueError):
+                    pass
+            elif device.startswith("emulator-"):
+                try:
+                    device_ports[device] = int(device.split("-")[1]) + 1
+                except (IndexError, ValueError):
+                    pass
 
-                            # BlueStacks: port in command line args
-                            if f"-adb-port {port}" in cmdline or f"--adb-port {port}" in cmdline:
-                                device_map[device] = info["name"]
-                                _log.debug("Mapped %s -> %s (via port %s)", device, info['name'], port)
-                                break
-
-                            # MuMu: port in command line args
-                            if f"--adb_port {port}" in cmdline or f"-adb_port {port}" in cmdline:
-                                device_map[device] = info["name"]
-                                _log.debug("Mapped %s -> %s (via port %s)", device, info['name'], port)
-                                break
-                        except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
-                            continue
-
-                if device not in device_map:
-                    device_map[device] = device
-                    _log.debug("No window found for %s, using device ID", device)
-            except Exception as e:
-                _log.warning("Error mapping %s: %s", device, e)
+        # Match devices to windows via port
+        device_map = {}
+        for device in devices:
+            port = device_ports.get(device)
+            if port:
+                for pid, listen_port in pid_to_port.items():
+                    if listen_port == port:
+                        device_map[device] = emulator_windows[pid]["name"]
+                        break
+            if device not in device_map:
                 device_map[device] = device
+
+        mapped = {d: n for d, n in device_map.items() if n != d}
+        if mapped:
+            _log.debug("Window mapping: %s",
+                       ", ".join(f"{d} -> {n}" for d, n in mapped.items()))
 
         return device_map
 

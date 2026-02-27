@@ -28,7 +28,8 @@ from flask import Flask, render_template, request, redirect, url_for, jsonify
 import config
 from config import (running_tasks, QuestType, RallyType, Screen,
                      set_min_troops, set_auto_heal, set_auto_restore_ap,
-                     set_ap_restore_options, set_territory_config, set_eg_rally_own)
+                     set_ap_restore_options, set_territory_config, set_eg_rally_own,
+                     set_titan_rally_own)
 from devices import get_devices, get_emulator_instances, auto_connect_emulators
 from navigation import check_screen
 from vision import adb_tap, load_screenshot, read_ap, warmup_ocr
@@ -38,7 +39,7 @@ from actions import (attack, phantom_clash_attack, reinforce_throne, target,
                      search_eg_reset, join_rally, join_war_rallies,
                      reset_quest_tracking, reset_rally_blacklist,
                      mine_mithril, mine_mithril_if_due,
-                     get_quest_tracking_state)
+                     get_quest_tracking_state, occupy_tower)
 from territory import attack_territory, sample_specific_squares
 from botlog import get_logger
 
@@ -67,17 +68,36 @@ TASK_FUNCTIONS = {
     "Check Screen": check_screen,
     "Sample Specific Squares": sample_specific_squares,
     "Mine Mithril": mine_mithril,
+    "Reinforce Tower": occupy_tower,
 }
 
-# Auto-mode names (ordered for display)
-AUTO_MODES = [
-    {"key": "auto_quest",     "label": "Auto Quest",       "has_interval": False},
-    {"key": "auto_titan",     "label": "Rally Titans",     "has_interval": True, "setting": "titan_interval"},
-    {"key": "auto_groot",     "label": "Join Groot",       "has_interval": True, "setting": "groot_interval"},
-    {"key": "auto_pass",      "label": "Pass Battle",      "has_interval": True, "setting": "pass_interval"},
-    {"key": "auto_occupy",    "label": "Occupy Towers",    "has_interval": False},
-    {"key": "auto_reinforce", "label": "Reinforce Throne", "has_interval": True, "setting": "reinforce_interval"},
-    {"key": "auto_mithril",   "label": "Mine Mithril",     "has_interval": False},
+# Auto-mode names grouped by category, per game mode
+# Broken Lands: Combat first, then Farming
+# Home Server: Events, Farming, Combat
+AUTO_MODES_BL = [
+    {"group": "Combat", "modes": [
+        {"key": "auto_pass",      "label": "Pass Battle"},
+        {"key": "auto_occupy",    "label": "Occupy Towers"},
+        {"key": "auto_reinforce", "label": "Reinforce Throne"},
+    ]},
+    {"group": "Farming", "modes": [
+        {"key": "auto_quest",     "label": "Auto Quest"},
+        {"key": "auto_titan",     "label": "Rally Titans"},
+        {"key": "auto_mithril",   "label": "Mine Mithril"},
+    ]},
+]
+
+AUTO_MODES_HS = [
+    {"group": "Events", "modes": [
+        {"key": "auto_groot",     "label": "Join Groot"},
+    ]},
+    {"group": "Farming", "modes": [
+        {"key": "auto_titan",     "label": "Rally Titans"},
+        {"key": "auto_mithril",   "label": "Mine Mithril"},
+    ]},
+    {"group": "Combat", "modes": [
+        {"key": "auto_reinforce", "label": "Reinforce Throne"},
+    ]},
 ]
 
 # One-shot action names (grouped for display)
@@ -133,15 +153,18 @@ def run_auto_quest(device, stop_event):
                     if not navigate(Screen.MAP, device):
                         dlog.warning("Cannot reach map — retrying in 10s")
                         config.set_device_status(device, "Navigating...")
-                        time.sleep(10)
+                        for _ in range(10):
+                            if stop_check():
+                                break
+                            time.sleep(1)
                         continue
                 troops = troops_avail(device)
                 if troops > config.MIN_TROOPS_AVAILABLE:
-                    config.set_device_status(device, "Checking quests...")
+                    config.set_device_status(device, "Checking Quests...")
                     check_quests(device, stop_check=stop_check)
                 else:
                     dlog.warning("Not enough troops for quests")
-                    config.set_device_status(device, "Waiting for troops...")
+                    config.set_device_status(device, "Waiting for Troops...")
                     if _smart_wait_for_troops(device, stop_check, dlog):
                         continue
             if stop_check():
@@ -171,7 +194,10 @@ def run_auto_titan(device, stop_event, interval, variation):
                 from navigation import navigate
                 if not navigate(Screen.MAP, device):
                     config.set_device_status(device, "Navigating...")
-                    time.sleep(10)
+                    for _ in range(10):
+                        if stop_check():
+                            break
+                        time.sleep(1)
                     continue
                 troops = troops_avail(device)
                 if troops > config.MIN_TROOPS_AVAILABLE:
@@ -179,11 +205,11 @@ def run_auto_titan(device, stop_event, interval, variation):
                         search_eg_reset(device)
                         if stop_check():
                             break
-                    config.set_device_status(device, "Rallying titan...")
+                    config.set_device_status(device, "Rallying Titan...")
                     rally_titan(device)
                     rally_count += 1
                 else:
-                    config.set_device_status(device, "Waiting for troops...")
+                    config.set_device_status(device, "Waiting for Troops...")
                     if _smart_wait_for_troops(device, stop_check, dlog):
                         continue
             if stop_check():
@@ -209,14 +235,17 @@ def run_auto_groot(device, stop_event, interval, variation):
                 from navigation import navigate
                 if not navigate(Screen.MAP, device):
                     config.set_device_status(device, "Navigating...")
-                    time.sleep(10)
+                    for _ in range(10):
+                        if stop_check():
+                            break
+                        time.sleep(1)
                     continue
                 troops = troops_avail(device)
                 if troops > config.MIN_TROOPS_AVAILABLE:
-                    config.set_device_status(device, "Joining groot rally...")
+                    config.set_device_status(device, "Joining Groot Rally...")
                     join_rally(RallyType.GROOT, device)
                 else:
-                    config.set_device_status(device, "Waiting for troops...")
+                    config.set_device_status(device, "Waiting for Troops...")
                     if _smart_wait_for_troops(device, stop_check, dlog):
                         continue
             if stop_check():
@@ -237,7 +266,7 @@ def run_auto_pass(device, stop_event, pass_mode, interval, variation):
                 mine_mithril_if_due(device, stop_check=stop_check)
                 if stop_check():
                     break
-                config.set_device_status(device, "Pass battle...")
+                config.set_device_status(device, "Pass Battle...")
                 result = target(device)
                 if result == "no_marker":
                     dlog.warning("TARGET NOT SET — stopping")
@@ -249,7 +278,7 @@ def run_auto_pass(device, stop_event, pass_mode, interval, variation):
                     heal_all(device)
                 troops = troops_avail(device)
                 if troops <= config.MIN_TROOPS_AVAILABLE:
-                    config.set_device_status(device, "Waiting for troops...")
+                    config.set_device_status(device, "Waiting for Troops...")
                     time.sleep(5)
                     continue
                 adb_tap(device, 560, 675)
@@ -265,7 +294,7 @@ def run_auto_pass(device, stop_event, pass_mode, interval, variation):
 def run_auto_occupy(device, stop_event):
     from territory import auto_occupy_loop
     config.auto_occupy_running = True
-    config.set_device_status(device, "Occupying towers...")
+    config.set_device_status(device, "Occupying Towers...")
     def monitor():
         stop_event.wait()
         config.auto_occupy_running = False
@@ -283,7 +312,7 @@ def run_auto_reinforce(device, stop_event, interval, variation):
                 mine_mithril_if_due(device, stop_check=stop_check)
                 if stop_check():
                     break
-                config.set_device_status(device, "Reinforcing throne...")
+                config.set_device_status(device, "Reinforcing Throne...")
                 reinforce_throne(device)
             if stop_check():
                 break
@@ -300,7 +329,7 @@ def run_auto_mithril(device, stop_event):
     try:
         while not stop_check():
             with lock:
-                config.set_device_status(device, "Mining mithril...")
+                config.set_device_status(device, "Mining Mithril...")
                 mine_mithril_if_due(device, stop_check=stop_check)
             if stop_check():
                 break
@@ -413,8 +442,13 @@ DEFAULTS = {
     "mode": "bl",
     "verbose_logging": False,
     "eg_rally_own": True,
+    "titan_rally_own": True,
     "mithril_interval": 19,
     "web_dashboard": False,
+    "gather_enabled": True,
+    "gather_mine_level": 4,
+    "gather_max_troops": 3,
+    "tower_quest_enabled": False,
 }
 
 def _load_settings():
@@ -445,11 +479,24 @@ def _apply_settings(settings):
     )
     set_min_troops(settings.get("min_troops", 0))
     set_eg_rally_own(settings.get("eg_rally_own", True))
+    set_titan_rally_own(settings.get("titan_rally_own", True))
     set_territory_config(settings.get("my_team", "yellow"),
                          [settings.get("enemy_team", "green")])
     config.MITHRIL_INTERVAL = settings.get("mithril_interval", 19)
     from botlog import set_console_verbose
     set_console_verbose(settings.get("verbose_logging", False))
+    from config import set_gather_options, set_tower_quest_enabled
+    set_gather_options(
+        settings.get("gather_enabled", True),
+        settings.get("gather_mine_level", 4),
+        settings.get("gather_max_troops", 3),
+    )
+    set_tower_quest_enabled(settings.get("tower_quest_enabled", False))
+    for dev_id, count in settings.get("device_troops", {}).items():
+        try:
+            config.DEVICE_TOTAL_TROOPS[dev_id] = int(count)
+        except (ValueError, TypeError):
+            config.DEVICE_TOTAL_TROOPS[dev_id] = 5
 
 
 # ---------------------------------------------------------------------------
@@ -477,6 +524,8 @@ def create_app():
     static_dir = os.path.join(os.path.dirname(__file__), "static")
     app = Flask(__name__, template_folder=template_dir, static_folder=static_dir)
     app.secret_key = os.urandom(24)
+    app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0  # no static file caching during dev
+    app.config["TEMPLATES_AUTO_RELOAD"] = True
 
     # --- Page routes ---
 
@@ -498,36 +547,39 @@ def create_app():
                 thread = info.get("thread")
                 if thread and thread.is_alive():
                     active_tasks.append(key)
+        settings = _load_settings()
+        mode = settings.get("mode", "bl")
+        auto_groups = AUTO_MODES_BL if mode == "bl" else AUTO_MODES_HS
         return render_template("index.html",
                                devices=device_info,
                                tasks=active_tasks,
                                task_count=len(active_tasks),
+                               auto_groups=auto_groups,
+                               mode=mode,
+                               oneshot_farm=ONESHOT_FARM,
+                               oneshot_war=ONESHOT_WAR,
+                               active_tasks=active_tasks,
                                local_ip=get_local_ip())
 
     @app.route("/tasks")
     def tasks_page():
-        cleanup_dead_tasks()
-        devs, instances = _cached_devices()
-        device_list = [{"id": d, "name": instances.get(d, d)} for d in devs]
-        settings = _load_settings()
-        active = []
-        for key, info in list(running_tasks.items()):
-            if isinstance(info, dict):
-                thread = info.get("thread")
-                if thread and thread.is_alive():
-                    active.append(key)
-        return render_template("tasks.html",
-                               devices=device_list,
-                               auto_modes=AUTO_MODES,
-                               oneshot_farm=ONESHOT_FARM,
-                               oneshot_war=ONESHOT_WAR,
-                               active_tasks=active,
-                               settings=settings)
+        return redirect(url_for("index"))
 
     @app.route("/settings")
     def settings_page():
         settings = _load_settings()
-        return render_template("settings.html", settings=settings)
+        # Build device_troops: merge saved values with currently detected devices
+        saved_dt = settings.get("device_troops", {})
+        detected, _ = _cached_devices()
+        device_troops = {}
+        for dev in detected:
+            device_troops[dev] = saved_dt.get(dev, 5)
+        # Also include saved devices not currently detected
+        for dev, count in saved_dt.items():
+            if dev not in device_troops:
+                device_troops[dev] = count
+        return render_template("settings.html", settings=settings,
+                               device_troops=device_troops)
 
     @app.route("/logs")
     def logs_page():
@@ -600,40 +652,43 @@ def create_app():
 
     @app.route("/tasks/start", methods=["POST"])
     def start_task():
-        device = request.form.get("device")
+        device_raw = request.form.get("device", "")
         task_name = request.form.get("task_name")
         task_type = request.form.get("task_type", "oneshot")  # "auto" or "oneshot"
 
-        if not device:
+        # Support comma-separated device list (multi-select checkboxes)
+        devices_to_run = [d.strip() for d in device_raw.split(",") if d.strip()]
+        if not devices_to_run:
             return redirect(url_for("tasks_page"))
 
         settings = _load_settings()
 
-        if task_type == "auto":
-            # Start an auto-mode
-            mode_key = task_name
-            task_key = f"{device}_{mode_key}"
-            if task_key in running_tasks:
-                info = running_tasks[task_key]
-                if isinstance(info, dict) and info.get("thread") and info["thread"].is_alive():
-                    return redirect(url_for("tasks_page"))
+        for device in devices_to_run:
+            if task_type == "auto":
+                # Start an auto-mode
+                mode_key = task_name
+                task_key = f"{device}_{mode_key}"
+                if task_key in running_tasks:
+                    info = running_tasks[task_key]
+                    if isinstance(info, dict) and info.get("thread") and info["thread"].is_alive():
+                        continue
 
-            runner = AUTO_RUNNERS.get(mode_key)
-            if runner:
-                stop_event = threading.Event()
-                if mode_key == "auto_mithril":
-                    config.MITHRIL_ENABLED = True
-                launch_task(device, mode_key,
-                            lambda d=device, se=stop_event, s=settings: runner(d, se, s),
-                            stop_event)
-        else:
-            # One-shot action
-            func = TASK_FUNCTIONS.get(task_name)
-            if func:
-                stop_event = threading.Event()
-                launch_task(device, f"once:{task_name}",
-                            run_once, stop_event,
-                            args=(device, task_name, func))
+                runner = AUTO_RUNNERS.get(mode_key)
+                if runner:
+                    stop_event = threading.Event()
+                    if mode_key == "auto_mithril":
+                        config.MITHRIL_ENABLED = True
+                    launch_task(device, mode_key,
+                                lambda d=device, se=stop_event, s=settings: runner(d, se, s),
+                                stop_event)
+            else:
+                # One-shot action
+                func = TASK_FUNCTIONS.get(task_name)
+                if func:
+                    stop_event = threading.Event()
+                    launch_task(device, f"once:{task_name}",
+                                run_once, stop_event,
+                                args=(device, task_name, func))
 
         return redirect(url_for("tasks_page"))
 
@@ -642,6 +697,17 @@ def create_app():
         task_key = request.form.get("task_key")
         if task_key:
             stop_task(task_key)
+        return redirect(url_for("tasks_page"))
+
+    @app.route("/tasks/stop-mode", methods=["POST"])
+    def stop_mode_route():
+        """Stop all running tasks for a given auto-mode (across all devices)."""
+        mode_key = request.form.get("mode_key")
+        if mode_key:
+            suffix = f"_{mode_key}"
+            for key in list(running_tasks.keys()):
+                if key.endswith(suffix):
+                    stop_task(key)
         return redirect(url_for("tasks_page"))
 
     @app.route("/tasks/stop-all", methods=["POST"])
@@ -655,12 +721,13 @@ def create_app():
         # Update from form
         for key in ["auto_heal", "auto_restore_ap", "ap_use_free", "ap_use_potions",
                      "ap_allow_large_potions", "ap_use_gems", "verbose_logging",
-                     "eg_rally_own", "web_dashboard"]:
+                     "eg_rally_own", "titan_rally_own", "web_dashboard", "gather_enabled",
+                     "tower_quest_enabled"]:
             settings[key] = key in request.form
 
         for key in ["ap_gem_limit", "min_troops", "variation", "titan_interval",
                      "groot_interval", "reinforce_interval", "pass_interval",
-                     "mithril_interval"]:
+                     "mithril_interval", "gather_mine_level", "gather_max_troops"]:
             val = request.form.get(key, "")
             if val.isdigit():
                 settings[key] = int(val)
@@ -669,6 +736,16 @@ def create_app():
             val = request.form.get(key)
             if val:
                 settings[key] = val
+
+        # Per-device troop counts (form fields named dt_<device_id>)
+        dt = settings.get("device_troops", {})
+        for form_key in request.form:
+            if form_key.startswith("dt_"):
+                dev_id = form_key[3:]  # strip "dt_" prefix
+                val = request.form[form_key]
+                if val.isdigit():
+                    dt[dev_id] = int(val)
+        settings["device_troops"] = dt
 
         _apply_settings(settings)
         _save_settings(settings)

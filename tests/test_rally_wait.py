@@ -113,7 +113,8 @@ class TestWaitForRallies:
     @patch("actions.read_panel_statuses")
     def test_no_rallying_clears_pending(self, mock_panel, mock_time, mock_stats, mock_device):
         """No rallying troops + pending > 0 → clears pending (false positive)."""
-        mock_time.time.side_effect = [0.0, 5.0, 10.0]
+        # Extra time.time() calls from _interruptible_sleep loop
+        mock_time.time.side_effect = [0.0, 5.0, 10.0, 10.0, 10.0]
         mock_time.sleep = MagicMock()
         _quest_rallies_pending[(mock_device, QuestType.TITAN)] = 1
         _quest_pending_since[(mock_device, QuestType.TITAN)] = 0.0
@@ -133,7 +134,8 @@ class TestWaitForRallies:
     @patch("actions.read_panel_statuses")
     def test_rallying_then_complete(self, mock_panel, mock_time, mock_stats, mock_device):
         """Rallying troop found → polls → rallying count drops → returns."""
-        mock_time.time.side_effect = [0.0, 0.0, 5.0, 10.0]
+        # Extra time.time() calls from _interruptible_sleep loop
+        mock_time.time.side_effect = [0.0, 0.0, 5.0, 5.0, 10.0, 10.0, 10.0]
         mock_time.sleep = MagicMock()
         _quest_rallies_pending[(mock_device, QuestType.TITAN)] = 1
         mock_panel.side_effect = [
@@ -176,9 +178,8 @@ class TestWaitForRallies:
     @patch("actions.read_panel_statuses")
     def test_timeout_safety(self, mock_panel, mock_time, mock_stats, mock_device):
         """Polls until QUEST_PENDING_TIMEOUT then gives up."""
-        # First call returns start time, then two calls inside the loop
-        # jump past the 360s timeout
-        mock_time.time.side_effect = [0.0, 0.0, 400.0]
+        # Extra time.time() calls from _interruptible_sleep loop
+        mock_time.time.side_effect = [0.0, 0.0, 400.0, 405.0, 400.0]
         mock_time.sleep = MagicMock()
         _quest_rallies_pending[(mock_device, QuestType.TITAN)] = 1
         mock_panel.return_value = _make_snapshot(
@@ -193,7 +194,8 @@ class TestWaitForRallies:
     @patch("actions.read_panel_statuses")
     def test_no_rallying_single_transient_does_not_clear(self, mock_panel, mock_time, mock_stats, mock_device):
         """First read has no rallying, second does — don't clear (transient miss)."""
-        mock_time.time.side_effect = [0.0, 5.0, 10.0]
+        # Extra time.time() calls from _interruptible_sleep loop
+        mock_time.time.side_effect = [0.0, 5.0, 10.0, 10.0]
         mock_time.sleep = MagicMock()
         _quest_rallies_pending[(mock_device, QuestType.TITAN)] = 1
         mock_panel.side_effect = [
@@ -212,7 +214,8 @@ class TestWaitForRallies:
     @patch("actions.read_panel_statuses")
     def test_panel_fail_during_poll_falls_back(self, mock_panel, mock_time, mock_stats, mock_device):
         """Panel read fails during poll loop → returns gracefully."""
-        mock_time.time.side_effect = [0.0, 0.0, 5.0, 10.0]
+        # Extra time.time() calls from _interruptible_sleep loop
+        mock_time.time.side_effect = [0.0, 0.0, 5.0, 10.0, 10.0]
         mock_time.sleep = MagicMock()
         _quest_rallies_pending[(mock_device, QuestType.TITAN)] = 1
         mock_panel.side_effect = [
@@ -230,7 +233,8 @@ class TestWaitForRallies:
     @patch("actions.read_panel_statuses")
     def test_rallying_count_increases_updates_baseline(self, mock_panel, mock_time, mock_stats, mock_device):
         """If another rally joins while waiting, baseline updates."""
-        mock_time.time.side_effect = [0.0, 0.0, 5.0, 10.0, 15.0]
+        # Extra time.time() calls from _interruptible_sleep loops (2 poll iterations)
+        mock_time.time.side_effect = [0.0, 0.0, 5.0, 10.0, 15.0, 20.0, 25.0, 25.0]
         mock_time.sleep = MagicMock()
         _quest_rallies_pending[(mock_device, QuestType.TITAN)] = 1
         mock_panel.side_effect = [
