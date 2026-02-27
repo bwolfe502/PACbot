@@ -32,7 +32,8 @@ from config import (running_tasks, QuestType, RallyType, Screen,
                      set_titan_rally_own)
 from devices import get_devices, get_emulator_instances, auto_connect_emulators
 from navigation import check_screen
-from vision import adb_tap, load_screenshot, read_ap, warmup_ocr
+from vision import (adb_tap, load_screenshot, find_image, tap_image,
+                    wait_for_image_and_tap, read_ap, warmup_ocr)
 from troops import troops_avail, heal_all, read_panel_statuses, get_troop_status
 from actions import (attack, phantom_clash_attack, reinforce_throne, target,
                      check_quests, teleport, rally_titan, rally_eg,
@@ -260,9 +261,57 @@ def run_auto_groot(device, stop_event, interval, variation):
         dlog.error("ERROR in Rally Groot: %s", e, exc_info=True)
     config.clear_device_status(device)
 
-def run_auto_pass(device, stop_event, pass_mode, interval, variation):
+def run_auto_pass(device, stop_event, pass_mode, pass_interval, variation):
     dlog = get_logger("web", device)
     stop_check = stop_event.is_set
+
+    def _pass_attack(device):
+        if config.AUTO_HEAL_ENABLED:
+            heal_all(device)
+        troops = troops_avail(device)
+        if troops <= config.MIN_TROOPS_AVAILABLE:
+            dlog.warning("Not enough troops for pass battle")
+            return False
+
+        adb_tap(device, 560, 675)
+        time.sleep(1)
+
+        start_time = time.time()
+        while time.time() - start_time < 10:
+            screen = load_screenshot(device)
+            if screen is None:
+                time.sleep(0.5)
+                continue
+
+            if find_image(screen, "reinforce_button.png", threshold=0.5):
+                dlog.info("Found reinforce button - reinforcing")
+                tap_image("reinforce_button.png", device, threshold=0.5)
+                time.sleep(1)
+                tap_image("depart.png", device)
+                return "reinforce"
+
+            if find_image(screen, "attack_button.png", threshold=0.7):
+                if pass_mode == "Rally Starter":
+                    dlog.info("Found attack button - starting rally")
+                    tap_image("rally_button.png", device, threshold=0.7)
+                    time.sleep(1)
+                    if not tap_image("depart.png", device):
+                        wait_for_image_and_tap("depart.png", device, timeout=5)
+                    return "rally_started"
+                else:
+                    dlog.info("Found attack button - enemy owns it, closing menu")
+                    adb_tap(device, 560, 675)
+                    time.sleep(0.5)
+                    return "attack"
+
+            time.sleep(0.5)
+
+        dlog.warning("Neither reinforce nor attack button found, closing menu")
+        adb_tap(device, 560, 675)
+        time.sleep(0.5)
+        return False
+
+    dlog.info("Auto Pass Battle started (mode: %s)", pass_mode)
     lock = config.get_device_lock(device)
     try:
         while not stop_check():
@@ -277,20 +326,32 @@ def run_auto_pass(device, stop_event, pass_mode, interval, variation):
                     break
                 if stop_check() or not result:
                     break
-                # Simplified pass attack
-                if config.AUTO_HEAL_ENABLED:
-                    heal_all(device)
-                troops = troops_avail(device)
-                if troops <= config.MIN_TROOPS_AVAILABLE:
-                    config.set_device_status(device, "Waiting for Troops...")
-                    time.sleep(5)
-                    continue
-                adb_tap(device, 560, 675)
-                time.sleep(2)
+
+                action = _pass_attack(device)
             if stop_check():
                 break
-            config.set_device_status(device, "Idle")
-            sleep_interval(interval, variation, stop_check)
+
+            if action == "rally_started":
+                dlog.info("Rally started - looping back")
+                time.sleep(2)
+            elif action == "attack":
+                dlog.info("Enemy owns pass - joining war rallies continuously")
+                config.set_device_status(device, "Joining War Rallies...")
+                while not stop_check():
+                    with lock:
+                        troops = troops_avail(device)
+                        if troops <= config.MIN_TROOPS_AVAILABLE:
+                            dlog.warning("Not enough troops, waiting...")
+                            time.sleep(5)
+                            continue
+                        join_war_rallies(device)
+                    if stop_check():
+                        break
+                    time.sleep(2)
+            elif action == "reinforce":
+                sleep_interval(pass_interval, variation, stop_check)
+            else:
+                sleep_interval(10, variation, stop_check)
     except Exception as e:
         dlog.error("ERROR in Auto Pass: %s", e, exc_info=True)
     config.clear_device_status(device)
@@ -486,7 +547,12 @@ def _load_settings():
     try:
         with open(SETTINGS_FILE, "r") as f:
             saved = json.load(f)
-        return {**DEFAULTS, **saved}
+        merged = {**DEFAULTS, **saved}
+        from config import validate_settings
+        merged, warnings = validate_settings(merged, DEFAULTS)
+        for w in warnings:
+            _log.warning("Settings: %s", w)
+        return merged
     except (FileNotFoundError, json.JSONDecodeError):
         return dict(DEFAULTS)
 
@@ -790,6 +856,10 @@ def create_app():
                     dt[dev_id] = int(val)
         settings["device_troops"] = dt
 
+        from config import validate_settings
+        settings, warnings = validate_settings(settings, DEFAULTS)
+        for w in warnings:
+            _log.warning("Settings (web save): %s", w)
         _apply_settings(settings)
         _save_settings(settings)
         return redirect(url_for("settings_page"))
