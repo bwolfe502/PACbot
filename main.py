@@ -705,32 +705,21 @@ def create_gui():
                   text_color=THEME["accent_cyan"], width=80, height=20,
                   command=open_tutorial).pack(side=tk.LEFT, padx=4)
 
-    def _open_web_dashboard():
+    # _web_open_url is set later — defaults to local, overridden by relay
+    _web_open_url = [None]
+
+    def _open_web_link():
         import webbrowser
-        try:
-            import socket as _sock
-            _s = _sock.socket(_sock.AF_INET, _sock.SOCK_DGRAM)
-            _s.connect(("8.8.8.8", 80))
-            _ip = _s.getsockname()[0]
-            _s.close()
-        except Exception:
-            _ip = "localhost"
-        webbrowser.open(f"http://{_ip}:8080")
+        if _web_open_url[0]:
+            webbrowser.open(_web_open_url[0])
 
     web_link_btn = ctk.CTkButton(links_row, text="Web App",
                   font=ctk.CTkFont(family=_FONT_FAMILY, size=10, underline=True),
                   fg_color="transparent", hover_color=THEME["bg_hover"],
                   text_color=THEME["accent_cyan"], width=80, height=20,
-                  command=_open_web_dashboard)
+                  command=_open_web_link)
     if settings.get("web_dashboard", False):
         web_link_btn.pack(side=tk.LEFT, padx=4)
-
-    # ── Status line ──
-    status_var = tk.StringVar(value="")
-    status_label = ctk.CTkLabel(title_frame, textvariable=status_var,
-                                font=ctk.CTkFont(family=_FONT_FAMILY, size=11, weight="bold"),
-                                text_color=THEME["accent_cyan"])
-    status_label.pack(pady=(2, 0))
 
     # ── Devices ──
     devices_container = tk.Frame(window, bg=THEME["bg_deep"])
@@ -1861,7 +1850,6 @@ def create_gui():
         for key in list(running_tasks.keys()):
             stop_task(key)
         config.DEVICE_STATUS.clear()
-        status_var.set("")
         log.info("=== ALL TASKS STOPPED ===")
 
     ctk.CTkButton(window, text="STOP ALL",
@@ -2081,14 +2069,6 @@ def create_gui():
                              fg="#8899bb", font=(_FONT_FAMILY, 9),
                              padx=8, pady=2).pack(side=tk.LEFT, padx=(0, 4), pady=(2, 0))
 
-        # Also update the global status line (for web dashboard URL etc.)
-        statuses = config.DEVICE_STATUS
-        if statuses:
-            parts = [msg for msg in statuses.values()]
-            status_var.set(" | ".join(parts) if len(parts) > 1 else parts[0])
-        else:
-            status_var.set("")
-
         window.after(2000, update_device_cards)
 
     window.after(2000, update_device_cards)
@@ -2221,7 +2201,7 @@ def create_gui():
             _web_ip = get_local_ip()
             _web_url = f"http://{_web_ip}:8080"
             log.info("Web dashboard started at %s", _web_url)
-            status_var.set(f"Dashboard: {_web_url}")
+            _web_open_url[0] = _web_url
         except ImportError:
             log.info("Web dashboard enabled but Flask not installed. "
                      "Install with: pip install flask")
@@ -2240,27 +2220,11 @@ def create_gui():
             try:
                 from tunnel import start_tunnel, tunnel_status
                 start_tunnel(_relay_url, _relay_secret, _relay_bot)
-                _relay_display = _relay_url.replace("ws://", "").replace("wss://", "")
-                _relay_display = _relay_display.split("/")[0]  # just host:port
-                _cur = status_var.get()
-                if _cur:
-                    status_var.set(f"{_cur}  |  Relay: {_relay_display}")
-                else:
-                    status_var.set(f"Relay: {_relay_display}")
-
-                def _update_relay_status():
-                    st = tunnel_status()
-                    _cur = status_var.get()
-                    # Update the relay portion of the status bar
-                    if "Relay:" in _cur:
-                        base = _cur.split("Relay:")[0].rstrip(" |")
-                        label = "Connected" if st == "connected" else "Reconnecting..."
-                        new = f"{base}  |  Relay: {label}"
-                        if new != _cur:
-                            status_var.set(new)
-                    window.after(3000, _update_relay_status)
-
-                window.after(3000, _update_relay_status)
+                # Override Web App link to point to the relay
+                _relay_host = _relay_url.replace("ws://", "").replace("wss://", "")
+                _relay_host = _relay_host.split("/")[0]  # just host:port
+                _web_open_url[0] = f"http://{_relay_host}/{_relay_bot}/"
+                web_link_btn.configure(text="Remote Dashboard")
             except ImportError:
                 log.info("Relay tunnel enabled but 'websockets' not installed. "
                          "Install with: pip install websockets")
