@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+{% block title_suffix %} - Settings{% endblock %}
+
+{% block content %}
+<h1>Settings</h1>
+
+<form method="post" action="/settings">
+    <!-- General -->
+    <div class="card">
+        <h3>General</h3>
+        <label class="setting-row">
+            <input type="checkbox" name="auto_heal" {% if settings.auto_heal %}checked{% endif %}>
+            Auto Heal
+        </label>
+        <label class="setting-row">
+            <input type="checkbox" name="eg_rally_own" {% if settings.eg_rally_own %}checked{% endif %}>
+            Rally Own Evil Guard
+        </label>
+        <label class="setting-row">
+            <input type="checkbox" name="verbose_logging" {% if settings.verbose_logging %}checked{% endif %}>
+            Verbose Logging
+        </label>
+        <label class="setting-row">
+            <input type="checkbox" name="web_dashboard" {% if settings.web_dashboard %}checked{% endif %}>
+            Web Dashboard Enabled
+        </label>
+    </div>
+
+    <!-- AP Restoration -->
+    <div class="card">
+        <h3>AP Restoration</h3>
+        <label class="setting-row">
+            <input type="checkbox" name="auto_restore_ap" {% if settings.auto_restore_ap %}checked{% endif %}>
+            Auto Restore AP
+        </label>
+        <label class="setting-row indent">
+            <input type="checkbox" name="ap_use_free" {% if settings.ap_use_free %}checked{% endif %}>
+            Use Free Restores
+        </label>
+        <label class="setting-row indent">
+            <input type="checkbox" name="ap_use_potions" {% if settings.ap_use_potions %}checked{% endif %}>
+            Use Potions
+        </label>
+        <label class="setting-row indent">
+            <input type="checkbox" name="ap_allow_large_potions" {% if settings.ap_allow_large_potions %}checked{% endif %}>
+            Allow Large Potions
+        </label>
+        <label class="setting-row indent">
+            <input type="checkbox" name="ap_use_gems" {% if settings.ap_use_gems %}checked{% endif %}>
+            Use Gems
+        </label>
+        <div class="setting-row indent">
+            <label>Gem Limit:
+                <input type="number" name="ap_gem_limit" value="{{ settings.ap_gem_limit }}"
+                       min="0" max="3500" class="input-sm">
+            </label>
+        </div>
+    </div>
+
+    <!-- Troops & Timing -->
+    <div class="card">
+        <h3>Troops & Timing</h3>
+        <div class="setting-row">
+            <label>Min Troops:
+                <input type="number" name="min_troops" value="{{ settings.min_troops }}"
+                       min="0" max="5" class="input-sm">
+            </label>
+        </div>
+        <div class="setting-row">
+            <label>Randomize +/-:
+                <input type="number" name="variation" value="{{ settings.variation }}"
+                       min="0" class="input-sm">
+                <span class="unit">seconds</span>
+            </label>
+        </div>
+    </div>
+
+    <!-- Intervals -->
+    <div class="card">
+        <h3>Intervals</h3>
+        <div class="setting-row">
+            <label>Titan:
+                <input type="number" name="titan_interval" value="{{ settings.titan_interval }}"
+                       min="1" class="input-sm">
+                <span class="unit">s</span>
+            </label>
+        </div>
+        <div class="setting-row">
+            <label>Groot:
+                <input type="number" name="groot_interval" value="{{ settings.groot_interval }}"
+                       min="1" class="input-sm">
+                <span class="unit">s</span>
+            </label>
+        </div>
+        <div class="setting-row">
+            <label>Reinforce:
+                <input type="number" name="reinforce_interval" value="{{ settings.reinforce_interval }}"
+                       min="1" class="input-sm">
+                <span class="unit">s</span>
+            </label>
+        </div>
+        <div class="setting-row">
+            <label>Pass:
+                <input type="number" name="pass_interval" value="{{ settings.pass_interval }}"
+                       min="1" class="input-sm">
+                <span class="unit">s</span>
+            </label>
+        </div>
+        <div class="setting-row">
+            <label>Mithril:
+                <input type="number" name="mithril_interval" value="{{ settings.mithril_interval }}"
+                       min="1" class="input-sm">
+                <span class="unit">min</span>
+            </label>
+        </div>
+    </div>
+
+    <!-- Mode & Teams -->
+    <div class="card">
+        <h3>Mode & Teams</h3>
+        <div class="setting-row">
+            <label>Pass Mode:
+                <select name="pass_mode" class="select-sm">
+                    <option value="Rally Joiner" {% if settings.pass_mode == 'Rally Joiner' %}selected{% endif %}>Rally Joiner</option>
+                    <option value="Rally Starter" {% if settings.pass_mode == 'Rally Starter' %}selected{% endif %}>Rally Starter</option>
+                </select>
+            </label>
+        </div>
+        <div class="setting-row">
+            <label>Game Mode:
+                <select name="mode" class="select-sm">
+                    <option value="bl" {% if settings.mode == 'bl' %}selected{% endif %}>Broken Lands</option>
+                    <option value="rw" {% if settings.mode == 'rw' %}selected{% endif %}>Home Server</option>
+                </select>
+            </label>
+        </div>
+        <div class="setting-row">
+            <label>My Team:
+                <select name="my_team" class="select-sm">
+                    {% for color in ['yellow', 'red', 'blue', 'green'] %}
+                    <option value="{{ color }}" {% if settings.my_team == color %}selected{% endif %}>{{ color|capitalize }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+        </div>
+        <div class="setting-row">
+            <label>Enemy Team:
+                <select name="enemy_team" class="select-sm">
+                    {% for color in ['yellow', 'red', 'blue', 'green'] %}
+                    <option value="{{ color }}" {% if settings.enemy_team == color %}selected{% endif %}>{{ color|capitalize }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+        </div>
+    </div>
+
+    <button type="submit" class="btn btn-primary btn-full">Save Settings</button>
+</form>
+{% endblock %}

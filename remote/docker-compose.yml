@@ -1,0 +1,20 @@
+services:
+  emulator:
+    image: budtmo/docker-android:emulator_14.0
+    privileged: true
+    ports:
+      - "6080:6080"   # noVNC web viewer (browser-based game screen)
+      - "5555:5555"   # ADB (PACbot connects here)
+    environment:
+      EMULATOR_DEVICE: "Samsung Galaxy S10"
+      DATAPARTITION: "4g"
+      EMULATOR_ADDITIONAL_ARGS: "-skin 1080x1920 -no-boot-anim -gpu swiftshader_indirect"
+    devices:
+      - /dev/kvm:/dev/kvm
+    healthcheck:
+      test: ["CMD", "adb", "shell", "getprop", "sys.boot_completed"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    restart: unless-stopped

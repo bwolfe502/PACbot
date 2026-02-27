@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title_suffix %} - Dashboard{% endblock %}
+
+{% block content %}
+<h1>Dashboard</h1>
+
+<div class="summary-bar">
+    <span class="badge">{{ devices|length }} device{{ 's' if devices|length != 1 }}</span>
+    <span class="badge {% if task_count > 0 %}badge-active{% endif %}">{{ task_count }} task{{ 's' if task_count != 1 }} running</span>
+</div>
+
+{% if not devices %}
+<div class="card">
+    <p class="muted">No devices found. Start your emulator and refresh.</p>
+    <form method="post" action="/api/devices/refresh">
+        <button type="submit" class="btn">Refresh Devices</button>
+    </form>
+</div>
+{% endif %}
+
+{% for dev in devices %}
+<div class="card device-card">
+    <div class="device-header">
+        <strong>{{ dev.name }}</strong>
+        <span class="device-troops">{{ dev.troops }} troops</span>
+    </div>
+    <div class="device-status {% if dev.status != 'Idle' %}status-active{% endif %}">
+        {{ dev.status }}
+    </div>
+</div>
+{% endfor %}
+
+{% if tasks %}
+<h2>Running Tasks</h2>
+{% for task in tasks %}
+<div class="card task-card">
+    <span class="task-name">{{ task }}</span>
+    <form method="post" action="/tasks/stop" style="display:inline">
+        <input type="hidden" name="task_key" value="{{ task }}">
+        <button type="submit" class="btn btn-stop btn-sm">Stop</button>
+    </form>
+</div>
+{% endfor %}
+<form method="post" action="/tasks/stop-all">
+    <button type="submit" class="btn btn-danger">Stop All Tasks</button>
+</form>
+{% endif %}
+
+<div class="quick-actions">
+    <a href="/tasks" class="btn btn-primary">Start Tasks</a>
+    <form method="post" action="/api/devices/refresh" style="display:inline">
+        <button type="submit" class="btn">Refresh Devices</button>
+    </form>
+</div>
+
+<div id="status-data" style="display:none"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Auto-refresh status every 3 seconds
+setInterval(function() {
+    fetch('/api/status')
+        .then(r => r.json())
+        .then(data => {
+            // Update device statuses
+            const cards = document.querySelectorAll('.device-card');
+            if (data.devices) {
+                data.devices.forEach((dev, i) => {
+                    if (cards[i]) {
+                        const status = cards[i].querySelector('.device-status');
+                        if (status) {
+                            status.textContent = dev.status;
+                            if (dev.status !== 'Idle') {
+                                status.classList.add('status-active');
+                            } else {
+                                status.classList.remove('status-active');
+                            }
+                        }
+                    }
+                });
+            }
+            // Update task count badge
+            const badges = document.querySelectorAll('.badge');
+            if (badges.length > 1) {
+                const count = data.tasks ? data.tasks.length : 0;
+                badges[1].textContent = count + ' task' + (count !== 1 ? 's' : '') + ' running';
+                if (count > 0) {
+                    badges[1].classList.add('badge-active');
+                } else {
+                    badges[1].classList.remove('badge-active');
+                }
+            }
+        })
+        .catch(() => {});
+}, 3000);
+</script>
+{% endblock %}
