@@ -53,6 +53,90 @@ nav {
     background: #0a3d62;
 }
 
+/* Status bar */
+.status-bar {
+    background: #0d1117;
+    text-align: center;
+    padding: 6px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #888;
+    border-bottom: 1px solid #1a1a2e;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.status-bar.active {
+    color: #4fc3f7;
+}
+
+.status-bar {
+    cursor: pointer;
+}
+
+.status-bar.hidden {
+    display: none;
+}
+
+/* Troop panel (expandable below status bar) */
+.troop-panel {
+    background: #0d1117;
+    padding: 8px 16px;
+    border-bottom: 1px solid #1a1a2e;
+    max-width: 600px;
+    margin: 0 auto;
+}
+
+.troop-panel.hidden {
+    display: none;
+}
+
+.tp-device-name {
+    font-size: 12px;
+    font-weight: 600;
+    color: #aaa;
+    margin-bottom: 4px;
+}
+
+.tp-slots {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    margin-bottom: 6px;
+}
+
+/* Quest panel (below troop panel) */
+.quest-panel {
+    background: #0d1117;
+    padding: 6px 16px 8px;
+    border-bottom: 1px solid #1a1a2e;
+    max-width: 600px;
+    margin: 0 auto;
+}
+
+.quest-panel.hidden {
+    display: none;
+}
+
+.qp-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 2px 0;
+    font-size: 12px;
+}
+
+.qp-type {
+    color: #aaa;
+    text-transform: capitalize;
+}
+
+.qp-count {
+    color: #e0e0e0;
+}
+
 /* Main content */
 main {
     max-width: 600px;
@@ -139,6 +223,65 @@ h3 {
 .device-status.status-active {
     color: #4fc3f7;
     font-weight: 500;
+}
+
+/* Troop slots */
+.troop-slots {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding-top: 4px;
+    align-items: center;
+}
+
+.troop-slot {
+    font-size: 12px;
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-weight: 500;
+}
+
+.troop-home {
+    background: #1b3a1b;
+    color: #4caf50;
+}
+
+.troop-deployed {
+    background: #1a2a4a;
+    color: #64b5f6;
+}
+
+.troop-age {
+    font-size: 11px;
+    color: #666;
+    margin-left: auto;
+}
+
+/* Quest tracking */
+.quest-tracking {
+    padding-top: 4px;
+}
+
+.quest-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 2px 0;
+    font-size: 13px;
+}
+
+.quest-type {
+    color: #aaa;
+    text-transform: capitalize;
+}
+
+.quest-count {
+    color: #e0e0e0;
+}
+
+.quest-pending {
+    color: #ffb74d;
+    font-size: 12px;
 }
 
 /* Task cards */

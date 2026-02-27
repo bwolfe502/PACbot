@@ -143,7 +143,7 @@ def get_devices():
                     pass
             devices.append(d)
 
-        _log.info("Found %d device(s): %s", len(devices), ", ".join(devices) if devices else "(none)")
+        _log.debug("Found %d device(s): %s", len(devices), ", ".join(devices) if devices else "(none)")
         return devices
     except Exception as e:
         _log.error("Failed to get devices: %s", e)

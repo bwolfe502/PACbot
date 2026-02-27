@@ -114,6 +114,40 @@ def _effective_remaining(device, quest_type, current, target):
     return max(0, base_remaining - pending)
 
 
+def get_quest_tracking_state(device):
+    """Return quest tracking info for a device (for web dashboard).
+
+    Returns a list of dicts, one per tracked quest type::
+
+        [{"quest_type": "titan", "last_seen": 5, "pending": 2,
+          "pending_age": 45.2}, ...]
+    """
+    result = []
+    seen_types = set()
+    for (dev, qtype), count in list(_quest_rallies_pending.items()):
+        if dev != device:
+            continue
+        seen_types.add(qtype)
+        since = _quest_pending_since.get((dev, qtype))
+        result.append({
+            "quest_type": str(qtype),
+            "last_seen": _quest_last_seen.get((dev, qtype)),
+            "pending": count,
+            "pending_age": round(time.time() - since, 1) if since else None,
+        })
+    # Include quest types with a last_seen but no pending
+    for (dev, qtype), last in list(_quest_last_seen.items()):
+        if dev != device or qtype in seen_types:
+            continue
+        result.append({
+            "quest_type": str(qtype),
+            "last_seen": last,
+            "pending": 0,
+            "pending_age": None,
+        })
+    return result
+
+
 def reset_quest_tracking(device=None):
     """Clear rally tracking state. If device is given, clear only that device's state.
     If device is None, clear all state (backwards compatible)."""

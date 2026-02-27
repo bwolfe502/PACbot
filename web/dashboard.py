@@ -32,12 +32,13 @@ from config import (running_tasks, QuestType, RallyType, Screen,
 from devices import get_devices, get_emulator_instances, auto_connect_emulators
 from navigation import check_screen
 from vision import adb_tap, load_screenshot, read_ap, warmup_ocr
-from troops import troops_avail, heal_all, read_panel_statuses
+from troops import troops_avail, heal_all, read_panel_statuses, get_troop_status
 from actions import (attack, phantom_clash_attack, reinforce_throne, target,
                      check_quests, teleport, rally_titan, rally_eg,
                      search_eg_reset, join_rally, join_war_rallies,
                      reset_quest_tracking, reset_rally_blacklist,
-                     mine_mithril, mine_mithril_if_due)
+                     mine_mithril, mine_mithril_if_due,
+                     get_quest_tracking_state)
 from territory import attack_territory, sample_specific_squares
 from botlog import get_logger
 
@@ -482,8 +483,7 @@ def create_app():
     @app.route("/")
     def index():
         cleanup_dead_tasks()
-        devs = get_devices()
-        instances = get_emulator_instances()
+        devs, instances = _cached_devices()
         device_info = []
         for d in devs:
             device_info.append({
@@ -507,8 +507,7 @@ def create_app():
     @app.route("/tasks")
     def tasks_page():
         cleanup_dead_tasks()
-        devs = get_devices()
-        instances = get_emulator_instances()
+        devs, instances = _cached_devices()
         device_list = [{"id": d, "name": instances.get(d, d)} for d in devs]
         settings = _load_settings()
         active = []
@@ -546,17 +545,42 @@ def create_app():
 
     # --- API routes ---
 
+    # Cache device list to avoid spamming ADB on every poll
+    _device_cache = {"devices": [], "instances": {}, "ts": 0}
+    _DEVICE_CACHE_TTL = 15  # seconds
+
+    def _cached_devices():
+        now = time.time()
+        if now - _device_cache["ts"] > _DEVICE_CACHE_TTL:
+            _device_cache["devices"] = get_devices()
+            _device_cache["instances"] = get_emulator_instances()
+            _device_cache["ts"] = now
+        return _device_cache["devices"], _device_cache["instances"]
+
     @app.route("/api/status")
     def api_status():
         cleanup_dead_tasks()
-        devs = get_devices()
-        instances = get_emulator_instances()
+        devs, instances = _cached_devices()
         device_info = []
         for d in devs:
+            # Troop snapshot (cached, no ADB call)
+            snapshot = get_troop_status(d)
+            troops_list = []
+            snapshot_age = None
+            if snapshot:
+                snapshot_age = round(snapshot.age_seconds)
+                for t in snapshot.troops:
+                    troops_list.append({
+                        "action": t.action.value,
+                        "time_left": t.time_left,
+                    })
             device_info.append({
                 "id": d,
                 "name": instances.get(d, d),
                 "status": config.DEVICE_STATUS.get(d, "Idle"),
+                "troops": troops_list,
+                "snapshot_age": snapshot_age,
+                "quests": get_quest_tracking_state(d),
             })
         active = []
         for key, info in list(running_tasks.items()):
@@ -569,6 +593,7 @@ def create_app():
     @app.route("/api/devices/refresh", methods=["POST"])
     def api_refresh_devices():
         auto_connect_emulators()
+        _device_cache["ts"] = 0  # bust cache
         devs = get_devices()
         instances = get_emulator_instances()
         return jsonify({"devices": [{"id": d, "name": instances.get(d, d)} for d in devs]})
@@ -648,6 +673,20 @@ def create_app():
         _apply_settings(settings)
         _save_settings(settings)
         return redirect(url_for("settings_page"))
+
+    @app.route("/api/restart", methods=["POST"])
+    def api_restart():
+        """Save settings, stop all tasks, and restart the process."""
+        _log.info("=== RESTART requested via web dashboard ===")
+        _save_settings(_load_settings())
+        stop_all()
+
+        def _do_restart():
+            time.sleep(0.5)  # let the HTTP response flush
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+
+        threading.Thread(target=_do_restart, daemon=True).start()
+        return jsonify({"ok": True, "message": "Restarting..."})
 
     @app.route("/api/logs")
     def api_logs():

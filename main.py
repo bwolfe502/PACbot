@@ -1372,6 +1372,10 @@ def create_gui():
     # ============================================================
 
     def save_current_settings():
+        # Pull any web-dashboard changes into GUI vars before saving
+        _pull_settings_from_file()
+        existing = load_settings()
+
         # Build per-device troops dict
         dt = {}
         for dev_id, var in device_troops_vars.items():
@@ -1380,7 +1384,8 @@ def create_gui():
             except ValueError:
                 dt[dev_id] = 5
 
-        save_settings({
+        # Merge GUI values on top of existing settings
+        existing.update({
             "auto_heal": auto_heal_var.get(),
             "auto_restore_ap": auto_restore_ap_var.get(),
             "ap_use_free": ap_use_free_var.get(),
@@ -1404,6 +1409,7 @@ def create_gui():
             "web_dashboard": web_dash_var.get(),
             "device_troops": dt,
         })
+        save_settings(existing)
 
     # ============================================================
     # MORE ACTIONS (collapsed by default)
@@ -1622,10 +1628,8 @@ def create_gui():
         stop_all()
         from updater import check_and_update
         check_and_update()
-        # Launch new process and exit current one (closes old CMD window)
         window.destroy()
-        subprocess.Popen([sys.executable] + sys.argv)
-        sys.exit(0)
+        os.execv(sys.executable, [sys.executable] + sys.argv)
 
     def export_bug_report():
         """Collect logs, failure screenshots, stats, and settings into a zip file."""
@@ -1799,6 +1803,54 @@ def create_gui():
 
     window.after(1000, update_status_line)
 
+    _last_settings_mtime = [0.0]
+
+    def _pull_settings_from_file():
+        """Sync GUI vars from settings.json if it changed on disk.
+
+        Called both by the periodic timer and by save_current_settings()
+        (to avoid overwriting web-dashboard changes with stale GUI vars).
+        """
+        try:
+            mtime = os.path.getmtime(SETTINGS_FILE)
+            if mtime > _last_settings_mtime[0]:
+                _last_settings_mtime[0] = mtime
+                s = load_settings()
+                auto_heal_var.set(s["auto_heal"])
+                auto_restore_ap_var.set(s["auto_restore_ap"])
+                ap_use_free_var.set(s["ap_use_free"])
+                ap_use_potions_var.set(s["ap_use_potions"])
+                ap_allow_large_var.set(s["ap_allow_large_potions"])
+                ap_use_gems_var.set(s["ap_use_gems"])
+                ap_gem_limit_var.set(str(s["ap_gem_limit"]))
+                min_troops_var.set(str(s["min_troops"]))
+                variation_var.set(str(s["variation"]))
+                titan_interval_var.set(str(s["titan_interval"]))
+                groot_interval_var.set(str(s["groot_interval"]))
+                reinforce_interval_var.set(str(s["reinforce_interval"]))
+                pass_interval_var.set(str(s["pass_interval"]))
+                pass_mode_var.set(s["pass_mode"])
+                my_team_var.set(s["my_team"])
+                enemy_var.set(s["enemy_team"])
+                verbose_var.set(s.get("verbose_logging", False))
+                eg_rally_own_var.set(s.get("eg_rally_own", True))
+                mithril_interval_var.set(str(s.get("mithril_interval", 19)))
+                web_dash_var.set(s.get("web_dashboard", False))
+                mode_var.set(s.get("mode", "bl"))
+        except Exception:
+            pass
+
+    def _sync_settings_timer():
+        _pull_settings_from_file()
+        window.after(5000, _sync_settings_timer)
+
+    # Initialize mtime so we don't re-apply on first tick
+    try:
+        _last_settings_mtime[0] = os.path.getmtime(SETTINGS_FILE)
+    except Exception:
+        pass
+    window.after(5000, _sync_settings_timer)
+
     def update_mithril_timer():
         """Update the mithril button text with elapsed time since deploy."""
         if auto_mithril_var.get() and config.MITHRIL_DEPLOY_TIME:
@@ -1856,8 +1908,13 @@ def create_gui():
             _wlog.getLogger("werkzeug").setLevel(_wlog.WARNING)
 
             def _start_web_dashboard():
+                from werkzeug.serving import make_server
                 app = create_app()
-                app.run(host="0.0.0.0", port=8080, debug=False, use_reloader=False)
+                srv = make_server("0.0.0.0", 8080, app, threaded=True)
+                srv.socket.setsockopt(
+                    __import__("socket").SOL_SOCKET,
+                    __import__("socket").SO_REUSEADDR, 1)
+                srv.serve_forever()
 
             _web_thread = threading.Thread(target=_start_web_dashboard, daemon=True)
             _web_thread.start()

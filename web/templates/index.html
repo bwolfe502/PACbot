@@ -19,7 +19,7 @@
 {% endif %}
 
 {% for dev in devices %}
-<div class="card device-card">
+<div class="card device-card" data-device="{{ dev.id }}">
     <div class="device-header">
         <strong>{{ dev.name }}</strong>
         <span class="device-troops">{{ dev.troops }} troops</span>
@@ -27,6 +27,8 @@
     <div class="device-status {% if dev.status != 'Idle' %}status-active{% endif %}">
         {{ dev.status }}
     </div>
+    <div class="troop-slots"></div>
+    <div class="quest-tracking"></div>
 </div>
 {% endfor %}
 
@@ -53,37 +55,89 @@
     </form>
 </div>
 
-<div id="status-data" style="display:none"></div>
+<div class="quick-actions" style="margin-top:8px">
+    <button type="button" class="btn btn-danger" id="restart-btn" onclick="confirmRestart()">Restart PACbot</button>
+</div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-// Auto-refresh status every 3 seconds
-setInterval(function() {
+function fmtTime(sec) {
+    if (sec == null) return '';
+    var m = Math.floor(sec / 60), s = sec % 60;
+    return m + ':' + (s < 10 ? '0' : '') + s;
+}
+
+function renderTroops(container, troops, age) {
+    if (!troops || troops.length === 0) {
+        container.innerHTML = '<span class="muted" style="font-size:12px">No troop data yet</span>';
+        return;
+    }
+    var html = '';
+    troops.forEach(function(t) {
+        var isHome = t.action === 'Home';
+        var cls = isHome ? 'troop-home' : 'troop-deployed';
+        var label = t.action;
+        if (!isHome && t.time_left != null) {
+            label += ' ' + fmtTime(t.time_left);
+        }
+        html += '<span class="troop-slot ' + cls + '">' + label + '</span>';
+    });
+    if (age != null) {
+        html += '<span class="troop-age">' + (age < 60 ? age + 's ago' : Math.floor(age/60) + 'm ago') + '</span>';
+    }
+    container.innerHTML = html;
+}
+
+function renderQuests(container, quests) {
+    if (!quests || quests.length === 0) {
+        container.innerHTML = '';
+        return;
+    }
+    var html = '';
+    quests.forEach(function(q) {
+        var type = q.quest_type.replace('QuestType.', '');
+        var seen = q.last_seen != null ? q.last_seen : '?';
+        var pend = q.pending > 0
+            ? ' <span class="quest-pending">+' + q.pending + ' pending</span>'
+            : '';
+        html += '<div class="quest-row">'
+            + '<span class="quest-type">' + type + '</span>'
+            + '<span class="quest-count">' + seen + pend + '</span>'
+            + '</div>';
+    });
+    container.innerHTML = html;
+}
+
+function refreshStatus() {
     fetch('/api/status')
-        .then(r => r.json())
-        .then(data => {
-            // Update device statuses
-            const cards = document.querySelectorAll('.device-card');
-            if (data.devices) {
-                data.devices.forEach((dev, i) => {
-                    if (cards[i]) {
-                        const status = cards[i].querySelector('.device-status');
-                        if (status) {
-                            status.textContent = dev.status;
-                            if (dev.status !== 'Idle') {
-                                status.classList.add('status-active');
-                            } else {
-                                status.classList.remove('status-active');
-                            }
-                        }
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (!data.devices) return;
+            data.devices.forEach(function(dev) {
+                var card = document.querySelector('.device-card[data-device="' + dev.id + '"]');
+                if (!card) return;
+                // Status text
+                var status = card.querySelector('.device-status');
+                if (status) {
+                    status.textContent = dev.status;
+                    if (dev.status !== 'Idle') {
+                        status.classList.add('status-active');
+                    } else {
+                        status.classList.remove('status-active');
                     }
-                });
-            }
+                }
+                // Troop slots
+                var troopEl = card.querySelector('.troop-slots');
+                if (troopEl) renderTroops(troopEl, dev.troops, dev.snapshot_age);
+                // Quest tracking
+                var questEl = card.querySelector('.quest-tracking');
+                if (questEl) renderQuests(questEl, dev.quests);
+            });
             // Update task count badge
-            const badges = document.querySelectorAll('.badge');
+            var badges = document.querySelectorAll('.badge');
             if (badges.length > 1) {
-                const count = data.tasks ? data.tasks.length : 0;
+                var count = data.tasks ? data.tasks.length : 0;
                 badges[1].textContent = count + ' task' + (count !== 1 ? 's' : '') + ' running';
                 if (count > 0) {
                     badges[1].classList.add('badge-active');
@@ -92,7 +146,28 @@ setInterval(function() {
                 }
             }
         })
-        .catch(() => {});
-}, 3000);
+        .catch(function() {});
+}
+
+refreshStatus();
+setInterval(refreshStatus, 3000);
+
+function confirmRestart() {
+    if (!confirm('Restart PACbot? All running tasks will be stopped.')) return;
+    var btn = document.getElementById('restart-btn');
+    btn.disabled = true;
+    btn.textContent = 'Restarting...';
+    fetch('/api/restart', {method: 'POST'}).catch(function() {});
+    // Poll until the server is back up, then reload
+    function waitForServer() {
+        fetch('/api/status')
+            .then(function(r) {
+                if (r.ok) location.reload();
+                else setTimeout(waitForServer, 1000);
+            })
+            .catch(function() { setTimeout(waitForServer, 1000); });
+    }
+    setTimeout(waitForServer, 2000);
+}
 </script>
 {% endblock %}

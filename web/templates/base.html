@@ -19,9 +19,121 @@
             <a href="/logs" class="{% if request.path == '/logs' %}active{% endif %}">Logs</a>
         </div>
     </nav>
+    <div id="status-bar" class="status-bar hidden" onclick="toggleTroopPanel()"></div>
+    <div id="troop-panel" class="troop-panel"></div>
+    <div id="quest-panel" class="quest-panel hidden"></div>
     <main>
         {% block content %}{% endblock %}
     </main>
+    <script>
+    function fmtTime(sec) {
+        if (sec == null) return '';
+        var m = Math.floor(sec / 60), s = sec % 60;
+        return m + ':' + (s < 10 ? '0' : '') + s;
+    }
+
+    function toggleTroopPanel() {
+        var panel = document.getElementById('troop-panel');
+        panel.classList.toggle('hidden');
+    }
+
+    // Global status bar + troop/quest panels — polls /api/status every 2s
+    (function() {
+        var bar = document.getElementById('status-bar');
+        var panel = document.getElementById('troop-panel');
+        var questPanel = document.getElementById('quest-panel');
+
+        function refresh() {
+            fetch('/api/status')
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    if (!data.devices || data.devices.length === 0) {
+                        bar.classList.add('hidden');
+                        panel.classList.add('hidden');
+                        questPanel.classList.add('hidden');
+                        return;
+                    }
+                    // Status bar text — only show when something is happening
+                    var activeParts = [];
+                    data.devices.forEach(function(dev) {
+                        var status = dev.status;
+                        if (!status || status === 'Idle') return;
+                        if (data.devices.length > 1) {
+                            activeParts.push(dev.name + ': ' + status);
+                        } else {
+                            activeParts.push(status);
+                        }
+                    });
+                    if (activeParts.length > 0) {
+                        bar.textContent = activeParts.join(' | ');
+                        bar.classList.add('active');
+                        bar.classList.remove('hidden');
+                    } else {
+                        bar.classList.add('hidden');
+                    }
+
+                    // Troop panel
+                    var html = '';
+                    data.devices.forEach(function(dev) {
+                        if (data.devices.length > 1) {
+                            html += '<div class="tp-device-name">' + dev.name + '</div>';
+                        }
+                        if (!dev.troops || dev.troops.length === 0) {
+                            html += '<div class="tp-row"><span class="muted">No troop data</span></div>';
+                            return;
+                        }
+                        html += '<div class="tp-slots">';
+                        dev.troops.forEach(function(t) {
+                            var isHome = t.action === 'Home';
+                            var cls = isHome ? 'troop-home' : 'troop-deployed';
+                            var label = t.action;
+                            if (!isHome && t.time_left != null) label += ' ' + fmtTime(t.time_left);
+                            html += '<span class="troop-slot ' + cls + '">' + label + '</span>';
+                        });
+                        if (dev.snapshot_age != null) {
+                            var age = dev.snapshot_age;
+                            html += '<span class="troop-age">' + (age < 60 ? age + 's' : Math.floor(age/60) + 'm') + '</span>';
+                        }
+                        html += '</div>';
+                    });
+                    panel.innerHTML = html;
+
+                    // Quest panel — show when auto_quest is running and quest data exists
+                    var tasks = data.tasks || [];
+                    var questActive = tasks.some(function(t) { return t.indexOf('auto_quest') !== -1; });
+                    var hasQuests = data.devices.some(function(d) { return d.quests && d.quests.length > 0; });
+
+                    if (questActive && hasQuests) {
+                        var qhtml = '';
+                        data.devices.forEach(function(dev) {
+                            if (!dev.quests || dev.quests.length === 0) return;
+                            if (data.devices.length > 1) {
+                                qhtml += '<div class="tp-device-name">' + dev.name + '</div>';
+                            }
+                            dev.quests.forEach(function(q) {
+                                var type = q.quest_type.replace('QuestType.', '');
+                                var seen = q.last_seen != null ? q.last_seen : '?';
+                                var pend = q.pending > 0
+                                    ? ' <span class="quest-pending">+' + q.pending + ' pending</span>'
+                                    : '';
+                                qhtml += '<div class="qp-row">'
+                                    + '<span class="qp-type">' + type + '</span>'
+                                    + '<span class="qp-count">' + seen + pend + '</span>'
+                                    + '</div>';
+                            });
+                        });
+                        questPanel.innerHTML = qhtml;
+                        questPanel.classList.remove('hidden');
+                    } else {
+                        questPanel.classList.add('hidden');
+                    }
+                })
+                .catch(function() {});
+        }
+        refresh();
+        setInterval(refresh, 2000);
+    })();
+    </script>
     {% block scripts %}{% endblock %}
 </body>
 </html>
