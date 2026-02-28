@@ -25,13 +25,25 @@ Harden existing features before adding new ones.
 
 Build confidence that everything works before shipping updates.
 
-- [ ] Territory.py test coverage — 17 functions, currently zero tests
-- [ ] Audit existing test suite — remove bloated/redundant tests, ensure every test is meaningful
+### Critical Test Gaps (P0)
+- [ ] `test_combat.py` — attack, phantom_clash, reinforce_throne, target, teleport (390 LOC, 0% coverage)
+- [ ] `test_evil_guard.py` — rally_eg 7-phase state machine, _handle_ap_popup, probe_priest (850 LOC, 0% coverage)
+- [ ] `test_titans.py` — rally_titan, restore_ap flow, gem limit logic, _close_ap_menu (425 LOC, 0% coverage)
+- [ ] `test_territory.py` — grid analysis, border/flag detection, adjacency, auto_occupy_loop (600 LOC, 0% coverage)
+
+### Major Test Gaps (P1)
+- [ ] Expand `test_quests.py` — check_quests orchestration, tower quest flow, claim rewards, OCR parsing
+- [ ] Expand `test_rallies.py` — join_rally (649 LOC untested), join_war_rallies, _ocr_error_banner
+- [ ] `test_farming.py` — mine_mithril, mine_mithril_if_due interval logic, _set_gather_level
+
+### Infrastructure
+- [x] Audit existing test suite — no bloat found, 418 tests in 40s, well-structured
 - [ ] Add live testing suite — integration tests that run against a real emulator
 - [ ] Establish pre-release checklist — full test pass, live smoke test, version bump verification
 - [ ] Actionable test data — coverage reports, structured failure output, clear pass/fail signals
 - [ ] Keep CLAUDE.md current — ensure AI has full codebase context for efficient development
 - [ ] Better debug data collection — add failure screenshots to: join_rally (with reason), rally_titan early bail-out, read_ap None returns, heal_all template misses
+- [ ] Automatic log/stats/debug uploading to droplet
 
 ## Phase 3 — UI & Project Cleanup (v1.5.0)
 

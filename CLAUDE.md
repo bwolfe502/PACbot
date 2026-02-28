@@ -18,13 +18,13 @@ Runs on Windows with BlueStacks or MuMu Player emulators. GUI built with tkinter
 | `actions/evil_guard.py` | Evil Guard attack sequence | `rally_eg`, `search_eg_reset`, `test_eg_positions`, `_handle_ap_popup` |
 | `actions/farming.py` | Gold + mithril gathering | `mine_mithril`, `gather_gold`, `gather_gold_loop` |
 | `actions/_helpers.py` | Shared state + utilities | `_interruptible_sleep`, `_last_depart_slot` |
-| `vision.py` | Screenshots, template matching, OCR, ADB input | `load_screenshot`, `find_image`, `find_all_matches`, `tap_image`, `wait_for_image_and_tap`, `read_text`, `read_number`, `read_ap`, `adb_tap`, `adb_swipe`, `timed_wait`, `tap`, `logged_tap`, `get_last_best`, `save_failure_screenshot` |
+| `vision.py` | Screenshots, template matching, OCR, ADB input | `load_screenshot`, `find_image`, `find_all_matches`, `tap_image`, `wait_for_image_and_tap`, `read_text`, `read_number`, `read_ap`, `adb_tap`, `adb_swipe`, `adb_keyevent`, `timed_wait`, `tap`, `logged_tap`, `get_last_best`, `save_failure_screenshot` |
 | `navigation.py` | Screen detection + state-machine navigation | `check_screen`, `navigate` |
 | `troops.py` | Troop counting (pixel), status model (OCR), healing | `troops_avail`, `all_troops_home`, `heal_all`, `read_panel_statuses`, `get_troop_status`, `detect_selected_troop`, `capture_portrait`, `store_portrait`, `identify_troop`, `TroopAction`, `TroopStatus`, `DeviceTroopSnapshot` |
 | `territory.py` | Territory grid analysis + auto-occupy | `attack_territory`, `auto_occupy_loop`, `open_territory_manager`, `sample_specific_squares` |
 | `config.py` | Global mutable state, enums, constants | `QuestType`, `RallyType`, `Screen`, ADB path, thresholds, team colors, `alert_queue` |
 | `devices.py` | ADB device detection + emulator window mapping | `auto_connect_emulators`, `get_devices`, `get_emulator_instances` |
-| `botlog.py` | Logging, metrics, timing | `setup_logging`, `get_logger`, `set_console_verbose`, `StatsTracker`, `timed_action`, `stats` |
+| `botlog.py` | Logging, metrics, timing | `setup_logging`, `get_logger`, `set_console_verbose`, `StatsTracker`, `timed_action`, `stats`, `BOT_VERSION` |
 | `web/dashboard.py` | Flask web dashboard (mobile remote control) | `create_app`, routes, auto-mode toggles |
 
 ## Dependency Graph
@@ -156,6 +156,15 @@ State machine via `navigate(target_screen, device)`:
 3. Routes to target screen via intermediate screens (e.g. MAP → ALLIANCE → WAR)
 4. Verifies arrival with `_verify_screen()` (retries twice)
 5. Recursion guard: max depth 3
+
+**Unknown screen recovery** — `_recover_to_known_screen(device)` uses 4-phase escalation:
+1. Template-based dismiss: close X, cancel button, back arrow (x2)
+2. Android BACK key (`adb_keyevent(device, 4)`) — OS-level dismiss for popups without X
+3. Center screen tap (540, 960) — dismiss transparent/click-through overlays
+4. Nuclear: 3x BACK + center tap + 5s wait
+
+`_last_unknown_info[device]` tracks the best template match when UNKNOWN is returned, enabling
+"likely MAP" detection (70-79% score) for smarter recovery decisions.
 
 ### Adaptive Timing (vision.py + botlog.py)
 `timed_wait(device, condition_fn, budget_s, label)`:
@@ -290,7 +299,7 @@ and the web dashboard. Updated via `config.set_device_status(device, msg)`, clea
 ## Tests
 
 ```bash
-py -m pytest          # run all ~447 tests
+py -m pytest          # run all ~418 tests
 py -m pytest -x       # stop on first failure
 py -m pytest -k name  # filter by test name
 ```
@@ -301,8 +310,8 @@ No fixtures require a running emulator — all use mocked ADB/vision.
 
 | File | Tests | Coverage |
 |------|-------|----------|
-| `test_vision.py` | `get_last_best`, `find_image`, `find_all_matches`, `read_number`, `read_text`, `read_ap`, `get_template`, `load_screenshot`, `adb_tap`, `adb_swipe`, `_try_reconnect`, ADB reconnect retry |
-| `test_navigation.py` | `check_screen`, `navigate`, `_verify_screen`, `_recover_to_known_screen` |
+| `test_vision.py` | `get_last_best`, `find_image`, `find_all_matches`, `read_number`, `read_text`, `read_ap`, `get_template`, `load_screenshot`, `adb_tap`, `adb_swipe`, `adb_keyevent`, `_try_reconnect`, ADB reconnect retry |
+| `test_navigation.py` | `check_screen`, `navigate`, `_verify_screen`, `_recover_to_known_screen` (4-phase escalation: template dismiss, Android BACK key, center tap, nuclear) |
 | `test_troops.py` | Troop pixel detection, status tracking, icon matching, portrait tracking, triangle detection |
 | `test_botlog.py` | `StatsTracker`, `timed_action` decorator, `get_logger` |
 | `test_config.py` | AP restore options clamping logic (gem limit bounds) |
@@ -312,7 +321,7 @@ No fixtures require a running emulator — all use mocked ADB/vision.
 | `test_quest_tracking.py` | Multi-device quest rally tracking, `_track_quest_progress`, `_record_rally_started` (`actions.quests`) |
 | `test_check_quests_helpers.py` | `_deduplicate_quests`, `_get_actionable_quests` (`actions.quests`) |
 | `test_classify_quest.py` | `_classify_quest_text` OCR classification (all QuestType values) (`actions.quests`) |
-| `test_gather_gold.py` | Gather gold flow, loop troop deployment (`actions.farming`) |
+| `test_gather_gold.py` | Gather gold flow (depart verification, retry logic), loop troop deployment with retry (`actions.farming`) |
 | `test_tower_quest.py` | Tower/fortress quest occupy, recall, navigation (`actions.quests`) |
 | `test_settings_validation.py` | `validate_settings` — type checks, range/choice validation, device_troops, warnings, schema sync |
 | `test_task_runner.py` | `sleep_interval`, `launch_task`/`stop_task`, run_once, run_repeat, consecutive error recovery, settings load/save (`runners`) |
@@ -340,6 +349,7 @@ No fixtures require a running emulator — all use mocked ADB/vision.
 PACbot/
 ├── CLAUDE.md            # AI technical reference (this file)
 ├── ROADMAP.md           # Development roadmap
+├── TESTING.md           # Tester protocol (bug reporting + active testing guide)
 ├── main.py              # GUI entry point (~1830 lines)
 ├── runners.py           # Shared task runners (used by main.py + dashboard)
 ├── settings.py          # Settings persistence (used by main.py + dashboard)
@@ -375,7 +385,7 @@ PACbot/
 │       ├── index.html   # Dashboard: device cards, toggles, actions, running list
 │       ├── settings.html # Settings form
 │       └── logs.html    # Log viewer
-├── tests/               # pytest suite (~413 tests)
+├── tests/               # pytest suite (~418 tests)
 ├── logs/                # Log files
 ├── stats/               # Session stats JSON
 └── debug/               # Debug screenshots
