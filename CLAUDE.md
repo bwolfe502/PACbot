@@ -299,7 +299,7 @@ and the web dashboard. Updated via `config.set_device_status(device, msg)`, clea
 ## Tests
 
 ```bash
-py -m pytest          # run all ~418 tests
+py -m pytest          # run all ~526 tests
 py -m pytest -x       # stop on first failure
 py -m pytest -k name  # filter by test name
 ```
@@ -321,6 +321,8 @@ No fixtures require a running emulator — all use mocked ADB/vision.
 | `test_quest_tracking.py` | Multi-device quest rally tracking, `_track_quest_progress`, `_record_rally_started` (`actions.quests`) |
 | `test_check_quests_helpers.py` | `_deduplicate_quests`, `_get_actionable_quests` (`actions.quests`) |
 | `test_classify_quest.py` | `_classify_quest_text` OCR classification (all QuestType values) (`actions.quests`) |
+| `test_combat.py` | `_check_dead`, `_find_green_pixel`, `_detect_player_at_eg`, `teleport` (happy path, timeout, dead detection, cancel) (`actions.combat`) |
+| `test_territory.py` | `_classify_square_team` (exact/noisy colors, thresholds, team configs), `_get_border_color` (sampling, clock avoidance), `_has_flag` (red pixel detection), `_is_adjacent_to_my_territory` (adjacency, throne, edges), `attack_territory` (full workflow), `auto_occupy_loop` (cycle, stop signal) (`territory`) |
 | `test_gather_gold.py` | Gather gold flow (depart verification, retry logic), loop troop deployment with retry (`actions.farming`) |
 | `test_tower_quest.py` | Tower/fortress quest occupy, recall, navigation (`actions.quests`) |
 | `test_settings_validation.py` | `validate_settings` — type checks, range/choice validation, device_troops, warnings, schema sync |
@@ -385,7 +387,7 @@ PACbot/
 │       ├── index.html   # Dashboard: device cards, toggles, actions, running list
 │       ├── settings.html # Settings form
 │       └── logs.html    # Log viewer
-├── tests/               # pytest suite (~418 tests)
+├── tests/               # pytest suite (~526 tests)
 ├── logs/                # Log files
 ├── stats/               # Session stats JSON
 └── debug/               # Debug screenshots

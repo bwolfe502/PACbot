@@ -2,9 +2,6 @@ import cv2
 import numpy as np
 import time
 import random
-import tkinter as tk
-import customtkinter as ctk
-from PIL import Image, ImageTk
 
 import config
 from config import (SQUARE_SIZE, GRID_OFFSET_X, GRID_OFFSET_Y,
@@ -18,11 +15,152 @@ from botlog import get_logger, timed_action
 _log = get_logger("territory")
 
 # ============================================================
+# TERRITORY GRID HELPERS (extracted for testability)
+# ============================================================
+
+def _get_square_center(row, col):
+    """Get pixel coordinates of square center."""
+    x = int(GRID_OFFSET_X + col * SQUARE_SIZE + SQUARE_SIZE / 2)
+    y = int(GRID_OFFSET_Y + row * SQUARE_SIZE + SQUARE_SIZE / 2)
+    return x, y
+
+
+def _get_border_color(image, row, col):
+    """Sample the BORDER pixels of a square — avoids clock obstruction for top rows.
+
+    Returns average BGR color as a tuple of three floats.
+    """
+    x = int(GRID_OFFSET_X + col * SQUARE_SIZE)
+    y = int(GRID_OFFSET_Y + row * SQUARE_SIZE)
+
+    border_pixels = []
+
+    # For row 0 specifically (heavily obscured by clock)
+    if row == 0:
+        for y_offset in range(2, int(SQUARE_SIZE / 4), 3):
+            sample_y = y + y_offset
+            if sample_y < image.shape[0]:
+                for x_offset in [5, 10, 15, 20, 25, 30, 35]:
+                    sample_x = x + x_offset
+                    if sample_x < image.shape[1]:
+                        border_pixels.append(image[sample_y, sample_x])
+
+    # For row 1 (partially obscured by clock)
+    elif row == 1:
+        for offset in [5, 10, 15, 20, 25, 30, 35]:
+            if y + offset < image.shape[0] and x < image.shape[1]:
+                border_pixels.append(image[y + offset, x])
+        bottom_y = int(y + SQUARE_SIZE - 1)
+        for offset in [5, 10, 15, 20, 25, 30]:
+            if bottom_y < image.shape[0] and x + offset < image.shape[1]:
+                border_pixels.append(image[bottom_y, x + offset])
+
+    # For all other rows (not obscured)
+    else:
+        for offset in [8, 15, 22, 30]:
+            if x + offset < image.shape[1] and y < image.shape[0]:
+                border_pixels.append(image[y, x + offset])
+        for offset in [8, 15, 22, 30]:
+            if y + offset < image.shape[0] and x < image.shape[1]:
+                border_pixels.append(image[y + offset, x])
+
+    if border_pixels:
+        avg = np.mean(border_pixels, axis=0)
+        return tuple(avg)
+    return (0, 0, 0)
+
+
+def _classify_square_team(bgr):
+    """Determine team based on border color — find closest Euclidean match.
+
+    Thresholds:
+    - Green: <= 70 (neutral, always recognized)
+    - Enemy teams: <= 70
+    - Own team (MY_TEAM_COLOR): <= 90 (lenient — we want to find our own borders)
+    - Any team: <= 55 (tight fallback)
+    - Fallback own team: <= 95 (last resort)
+    """
+    b, g, r = bgr
+
+    min_distance = float('inf')
+    best_team = "unknown"
+
+    distances = {}
+    for team, (target_b, target_g, target_r) in BORDER_COLORS.items():
+        distance = ((b - target_b)**2 + (g - target_g)**2 + (r - target_r)**2)**0.5
+        distances[team] = distance
+
+        if distance < min_distance:
+            min_distance = distance
+            best_team = team
+
+    if best_team == "green" and min_distance <= 70:
+        return "green"
+    elif best_team in config.ENEMY_TEAMS and min_distance <= 70:
+        return best_team
+    elif best_team == config.MY_TEAM_COLOR and min_distance <= 90:
+        return best_team
+    elif min_distance <= 55:
+        return best_team
+
+    if best_team == "unknown" and config.MY_TEAM_COLOR in distances and distances[config.MY_TEAM_COLOR] <= 95:
+        return config.MY_TEAM_COLOR
+
+    return "unknown"
+
+
+def _has_flag(image, row, col):
+    """Check if a square has a flag using red flag color #FF5D5A.
+
+    Returns True if more than 15 red pixels are found in the square.
+    """
+    x = int(GRID_OFFSET_X + col * SQUARE_SIZE)
+    y = int(GRID_OFFSET_Y + row * SQUARE_SIZE)
+    w = int(SQUARE_SIZE)
+    h = int(SQUARE_SIZE)
+
+    square = image[y:y+h, x:x+w]
+
+    red_flag_mask = cv2.inRange(square, (75, 80, 240), (105, 110, 255))
+    red_pixels = cv2.countNonZero(red_flag_mask)
+
+    return red_pixels > 15
+
+
+def _is_adjacent_to_my_territory(image, row, col):
+    """Check if square is DIRECTLY next to own territory."""
+    neighbors = [
+        (row-1, col),
+        (row+1, col),
+        (row, col-1),
+        (row, col+1),
+    ]
+
+    for r, c in neighbors:
+        if not (0 <= r < GRID_HEIGHT and 0 <= c < GRID_WIDTH):
+            continue
+        if (r, c) in THRONE_SQUARES:
+            continue
+
+        border_color = _get_border_color(image, r, c)
+        team = _classify_square_team(border_color)
+
+        if team == config.MY_TEAM_COLOR:
+            return True
+
+    return False
+
+
+# ============================================================
 # TERRITORY SQUARE MANAGER GUI
 # ============================================================
 
 def open_territory_manager(device):
     """Open a visual interface to manually select squares to attack or ignore"""
+    import tkinter as tk
+    import customtkinter as ctk
+    from PIL import Image, ImageTk
+
     log = get_logger("territory", device)
 
     # Take a screenshot of territory screen
@@ -262,120 +400,6 @@ def attack_territory(device, debug=False):
     if debug:
         debug_img = image.copy()
 
-    def get_square_center(row, col):
-        """Get pixel coordinates of square center"""
-        x = int(GRID_OFFSET_X + col * SQUARE_SIZE + SQUARE_SIZE / 2)
-        y = int(GRID_OFFSET_Y + row * SQUARE_SIZE + SQUARE_SIZE / 2)
-        return x, y
-
-    def get_border_color(row, col):
-        """Sample the BORDER pixels - avoid clock obstruction for top rows"""
-        x = int(GRID_OFFSET_X + col * SQUARE_SIZE)
-        y = int(GRID_OFFSET_Y + row * SQUARE_SIZE)
-
-        border_pixels = []
-
-        # For row 0 specifically (heavily obscured by clock)
-        if row == 0:
-            for y_offset in range(2, int(SQUARE_SIZE / 4), 3):
-                sample_y = y + y_offset
-                if sample_y < image.shape[0]:
-                    for x_offset in [5, 10, 15, 20, 25, 30, 35]:
-                        sample_x = x + x_offset
-                        if sample_x < image.shape[1]:
-                            border_pixels.append(image[sample_y, sample_x])
-
-        # For row 1 (partially obscured by clock)
-        elif row == 1:
-            for offset in [5, 10, 15, 20, 25, 30, 35]:
-                if y + offset < image.shape[0] and x < image.shape[1]:
-                    border_pixels.append(image[y + offset, x])
-            bottom_y = int(y + SQUARE_SIZE - 1)
-            for offset in [5, 10, 15, 20, 25, 30]:
-                if bottom_y < image.shape[0] and x + offset < image.shape[1]:
-                    border_pixels.append(image[bottom_y, x + offset])
-
-        # For all other rows (not obscured)
-        else:
-            for offset in [8, 15, 22, 30]:
-                if x + offset < image.shape[1] and y < image.shape[0]:
-                    border_pixels.append(image[y, x + offset])
-            for offset in [8, 15, 22, 30]:
-                if y + offset < image.shape[0] and x < image.shape[1]:
-                    border_pixels.append(image[y + offset, x])
-
-        if border_pixels:
-            avg = np.mean(border_pixels, axis=0)
-            return tuple(avg)
-        return (0, 0, 0)
-
-    def classify_square_team(bgr):
-        """Determine team based on border color - find closest match"""
-        b, g, r = bgr
-
-        min_distance = float('inf')
-        best_team = "unknown"
-
-        distances = {}
-        for team, (target_b, target_g, target_r) in BORDER_COLORS.items():
-            distance = ((b - target_b)**2 + (g - target_g)**2 + (r - target_r)**2)**0.5
-            distances[team] = distance
-
-            if distance < min_distance:
-                min_distance = distance
-                best_team = team
-
-        if best_team == "green" and min_distance <= 70:
-            return "green"
-        elif best_team in config.ENEMY_TEAMS and min_distance <= 70:
-            return best_team
-        elif best_team == config.MY_TEAM_COLOR and min_distance <= 90:
-            return best_team
-        elif min_distance <= 55:
-            return best_team
-
-        if best_team == "unknown" and config.MY_TEAM_COLOR in distances and distances[config.MY_TEAM_COLOR] <= 95:
-            return config.MY_TEAM_COLOR
-
-        return "unknown"
-
-    def has_flag(row, col):
-        """Check if a square has a flag using red flag color #FF5D5A"""
-        x = int(GRID_OFFSET_X + col * SQUARE_SIZE)
-        y = int(GRID_OFFSET_Y + row * SQUARE_SIZE)
-        w = int(SQUARE_SIZE)
-        h = int(SQUARE_SIZE)
-
-        square = image[y:y+h, x:x+w]
-
-        red_flag_mask = cv2.inRange(square, (75, 80, 240), (105, 110, 255))
-        red_pixels = cv2.countNonZero(red_flag_mask)
-
-        return red_pixels > 15
-
-    def is_adjacent_to_my_territory(row, col):
-        """Check if square is DIRECTLY next to my territory"""
-        neighbors = [
-            (row-1, col),
-            (row+1, col),
-            (row, col-1),
-            (row, col+1),
-        ]
-
-        for r, c in neighbors:
-            if not (0 <= r < GRID_HEIGHT and 0 <= c < GRID_WIDTH):
-                continue
-            if (r, c) in THRONE_SQUARES:
-                continue
-
-            border_color = get_border_color(r, c)
-            team = classify_square_team(border_color)
-
-            if team == config.MY_TEAM_COLOR:
-                return True
-
-        return False
-
     # Build list of valid targets
     log.info("Scanning grid for targets...")
     log.debug("My team: %s, Attacking: %s", config.MY_TEAM_COLOR, config.ENEMY_TEAMS)
@@ -390,16 +414,16 @@ def attack_territory(device, debug=False):
             if (row, col) in THRONE_SQUARES:
                 continue
 
-            border_color = get_border_color(row, col)
-            team = classify_square_team(border_color)
+            border_color = _get_border_color(image, row, col)
+            team = _classify_square_team(border_color)
 
             if team in config.ENEMY_TEAMS:
                 enemy_squares.append((row, col))
 
-                if is_adjacent_to_my_territory(row, col):
+                if _is_adjacent_to_my_territory(image, row, col):
                     adjacent_enemies.append((row, col))
 
-                    if not has_flag(row, col):
+                    if not _has_flag(image, row, col):
                         targets.append((row, col))
                     else:
                         flagged_squares.append((row, col))
@@ -426,7 +450,7 @@ def attack_territory(device, debug=False):
     if debug:
         for row in range(GRID_HEIGHT):
             for col in range(GRID_WIDTH):
-                x, y = get_square_center(row, col)
+                x, y = _get_square_center(row, col)
 
                 cv2.putText(debug_img, f"{row},{col}", (x-15, y),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.25, (255, 255, 255), 1)
@@ -444,7 +468,7 @@ def attack_territory(device, debug=False):
 
     if targets:
         target_row, target_col = random.choice(targets)
-        click_x, click_y = get_square_center(target_row, target_col)
+        click_x, click_y = _get_square_center(target_row, target_col)
 
         log.info("Attacking square (%d, %d)", target_row, target_col)
 

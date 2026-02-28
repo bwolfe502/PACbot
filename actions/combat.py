@@ -282,7 +282,12 @@ def _detect_player_at_eg(screen, x, y, box_size=200, tolerance=25):
 
 @timed_action("teleport")
 def teleport(device):
-    """Teleport to a location on the map"""
+    """Teleport to a random location on the map.
+
+    Pans camera randomly, long-presses to open context menu, taps TELEPORT,
+    then checks for a green boundary circle (valid location). Repeats up to
+    15 attempts or 90 seconds.
+    """
     log = get_logger("actions", device)
     log.debug("Checking if all troops are home before teleporting...")
     if not all_troops_home(device):
@@ -298,6 +303,13 @@ def teleport(device):
 
     log.debug("Starting teleport sequence...")
 
+    # When called from auto-occupy, the camera is centered on the tower we
+    # just attacked.  Tapping it opens its info dialog, which auto-pans the
+    # camera so the tower moves up and the view centers on the empty area
+    # below — a spot more likely to be valid for teleporting.
+    # In other contexts this tap may hit nothing (harmless) or an unrelated
+    # building (the dialog is dismissed next).  Future: make setup
+    # context-aware.
     logged_tap(device, 540, 960, "tp_start")
     time.sleep(2)
 
@@ -309,7 +321,8 @@ def teleport(device):
     if _check_dead(screen, dead_img, device):
         return False
 
-    logged_tap(device, 540, 500, "tp_check")
+    # Dismiss any dialog opened by the tap above
+    logged_tap(device, 540, 500, "tp_dismiss_dialog")
     time.sleep(2)
 
     log.debug("Starting teleport search loop (90 second timeout)...")
@@ -320,33 +333,33 @@ def teleport(device):
 
     while time.time() - start_time < 90 and attempt_count < max_attempts:
         attempt_count += 1
-        log.debug("=== Teleport attempt #%d/%d ===", attempt_count, max_attempts)
+        attempt_start = time.time()
 
         # Pan camera randomly
-        log.debug("Panning camera randomly...")
         distance = random.randint(200, 400)
         direction = random.choice([-1, 1])
         end_x = max(100, min(980, 540 + distance * direction))
+        pan_dir = "right" if direction == 1 else "left"
+        log.debug("Attempt #%d/%d — pan %s %dpx (end_x=%d)",
+                  attempt_count, max_attempts, pan_dir, distance, end_x)
 
         adb_swipe(device, 540, 960, end_x, 960, 300)
         time.sleep(1)
 
-        # Long press to search for random location
-        log.debug("Long pressing to search for location...")
+        # Long press to open context menu
         adb_swipe(device, 540, 1400, 540, 1400, 1000)
         time.sleep(2)
 
-        # Click the teleport/search button
-        log.debug("Clicking teleport search button...")
+        # Tap the TELEPORT button on context menu
         logged_tap(device, 780, 1400, "tp_search_btn")
         time.sleep(2)
 
-        # Wait and check for green pixel
+        # Wait and check for green boundary circle (valid location)
         green_check_start = time.time()
         found_green = False
         screen = None
+        green_checks = 0
 
-        log.debug("Searching for green pixel (valid location)...")
         while time.time() - green_check_start < 3:
             screen = load_screenshot(device)
             if screen is None:
@@ -356,18 +369,29 @@ def teleport(device):
             if _check_dead(screen, dead_img, device):
                 return False
 
+            green_checks += 1
             if _find_green_pixel(screen, target_color):
                 found_green = True
-                log.info("Green pixel found! Confirming teleport...")
+                attempt_elapsed = time.time() - attempt_start
+                total_elapsed = time.time() - start_time
+                log.info("Green circle found on attempt #%d (%d checks, "
+                         "attempt %.1fs, total %.1fs). Confirming...",
+                         attempt_count, green_checks, attempt_elapsed,
+                         total_elapsed)
+                # Save success screenshot for calibration data
+                save_failure_screenshot(device, "teleport_success")
                 logged_tap(device, 760, 1700, "tp_confirm")
                 time.sleep(2)
-                log.info("Teleport complete!")
+                log.info("Teleport confirmed after %d attempt(s), %.1fs total",
+                         attempt_count, time.time() - start_time)
                 return True
 
             time.sleep(1)
 
         if not found_green:
-            log.debug("No valid location found (no green pixel). Canceling...")
+            attempt_elapsed = time.time() - attempt_start
+            log.debug("No green circle after %d checks (attempt %.1fs). Canceling...",
+                      green_checks, attempt_elapsed)
 
             if screen is not None:
                 match = find_image(screen, "cancel.png")
@@ -379,11 +403,11 @@ def teleport(device):
                     log.debug("Cancel button not found, waiting for UI to clear...")
 
             time.sleep(2)
-            log.debug("Trying again...")
 
         elapsed = time.time() - start_time
         log.debug("Time elapsed: %.1fs / 90s", elapsed)
 
-    log.error("Teleport failed after %d attempts", attempt_count)
+    log.error("Teleport failed after %d attempts (%.1fs)",
+              attempt_count, time.time() - start_time)
     save_failure_screenshot(device, "teleport_timeout")
     return False

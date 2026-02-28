@@ -26,10 +26,10 @@ Harden existing features before adding new ones.
 Build confidence that everything works before shipping updates.
 
 ### Critical Test Gaps (P0)
-- [ ] `test_combat.py` — attack, phantom_clash, reinforce_throne, target, teleport (390 LOC, 0% coverage)
+- [x] `test_combat.py` — _check_dead, _find_green_pixel, _detect_player_at_eg, teleport (28 tests). Still missing: attack, phantom_clash, reinforce_throne, target
 - [ ] `test_evil_guard.py` — rally_eg 7-phase state machine, _handle_ap_popup, probe_priest (850 LOC, 0% coverage)
 - [ ] `test_titans.py` — rally_titan, restore_ap flow, gem limit logic, _close_ap_menu (425 LOC, 0% coverage)
-- [ ] `test_territory.py` — grid analysis, border/flag detection, adjacency, auto_occupy_loop (600 LOC, 0% coverage)
+- [x] `test_territory.py` — _classify_square_team, _get_border_color, _has_flag, _is_adjacent_to_my_territory, attack_territory, auto_occupy_loop (66 tests)
 
 ### Major Test Gaps (P1)
 - [ ] Expand `test_quests.py` — check_quests orchestration, tower quest flow, claim rewards, OCR parsing
