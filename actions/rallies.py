@@ -223,7 +223,7 @@ def join_rally(rally_types, device, skip_heal=False, stop_check=None):
             # Try close button first
             tap_image("close_x.png", device)
             timed_wait(device, lambda: check_screen(device) == Screen.WAR,
-                       1.5, "jr_backout_close_x")
+                       3.0, "jr_backout_close_x")
 
             # Check where we are before continuing
             current = check_screen(device)
@@ -436,7 +436,7 @@ def join_rally(rally_types, device, skip_heal=False, stop_check=None):
                         last_screen = s
 
                         # Check for depart button — confirms detail screen loaded
-                        if not detail_loaded and find_image(s, "depart.png", threshold=0.8):
+                        if not detail_loaded and find_image(s, "depart.png", threshold=0.75):
                             detail_loaded = True
 
                         # Check for empty slot BEFORE full_rally — a rally can

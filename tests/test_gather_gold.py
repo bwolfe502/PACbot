@@ -66,7 +66,7 @@ class TestGatherGold:
         assert result is False
 
     @patch("actions.farming.save_failure_screenshot")
-    @patch("actions.farming.find_image", return_value=None)
+    @patch("actions.farming.wait_for_image_and_tap", return_value=False)
     @patch("actions.farming._set_gather_level")
     @patch("actions.farming.logged_tap")
     @patch("actions.farming.timed_wait")
@@ -79,16 +79,14 @@ class TestGatherGold:
                                                    mock_heal, mock_ss,
                                                    mock_check, mock_wait,
                                                    mock_tap, mock_set_level,
-                                                   mock_find, mock_save_fail,
+                                                   mock_wait_tap, mock_save_fail,
                                                    mock_device):
         config.MIN_TROOPS_AVAILABLE = 0
         result = gather_gold(mock_device)
         assert result is False
-        mock_save_fail.assert_called_once()
+        assert mock_save_fail.call_count == 2  # retry screenshot + final fail
 
-    @patch("actions.farming.adb_tap")
-    @patch("actions.farming._save_click_trail")
-    @patch("actions.farming.find_image")
+    @patch("actions.farming.wait_for_image_and_tap", return_value=True)
     @patch("actions.farming._set_gather_level")
     @patch("actions.farming.logged_tap")
     @patch("actions.farming.timed_wait")
@@ -101,11 +99,8 @@ class TestGatherGold:
                                               mock_heal, mock_ss,
                                               mock_check, mock_wait,
                                               mock_tap, mock_set_level,
-                                              mock_find, mock_trail,
-                                              mock_adb_tap, mock_device):
+                                              mock_wait_tap, mock_device):
         config.MIN_TROOPS_AVAILABLE = 0
-        # find_image returns a depart match
-        mock_find.return_value = (0.9, (500, 1500), 50, 200)
         result = gather_gold(mock_device)
         assert result is True
 
@@ -125,9 +120,10 @@ class TestGatherGold:
 # ============================================================
 
 class TestRunGatherLoop:
+    @patch("actions.farming.navigate", return_value=True)
     @patch("actions.farming.gather_gold")
     @patch("actions.farming.troops_avail", return_value=5)
-    def test_deploys_up_to_max(self, mock_troops, mock_gather, mock_device):
+    def test_deploys_up_to_max(self, mock_troops, mock_gather, mock_nav, mock_device):
         config.GATHER_MAX_TROOPS = 3
         config.MIN_TROOPS_AVAILABLE = 0
         mock_gather.return_value = True
@@ -135,23 +131,37 @@ class TestRunGatherLoop:
         assert result == 3
         assert mock_gather.call_count == 3
 
+    @patch("actions.farming.navigate", return_value=True)
     @patch("actions.farming.gather_gold")
     @patch("actions.farming.troops_avail", side_effect=[5, 5, 1])
-    def test_stops_when_not_enough_troops(self, mock_troops, mock_gather, mock_device):
+    def test_stops_when_not_enough_troops(self, mock_troops, mock_gather, mock_nav, mock_device):
         config.GATHER_MAX_TROOPS = 5
         config.MIN_TROOPS_AVAILABLE = 1
         mock_gather.return_value = True
         result = gather_gold_loop(mock_device)
         assert result == 2
 
+    @patch("actions.farming.navigate", return_value=True)
     @patch("actions.farming.gather_gold")
     @patch("actions.farming.troops_avail", return_value=5)
-    def test_stops_on_failure(self, mock_troops, mock_gather, mock_device):
+    def test_stops_on_failure_after_retry(self, mock_troops, mock_gather, mock_nav, mock_device):
         config.GATHER_MAX_TROOPS = 3
         config.MIN_TROOPS_AVAILABLE = 0
-        mock_gather.side_effect = [True, False]
+        # First troop succeeds, second fails, retry also fails → stop
+        mock_gather.side_effect = [True, False, False]
         result = gather_gold_loop(mock_device)
         assert result == 1
+
+    @patch("actions.farming.navigate", return_value=True)
+    @patch("actions.farming.gather_gold")
+    @patch("actions.farming.troops_avail", return_value=5)
+    def test_retry_succeeds(self, mock_troops, mock_gather, mock_nav, mock_device):
+        config.GATHER_MAX_TROOPS = 2
+        config.MIN_TROOPS_AVAILABLE = 0
+        # First troop: fail then retry succeeds. Second troop: succeeds.
+        mock_gather.side_effect = [False, True, True]
+        result = gather_gold_loop(mock_device)
+        assert result == 2
 
     @patch("actions.farming.gather_gold")
     @patch("actions.farming.troops_avail", return_value=5)

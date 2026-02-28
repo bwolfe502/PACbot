@@ -3,7 +3,8 @@ import os
 import time
 from datetime import datetime
 
-from vision import tap_image, tap, load_screenshot, adb_tap, get_template, timed_wait
+from vision import (tap_image, tap, load_screenshot, adb_tap, adb_keyevent,
+                    get_template, timed_wait)
 import config
 from config import Screen
 from botlog import get_logger, stats
@@ -15,6 +16,10 @@ from botlog import get_logger, stats
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEBUG_DIR = os.path.join(SCRIPT_DIR, "debug")
 os.makedirs(DEBUG_DIR, exist_ok=True)
+
+# Tracks best-match info when check_screen returns UNKNOWN.
+# Used by _recover_to_known_screen for escalating recovery.
+_last_unknown_info = {}  # device -> {"best_name": str, "best_val": float}
 
 # Keep only the last N debug screenshots to avoid filling disk
 def _cleanup_debug_dir(max_files=config.DEBUG_SCREENSHOT_MAX):
@@ -225,6 +230,7 @@ def check_screen(device):
             return identified
 
         log.warning("Unknown screen detected (best: %s at %.0f%%)", best_name, best_val * 100)
+        _last_unknown_info[device] = {"best_name": best_name, "best_val": best_val}
         _save_debug_screenshot(device, "unknown_screen", screen)
         return Screen.UNKNOWN
 
@@ -286,15 +292,28 @@ def _try_clear_map_popup(device):
 
 
 def _recover_to_known_screen(device):
-    """Try multiple dismiss strategies to escape unknown screens (popups, dialogs, etc).
-    Returns the screen name if recovery succeeds, or 'unknown' if all attempts fail."""
-    log = get_logger("navigation", device)
-    log.info("On unknown screen, attempting recovery...")
+    """Try escalating strategies to escape unknown screens.
 
-    # Strategy 1: Try tapping cancel button (dismisses confirmation dialogs)
-    # Strategy 2: Try tapping red X at top-right of popups
-    # Strategy 3: Tap back arrow (template match)
-    # Each strategy gets one attempt before moving to the next
+    Phase 1: Standard template-based dismiss (close X, cancel, back arrow)
+    Phase 2: Android BACK key (OS-level dismiss for game popups without X)
+    Phase 3: Tap screen center (dismiss transparent/click-through overlays)
+    Phase 4: Nuclear — triple BACK + center tap + long wait
+
+    Returns the screen name if recovery succeeds, Screen.UNKNOWN otherwise.
+    """
+    log = get_logger("navigation", device)
+
+    # Check if we have a "likely MAP" situation (70-79%)
+    info = _last_unknown_info.pop(device, {})
+    likely_map = (info.get("best_name") == Screen.MAP
+                  and info.get("best_val", 0) >= 0.70)
+    if likely_map:
+        log.info("Recovery: best match was MAP at %.0f%% — trying overlay dismiss",
+                 info["best_val"] * 100)
+    else:
+        log.info("On unknown screen, attempting recovery...")
+
+    # Phase 1: Standard template-based strategies (existing)
     strategies = [
         ("close X (template)", lambda: tap_image("close_x.png", device, threshold=0.7)),
         ("cancel button", lambda: tap_image("cancel.png", device, threshold=0.65)),
@@ -312,7 +331,38 @@ def _recover_to_known_screen(device):
             return current
         log.debug("Recovery via %s: still unknown", name)
 
-    log.warning("Recovery FAILED after all strategies")
+    # Phase 2: Android BACK key (dismisses game popups that lack an X button)
+    log.info("Recovery phase 2: Android BACK key")
+    adb_keyevent(device, 4)  # KEYCODE_BACK
+    timed_wait(device, lambda: check_screen(device) != Screen.UNKNOWN,
+               2, "recover_android_back")
+    current = check_screen(device)
+    if current != Screen.UNKNOWN:
+        log.info("Recovery via Android BACK key: now on %s", current)
+        return current
+
+    # Phase 3: Tap screen center (dismiss transparent/click-through overlays)
+    log.info("Recovery phase 3: center tap to dismiss overlays")
+    adb_tap(device, 540, 960)
+    time.sleep(1.0)
+    current = check_screen(device)
+    if current != Screen.UNKNOWN:
+        log.info("Recovery via center tap: now on %s", current)
+        return current
+
+    # Phase 4: Nuclear — 3x BACK + center tap + 5s wait
+    log.info("Recovery phase 4: nuclear — 3x BACK + center tap + long wait")
+    for _ in range(3):
+        adb_keyevent(device, 4)  # KEYCODE_BACK
+        time.sleep(0.5)
+    adb_tap(device, 540, 960)
+    time.sleep(5)
+    current = check_screen(device)
+    if current != Screen.UNKNOWN:
+        log.info("Recovery via nuclear option: now on %s", current)
+        return current
+
+    log.warning("Recovery FAILED after all strategies (including escalation)")
     _save_debug_screenshot(device, "recovery_fail")
     return Screen.UNKNOWN
 
@@ -461,7 +511,7 @@ def navigate(target_screen, device, _depth=0):
             if not navigate(Screen.MAP, device, _depth=_depth + 1):
                 return False
         adb_tap(device, 75, 1880)
-        return _verify_screen(Screen.KINGDOM, device)
+        return _verify_screen(Screen.KINGDOM, device, wait_time=3.0)
 
     log.warning("Unknown target screen: %s", target_screen)
     return False

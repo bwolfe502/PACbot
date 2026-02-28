@@ -274,48 +274,33 @@ def gather_gold(device, stop_check=None):
     if stop_check and stop_check():
         return False
 
-    # Step 5: Tap the mine on the map (always centered after search)
-    logged_tap(device, 540, 900, "gold_mine_on_map")
-    timed_wait(device, lambda: False, 1.5, "gold_mine_select")
-
-    # Step 6: Tap Gather button
-    logged_tap(device, 540, 1125, "gather_button")
-
-    # Step 7: Wait for deployment panel — poll for depart button
-    depart_match = None
-    depart_screen = None
-    depart_start = time.time()
-    while time.time() - depart_start < 8:
+    # Step 5-7: Tap mine, tap Gather, wait for depart.
+    # Retry the mine+gather sequence once if the first attempt misses.
+    for mine_attempt in range(2):
         if stop_check and stop_check():
             return False
-        s = load_screenshot(device)
-        if s is not None:
-            match = find_image(s, "depart.png", threshold=0.6)
-            if match is not None:
-                depart_match = match
-                depart_screen = s
-                break
-        time.sleep(0.4)
 
-    if depart_match is not None:
-        timed_wait(device, lambda: False, 1, "gather_depart_settle")
-        # Re-find depart after settle for fresh coordinates
-        s = load_screenshot(device)
-        if s is not None:
-            fresh_match = find_image(s, "depart.png", threshold=0.6)
-            if fresh_match is not None:
-                depart_match = fresh_match
-                depart_screen = s
-        _, max_loc, h, w = depart_match
-        dx, dy = TAP_OFFSETS.get("depart.png", (0, 0))
-        cx, cy = max_loc[0] + w // 2 + dx, max_loc[1] + h // 2 + dy
-        _save_click_trail(depart_screen, device, cx, cy, "depart")
-        adb_tap(device, cx, cy)
-        log.info("Gather Gold troop deployed! (depart at %d,%d)", cx, cy)
-        return True
+        # Step 5: Tap the mine on the map (always centered after search)
+        logged_tap(device, 540, 900, "gold_mine_on_map")
+        timed_wait(device, lambda: False, 3, "gold_mine_select")
 
-    log.warning("Failed to find depart button after 8s poll")
-    save_failure_screenshot(device, "gather_depart_fail")
+        # Step 6: Tap Gather button
+        logged_tap(device, 540, 1125, "gather_button")
+        timed_wait(device, lambda: False, 1.5, "gather_button_response")
+
+        # Step 7: Wait for deployment panel and tap DEPART
+        if wait_for_image_and_tap("depart.png", device, timeout=8, threshold=0.7):
+            log.info("Gather Gold troop deployed!")
+            return True
+
+        if mine_attempt == 0:
+            log.info("Depart not found — retrying mine tap")
+            save_failure_screenshot(device, "gather_depart_retry")
+            navigate(Screen.MAP, device)
+        else:
+            log.warning("Failed to find depart button after 2 attempts")
+            save_failure_screenshot(device, "gather_depart_fail")
+
     return False
 
 
@@ -346,8 +331,16 @@ def gather_gold_loop(device, stop_check=None):
         if gather_gold(device, stop_check=stop_check):
             deployed += 1
         else:
-            log.warning("Gather troop %d failed — stopping gather loop", i + 1)
-            break
+            # Retry once before giving up on this troop slot
+            log.info("Gather troop %d failed — retrying once", i + 1)
+            navigate(Screen.MAP, device)
+            if stop_check and stop_check():
+                break
+            if gather_gold(device, stop_check=stop_check):
+                deployed += 1
+            else:
+                log.warning("Gather troop %d failed on retry — stopping gather loop", i + 1)
+                break
 
     log.info("Gather loop complete: deployed %d/%d troops", deployed, max_troops)
     return deployed

@@ -183,23 +183,61 @@ class TestRecoverToKnownScreen:
         result = _recover_to_known_screen("dev1")
         assert result == Screen.MAP
 
+    @patch("navigation._save_debug_screenshot")
+    @patch("navigation.time.sleep")
+    @patch("navigation.adb_keyevent")
     @patch("navigation.timed_wait")
     @patch("navigation.adb_tap")
     @patch("navigation.tap_image")
     @patch("navigation.check_screen")
-    def test_all_strategies_fail(self, mock_check, mock_tap_img, mock_tap, mock_tw):
+    def test_all_strategies_fail(self, mock_check, mock_tap_img, mock_tap, mock_tw,
+                                  mock_keyevent, mock_sleep, mock_save):
         mock_tap_img.return_value = False
         mock_check.return_value = Screen.UNKNOWN
         result = _recover_to_known_screen("dev1")
         assert result == Screen.UNKNOWN
+        # Verify escalation reached phase 2+ (adb_keyevent called)
+        assert mock_keyevent.call_count >= 1
 
     @patch("navigation.timed_wait")
     @patch("navigation.adb_tap")
     @patch("navigation.tap_image")
     @patch("navigation.check_screen")
-    def test_back_button_succeeds(self, mock_check, mock_tap_img, mock_tap, mock_tw):
-        # First two strategies fail, back button succeeds
+    def test_back_arrow_strategy_succeeds(self, mock_check, mock_tap_img, mock_tap, mock_tw):
+        # First two strategies fail, back arrow (3rd phase-1 strategy) succeeds
         mock_tap_img.return_value = False
         mock_check.side_effect = [Screen.UNKNOWN, Screen.UNKNOWN, Screen.BATTLE_LIST]
         result = _recover_to_known_screen("dev1")
         assert result == Screen.BATTLE_LIST
+
+    @patch("navigation.time.sleep")
+    @patch("navigation.adb_keyevent")
+    @patch("navigation.timed_wait")
+    @patch("navigation.adb_tap")
+    @patch("navigation.tap_image")
+    @patch("navigation.check_screen")
+    def test_android_back_key_succeeds(self, mock_check, mock_tap_img, mock_tap, mock_tw,
+                                        mock_keyevent, mock_sleep):
+        """Phase 2 (Android BACK keyevent) succeeds after all phase 1 strategies fail."""
+        mock_tap_img.return_value = False
+        # 4 UNKNOWN for phase 1 strategies, then MAP for phase 2
+        mock_check.side_effect = [Screen.UNKNOWN] * 4 + [Screen.MAP]
+        result = _recover_to_known_screen("dev1")
+        assert result == Screen.MAP
+        mock_keyevent.assert_called_with("dev1", 4)
+
+    @patch("navigation._save_debug_screenshot")
+    @patch("navigation.time.sleep")
+    @patch("navigation.adb_keyevent")
+    @patch("navigation.timed_wait")
+    @patch("navigation.adb_tap")
+    @patch("navigation.tap_image")
+    @patch("navigation.check_screen")
+    def test_center_tap_succeeds(self, mock_check, mock_tap_img, mock_tap, mock_tw,
+                                   mock_keyevent, mock_sleep, mock_save):
+        """Phase 3 (center tap) succeeds after phases 1-2 fail."""
+        mock_tap_img.return_value = False
+        # 4 UNKNOWN for phase 1, 1 UNKNOWN for phase 2, then MAP for phase 3
+        mock_check.side_effect = [Screen.UNKNOWN] * 5 + [Screen.MAP]
+        result = _recover_to_known_screen("dev1")
+        assert result == Screen.MAP

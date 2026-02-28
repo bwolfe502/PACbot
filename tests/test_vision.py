@@ -8,8 +8,8 @@ import cv2
 
 from vision import (
     get_last_best, find_image, find_all_matches, read_number, read_text,
-    read_ap, get_template, load_screenshot, adb_tap, adb_swipe, tap_image,
-    wait_for_image_and_tap, save_failure_screenshot, _thread_local,
+    read_ap, get_template, load_screenshot, adb_tap, adb_swipe, adb_keyevent,
+    tap_image, wait_for_image_and_tap, save_failure_screenshot, _thread_local,
     _template_cache,
 )
 
@@ -383,6 +383,24 @@ class TestAdbTap:
     def test_timeout(self, mock_run, mock_stats):
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="adb", timeout=10)
         adb_tap("dev1", 500, 1000)  # Should not raise
+        mock_stats.record_adb_timing.assert_called_once()
+
+
+class TestAdbKeyevent:
+    @patch("vision.stats")
+    @patch("vision.subprocess.run")
+    def test_success(self, mock_run, mock_stats):
+        mock_run.return_value = MagicMock()
+        adb_keyevent("dev1", 4)
+        args = mock_run.call_args[0][0]
+        assert "keyevent" in args
+        assert "4" in args
+
+    @patch("vision.stats")
+    @patch("vision.subprocess.run")
+    def test_timeout(self, mock_run, mock_stats):
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="adb", timeout=10)
+        adb_keyevent("dev1", 4)  # Should not raise
         mock_stats.record_adb_timing.assert_called_once()
 
 

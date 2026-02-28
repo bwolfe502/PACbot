@@ -568,6 +568,19 @@ def adb_swipe(device, x1, y1, x2, y2, duration_ms=300):
     if elapsed > 3.0:
         get_logger("vision", device).warning("adb_swipe slow: %.2fs", elapsed)
 
+def adb_keyevent(device, keycode):
+    """Send a key event via ADB (e.g. KEYCODE_BACK=4, KEYCODE_HOME=3)."""
+    t0 = time.time()
+    try:
+        subprocess.run([adb_path, "-s", device, "shell", "input", "keyevent", str(keycode)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=ADB_COMMAND_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        get_logger("vision", device).warning("adb_keyevent timed out after %ds", ADB_COMMAND_TIMEOUT)
+        stats.record_adb_timing(device, "keyevent", float(ADB_COMMAND_TIMEOUT), success=False)
+        return
+    elapsed = time.time() - t0
+    stats.record_adb_timing(device, "keyevent", elapsed)
+
 def tap(button_name, device):
     """Tap a button by its name from the BUTTONS dictionary"""
     log = get_logger("vision", device)
@@ -610,6 +623,9 @@ IMAGE_REGIONS = {
     "statuses/returning.png":     (0, 0, 360, 1920),       # left third
     "stationed.png":              (0, 0, 360, 1920),       # left third
     "defending.png":              (0, 0, 360, 1920),       # left third
+
+    # Deploy screen
+    "depart.png":                 (0, 800, 1080, 1650),       # mid-to-lower; hits at y:873-1586
 
     # Back arrow (top-left corner)
     "back_arrow.png":             (0, 9, 145, 137),          # tight: 104x88 tpl @ fixed (73,73)

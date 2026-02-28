@@ -118,6 +118,7 @@ class TestStatsTrackerSave:
 
         import json
         data = json.loads(files[0].read_text())
+        assert "version" in data
         assert "session_start" in data
         assert "devices" in data
         assert "dev1" in data["devices"]

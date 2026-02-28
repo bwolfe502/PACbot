@@ -22,6 +22,14 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_DIR = os.path.join(SCRIPT_DIR, "logs")
 STATS_DIR = os.path.join(SCRIPT_DIR, "stats")
 
+# Version info — read once at import time
+_VERSION_FILE = os.path.join(SCRIPT_DIR, "version.txt")
+try:
+    with open(_VERSION_FILE, "r") as _f:
+        BOT_VERSION = _f.read().strip()
+except Exception:
+    BOT_VERSION = "unknown"
+
 # ============================================================
 # ADAPTIVE BUDGET CONFIGURATION
 # ============================================================
@@ -92,9 +100,13 @@ def setup_logging(verbose=False):
     logging.getLogger("torch").setLevel(logging.WARNING)
 
     # Session start banner — makes each run easy to find in rotating log
+    import platform as _plat
     _banner = logging.getLogger("botlog")
     _banner.info("=" * 60)
-    _banner.info("NEW SESSION — %s", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    _banner.info("NEW SESSION — %s — v%s", datetime.now().strftime("%Y-%m-%d %H:%M:%S"), BOT_VERSION)
+    _banner.info("System: %s %s | %s | %d cores | Python %s",
+                 _plat.system(), _plat.release(), _plat.machine(),
+                 os.cpu_count() or 0, _plat.python_version())
     _banner.info("=" * 60)
 
 
@@ -414,6 +426,7 @@ class StatsTracker:
                 output_devices[device] = device_copy
 
             output = {
+                "version": BOT_VERSION,
                 "session_start": self._session_start.strftime("%Y-%m-%d %H:%M:%S"),
                 "session_end": now.strftime("%Y-%m-%d %H:%M:%S"),
                 "duration_minutes": round(duration, 1),

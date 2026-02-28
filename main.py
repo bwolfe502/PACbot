@@ -1385,10 +1385,57 @@ def create_gui():
     def restart():
         save_current_settings()
         stop_all()
+        # Disconnect ADB devices before restarting
+        try:
+            from devices import get_devices
+            for d in get_devices():
+                try:
+                    subprocess.run([config.adb_path, "disconnect", d],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                   timeout=2)
+                except Exception:
+                    pass
+        except Exception:
+            pass
         from updater import check_and_update
         check_and_update()
         window.destroy()
         os.execv(sys.executable, [sys.executable] + sys.argv)
+
+    def _get_ram_gb():
+        """Get total system RAM in human-readable format. Cross-platform."""
+        try:
+            if platform.system() == "Windows":
+                import ctypes
+                class MEMORYSTATUSEX(ctypes.Structure):
+                    _fields_ = [("dwLength", ctypes.c_ulong),
+                                ("dwMemoryLoad", ctypes.c_ulong),
+                                ("ullTotalPhys", ctypes.c_ulonglong),
+                                ("ullAvailPhys", ctypes.c_ulonglong),
+                                ("ullTotalPageFile", ctypes.c_ulonglong),
+                                ("ullAvailPageFile", ctypes.c_ulonglong),
+                                ("ullTotalVirtual", ctypes.c_ulonglong),
+                                ("ullAvailVirtual", ctypes.c_ulonglong),
+                                ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+                mem = MEMORYSTATUSEX()
+                mem.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+                ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(mem))
+                return f"{mem.ullTotalPhys / (1024**3):.1f} GB"
+            elif platform.system() == "Darwin":
+                import subprocess
+                result = subprocess.run(["sysctl", "-n", "hw.memsize"],
+                                        capture_output=True, text=True, timeout=5)
+                return f"{int(result.stdout.strip()) / (1024**3):.1f} GB"
+            else:
+                # Linux — read /proc/meminfo
+                with open("/proc/meminfo") as f:
+                    for line in f:
+                        if line.startswith("MemTotal:"):
+                            kb = int(line.split()[1])
+                            return f"{kb / (1024**2):.1f} GB"
+        except Exception:
+            pass
+        return "unknown"
 
     def export_bug_report():
         """Collect logs, failure screenshots, stats, and settings into a zip file."""
@@ -1441,13 +1488,21 @@ def create_gui():
                 except Exception:
                     device_list = ["(could not detect)"]
 
+                # Collect machine specs
+                cpu_cores = os.cpu_count() or "unknown"
+                cpu_arch = platform.machine()
+                ram_gb = _get_ram_gb()
+
                 info_lines = [
                     f"PACbot Bug Report",
                     f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
                     f"",
+                    f"=== System ===",
                     f"Version: {version}",
                     f"Python: {sys.version}",
                     f"OS: {platform.system()} {platform.release()} ({platform.version()})",
+                    f"CPU: {cpu_arch}, {cpu_cores} cores",
+                    f"RAM: {ram_gb}",
                     f"ADB: {config.adb_path}",
                     f"Devices: {', '.join(device_list) if device_list else '(none)'}",
                     f"",
@@ -1687,6 +1742,18 @@ def create_gui():
         # Flush all log handlers before exiting
         try:
             logging.shutdown()
+        except Exception:
+            pass
+        # Disconnect ADB devices to avoid zombie adb processes
+        try:
+            from devices import get_devices
+            for d in get_devices():
+                try:
+                    subprocess.run([config.adb_path, "disconnect", d],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                   timeout=2)
+                except Exception:
+                    pass
         except Exception:
             pass
         try:

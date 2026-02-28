@@ -181,7 +181,7 @@ def _probe_priest(device, x, y, label):
         return False
 
     logged_tap(device, x, y, f"probe_{label}")
-    timed_wait(device, _dialog_visible, 1.5, "probe_dialog_open")
+    timed_wait(device, _dialog_visible, 2.5, "probe_dialog_open")
 
     start = time.time()
     while time.time() - start < 3:
@@ -305,7 +305,7 @@ def rally_eg(device, stop_check=None):
     # Tap EG boss on map to enter the priest view
     log.debug("EG rally: tapping EG on map")
     logged_tap(device, EG_PRIEST_POSITIONS[0][0], EG_PRIEST_POSITIONS[0][1], "eg_boss_on_map")
-    timed_wait(device, _dialog_visible, 1.5, "eg_boss_dialog_open")
+    timed_wait(device, _dialog_visible, 2.0, "eg_boss_dialog_open")
 
     # Region constraint for stationed.png: only search center-right of screen
     # to avoid false positives on the hero portrait list (left side, x < 300).
@@ -325,8 +325,8 @@ def rally_eg(device, stop_check=None):
                               priest_num, max_loc[0], max_loc[1], max_val * 100)
                     logged_tap(device, 540, 1500, f"eg_proceed_p{priest_num}")
                     timed_wait(device,
-                               lambda: find_image(load_screenshot(device), "depart.png", threshold=0.8) is not None,
-                               1, "eg_proceed_to_depart")
+                               lambda: find_image(load_screenshot(device), "depart.png", threshold=0.75) is not None,
+                               2, "eg_proceed_to_depart")
                     return True
                 else:
                     log.debug("P%d: check_and_proceed %d/10 — checked best %.0f%%, tapping unchecked",
@@ -368,7 +368,7 @@ def rally_eg(device, stop_check=None):
 
         # AP was restored — retry depart if the deployment screen is still up
         timed_wait(device,
-                   lambda: find_image(load_screenshot(device), "depart.png", threshold=0.8) is not None,
+                   lambda: find_image(load_screenshot(device), "depart.png", threshold=0.75) is not None,
                    2, "eg_ap_restored_depart_wait")
         if tap_image("depart.png", device):
             log.info("P%d: depart tapped after AP restore", priest_num)
@@ -401,7 +401,7 @@ def rally_eg(device, stop_check=None):
             if tap_image("defending.png", device):
                 log.debug("P%d: found defending, retrying depart", priest_num)
                 timed_wait(device,
-                           lambda: find_image(load_screenshot(device), "depart.png", threshold=0.8) is not None,
+                           lambda: find_image(load_screenshot(device), "depart.png", threshold=0.75) is not None,
                            1, "eg_defending_to_depart")
                 if tap_image("depart.png", device):
                     log.debug("P%d: depart tapped after defending", priest_num)
@@ -409,7 +409,7 @@ def rally_eg(device, stop_check=None):
             if attempt < 4:
                 log.debug("P%d: depart not found, retry %d/5...", priest_num, attempt + 1)
                 timed_wait(device,
-                           lambda: find_image(load_screenshot(device), "depart.png", threshold=0.8) is not None,
+                           lambda: find_image(load_screenshot(device), "depart.png", threshold=0.75) is not None,
                            2, "eg_depart_retry_wait")
         log.error("P%d: click_depart FAILED after 5 attempts", priest_num)
         save_failure_screenshot(device, f"eg_depart_fail_p{priest_num}")
@@ -489,7 +489,7 @@ def rally_eg(device, stop_check=None):
                 if max_val > 0.8:
                     dialog_open = True
             if not dialog_open:
-                if find_image(screen, "depart.png", threshold=0.8):
+                if find_image(screen, "depart.png", threshold=0.75):
                     dialog_open = True
 
             if not dialog_open:
@@ -767,7 +767,7 @@ def rally_eg(device, stop_check=None):
         for _ in range(4):
             s = load_screenshot(device)
             if s is not None:
-                if find_image(s, "depart.png", threshold=0.8):
+                if find_image(s, "depart.png", threshold=0.75):
                     p6_dialog_opened = True
                     break
                 if find_image(s, "defending.png", threshold=0.8):
