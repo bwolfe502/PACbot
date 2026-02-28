@@ -44,6 +44,11 @@ Build confidence that everything works before shipping updates.
 - [ ] Keep CLAUDE.md current — ensure AI has full codebase context for efficient development
 - [ ] Better debug data collection — add failure screenshots to: join_rally (with reason), rally_titan early bail-out, read_ap None returns, heal_all template misses
 - [ ] Automatic log/stats/debug uploading to droplet
+- [ ] Telemetry consent prompt — explicit opt-in dialog on first run (never silent, never pre-checked)
+- [ ] Data scrubbing — strip device IPs, file paths, player names before upload
+- [ ] Screenshot masking — black out chat area and name regions before staging
+- [ ] Clear submitted data from local machine after successful upload (no duplicates)
+- [ ] Settings UI for telemetry — tier selection, "View queued data" button, opt-out
 
 ## Phase 3 — UI & Project Cleanup (v1.5.0)
 
