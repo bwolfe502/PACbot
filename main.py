@@ -2182,10 +2182,13 @@ def create_gui():
 
     if settings.get("web_dashboard", False):
         try:
-            from web.dashboard import create_app, get_local_ip
+            from web.dashboard import create_app, get_local_ip, ensure_firewall_open
             import logging as _wlog
             # Suppress Flask's default request logging in console
             _wlog.getLogger("werkzeug").setLevel(_wlog.WARNING)
+
+            # Open Windows Firewall for remote phone access
+            ensure_firewall_open(8080)
 
             def _start_web_dashboard():
                 from werkzeug.serving import make_server
