@@ -27,6 +27,8 @@ from actions._helpers import _last_depart_slot
 
 _log = get_logger("actions")
 
+_MAX_TITAN_SEARCH_ATTEMPTS = 3
+
 
 # ============================================================
 # AP RESTORE
@@ -351,65 +353,79 @@ def rally_titan(device):
         log.warning("Failed to navigate to map screen")
         return False
 
-    # Tap SEARCH button to open rally menu
-    logged_tap(device, 900, 1800, "titan_search_btn")
-
-    # Wait for rally menu to open — check if titan select is already visible
-    # (may already be on rally tab from a previous search)
-    found_select = timed_wait(
-        device,
-        lambda: find_image(load_screenshot(device), "rally_titan_select.png", threshold=0.5) is not None,
-        1.5, "titan_search_menu_open")
-
-    if not found_select:
-        # Titan select not visible yet — need to tap rally tab
-        logged_tap(device, 850, 560, "titan_rally_tab")
-        timed_wait(
-            device,
-            lambda: find_image(load_screenshot(device), "rally_titan_select.png", threshold=0.5) is not None,
-            1.5, "titan_rally_tab_load")
-
-    if not wait_for_image_and_tap("rally_titan_select.png", device, timeout=5, threshold=0.65):
-        log.warning("Failed to find Titan select")
-        return False
-    timed_wait(
-        device,
-        lambda: find_image(load_screenshot(device), "search.png", threshold=0.6) is not None,
-        1, "titan_select_to_search")
-
-    if not wait_for_image_and_tap("search.png", device, timeout=5, threshold=0.65):
-        log.warning("Failed to find Search button")
-        return False
-    timed_wait(
-        device,
-        lambda: check_screen(device) == Screen.MAP,
-        2, "titan_search_complete")
-
-    # Dismiss any popup that appeared during the search (e.g. Season Crystal Card)
-    if check_screen(device) != Screen.MAP:
-        log.info("Popup appeared after titan search — navigating back to map")
-        if not navigate(Screen.MAP, device):
-            log.warning("Failed to dismiss popup and return to map")
-            return False
-
-    # Select titan on map and confirm
-    logged_tap(device, 540, 900, "titan_on_map")
-    timed_wait(device, lambda: False, 1.5, "titan_on_map_select")
-    logged_tap(device, 420, 1400, "titan_confirm")
-
-    # Wait for deployment panel — poll for depart button, capture portrait, then tap.
+    # Search → center-tap → depart poll, with retry on miss (titan may walk)
     depart_match = None
     depart_screen = None
-    depart_start = time.time()
-    while time.time() - depart_start < 8:
-        s = load_screenshot(device)
-        if s is not None:
-            match = find_image(s, "depart.png", threshold=0.6)
-            if match is not None:
-                depart_match = match
-                depart_screen = s
-                break
-        time.sleep(0.4)
+    for search_attempt in range(_MAX_TITAN_SEARCH_ATTEMPTS):
+        if search_attempt > 0:
+            log.info("Re-searching for titan (attempt %d/%d)",
+                     search_attempt + 1, _MAX_TITAN_SEARCH_ATTEMPTS)
+            save_failure_screenshot(device, f"titan_miss_{search_attempt}")
+            navigate(Screen.MAP, device)  # clear stale UI before re-search
+
+        # Tap SEARCH button to open rally menu
+        logged_tap(device, 900, 1800, "titan_search_btn")
+
+        # Wait for rally menu to open — check if titan select is already visible
+        # (may already be on rally tab from a previous search)
+        found_select = timed_wait(
+            device,
+            lambda: find_image(load_screenshot(device), "rally_titan_select.png", threshold=0.5) is not None,
+            1.5, "titan_search_menu_open")
+
+        if not found_select:
+            # Titan select not visible yet — need to tap rally tab
+            logged_tap(device, 850, 560, "titan_rally_tab")
+            timed_wait(
+                device,
+                lambda: find_image(load_screenshot(device), "rally_titan_select.png", threshold=0.5) is not None,
+                1.5, "titan_rally_tab_load")
+
+        if not wait_for_image_and_tap("rally_titan_select.png", device, timeout=5, threshold=0.65):
+            log.warning("Failed to find Titan select")
+            return False
+        timed_wait(
+            device,
+            lambda: find_image(load_screenshot(device), "search.png", threshold=0.6) is not None,
+            1, "titan_select_to_search")
+
+        if not wait_for_image_and_tap("search.png", device, timeout=5, threshold=0.65):
+            log.warning("Failed to find Search button")
+            return False
+        timed_wait(
+            device,
+            lambda: check_screen(device) == Screen.MAP,
+            2, "titan_search_complete")
+
+        # Dismiss any popup that appeared during the search (e.g. Season Crystal Card)
+        if check_screen(device) != Screen.MAP:
+            log.info("Popup appeared after titan search — navigating back to map")
+            if not navigate(Screen.MAP, device):
+                log.warning("Failed to dismiss popup and return to map")
+                return False
+
+        # Select titan on map and confirm
+        logged_tap(device, 540, 900, "titan_on_map")
+        timed_wait(device, lambda: False, 1.5, "titan_on_map_select")
+        logged_tap(device, 420, 1400, "titan_confirm")
+
+        # Wait for deployment panel — poll for depart button
+        depart_start = time.time()
+        while time.time() - depart_start < 8:
+            s = load_screenshot(device)
+            if s is not None:
+                match = find_image(s, "depart.png", threshold=0.6)
+                if match is not None:
+                    depart_match = match
+                    depart_screen = s
+                    break
+            time.sleep(0.4)
+
+        if depart_match is not None:
+            break  # found depart — proceed to tap it
+
+        log.warning("Depart not found — titan may have walked (attempt %d/%d)",
+                    search_attempt + 1, _MAX_TITAN_SEARCH_ATTEMPTS)
 
     if depart_match is not None:
         # Let the deployment panel fully settle before interacting
@@ -435,6 +451,6 @@ def rally_titan(device):
         adb_tap(device, cx, cy)
         log.info("Titan rally started! (depart tapped at %d,%d)", cx, cy)
         return True
-    log.warning("Failed to find depart button after 8s poll")
+    log.warning("Failed to find depart button after %d search attempts", _MAX_TITAN_SEARCH_ATTEMPTS)
     save_failure_screenshot(device, "titan_depart_fail")
     return False
