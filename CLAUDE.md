@@ -14,7 +14,7 @@ Runs on Windows with BlueStacks or MuMu Player emulators. GUI built with tkinter
 | `actions/quests.py` | Quest system + tower quest | `check_quests`, `get_quest_tracking_state`, `reset_quest_tracking`, `occupy_tower` |
 | `actions/rallies.py` | Rally joining + blacklist | `join_rally`, `join_war_rallies`, `reset_rally_blacklist` |
 | `actions/combat.py` | Attacks, targeting, teleport | `attack`, `phantom_clash_attack`, `reinforce_throne`, `target`, `teleport` |
-| `actions/titans.py` | Titan rally + AP restore | `rally_titan`, `restore_ap`, `_restore_ap_from_open_menu`, `_close_ap_menu` |
+| `actions/titans.py` | Titan rally + AP restore | `rally_titan`, `restore_ap`, `_restore_ap_from_open_menu`, `_close_ap_menu`, `_MAX_TITAN_SEARCH_ATTEMPTS` |
 | `actions/evil_guard.py` | Evil Guard attack sequence | `rally_eg`, `search_eg_reset`, `test_eg_positions`, `_handle_ap_popup` |
 | `actions/farming.py` | Gold + mithril gathering | `mine_mithril`, `gather_gold`, `gather_gold_loop` |
 | `actions/_helpers.py` | Shared state + utilities | `_interruptible_sleep`, `_last_depart_slot` |
@@ -202,6 +202,14 @@ State machine via `navigate(target_screen, device)`:
 - 30-minute expiry, reset on auto-quest start
 - Per-device, session-scoped
 
+### Titan Search Retry (actions/titans.py)
+`rally_titan` searches for the titan, which centers the map on it, then blind-taps (540, 900)
+to select it. If the titan walks off-center before the tap lands, the confirm popup never appears
+and depart times out. The search → center-tap → depart-poll sequence is wrapped in a retry loop
+(`_MAX_TITAN_SEARCH_ATTEMPTS = 3`). On miss, saves a debug screenshot, navigates back to MAP to
+clear stale UI, then re-opens the rally menu and re-searches — re-centering the camera on the
+titan's current position.
+
 ### AP Restoration (actions/titans.py + config.py)
 Order: free restores → potions (small→large) → gems.
 Controlled by `AP_USE_FREE`, `AP_USE_POTIONS`, `AP_ALLOW_LARGE_POTIONS`, `AP_USE_GEMS`, `AP_GEM_LIMIT`.
@@ -361,7 +369,7 @@ PACbot/
 │   ├── quests.py        # Quest system + tower quest (~910 lines)
 │   ├── rallies.py       # Rally joining + blacklist (~810 lines)
 │   ├── combat.py        # Attacks, targeting, teleport (~390 lines)
-│   ├── titans.py        # Titan rally + AP restore (~425 lines)
+│   ├── titans.py        # Titan rally + AP restore (~456 lines)
 │   ├── evil_guard.py    # Evil Guard attack sequence (~850 lines)
 │   └── farming.py       # Gold + mithril gathering (~350 lines)
 ├── vision.py            # CV + OCR + ADB input

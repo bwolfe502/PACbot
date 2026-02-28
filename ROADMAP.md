@@ -10,7 +10,7 @@ Priority: bug fixes, clean code, maintainability, usability — then new feature
 Harden existing features before adding new ones.
 
 - [ ] Improve mithril mining reliability — detect occupied mines and plundered troops
-- [ ] Improve titan rally miss detection — handle titan walking away, detect miss + retry
+- [x] Improve titan rally miss detection — handle titan walking away, detect miss + retry
 - [ ] Teleport system improvements — more reliable targeting and validation
 - [x] Error recovery — stuck-state detection, disconnect handling, popup resilience
 - [x] AP Recovery popup handling — detect game-opened AP popup during EG depart, restore AP inline
