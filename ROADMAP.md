@@ -31,6 +31,7 @@ Build confidence that everything works before shipping updates.
 - [ ] Establish pre-release checklist — full test pass, live smoke test, version bump verification
 - [ ] Actionable test data — coverage reports, structured failure output, clear pass/fail signals
 - [ ] Keep CLAUDE.md current — ensure AI has full codebase context for efficient development
+- [ ] Better debug data collection — add failure screenshots to: join_rally (with reason), rally_titan early bail-out, read_ap None returns, heal_all template misses
 
 ## Phase 3 — UI & Project Cleanup (v1.5.0)
 
