@@ -22,7 +22,7 @@ from web.dashboard import (
     create_app, launch_task, stop_task, stop_all, cleanup_dead_tasks,
     sleep_interval, run_once, TASK_FUNCTIONS, AUTO_RUNNERS,
     _load_settings, _save_settings, _apply_settings,
-    DEFAULTS,
+    DEFAULTS, ensure_firewall_open,
 )
 
 
@@ -376,6 +376,54 @@ class TestCleanupDeadTasks:
         assert "alive_task" in config.running_tasks
         ev.set()
         t.join(timeout=1)
+
+
+# ---------------------------------------------------------------------------
+# Firewall helper tests
+# ---------------------------------------------------------------------------
+
+class TestEnsureFirewallOpen:
+    @patch("web.dashboard.sys")
+    def test_non_windows_returns_true(self, mock_sys):
+        mock_sys.platform = "linux"
+        assert ensure_firewall_open(8080) is True
+
+    @patch("web.dashboard.sys")
+    def test_rule_already_exists(self, mock_sys):
+        mock_sys.platform = "win32"
+        rule_name = "PACbot Web Dashboard (TCP 8080)"
+        mock_result = MagicMock(returncode=0, stdout=f"Rule Name: {rule_name}\n")
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            assert ensure_firewall_open(8080) is True
+            # Should only check, not add
+            mock_run.assert_called_once()
+            assert "show" in mock_run.call_args[0][0]
+
+    @patch("web.dashboard.sys")
+    def test_adds_rule_successfully(self, mock_sys):
+        mock_sys.platform = "win32"
+        check_result = MagicMock(returncode=1, stdout="")
+        add_result = MagicMock(returncode=0)
+        with patch("subprocess.run", side_effect=[check_result, add_result]) as mock_run:
+            assert ensure_firewall_open(8080) is True
+            assert mock_run.call_count == 2
+            add_call_args = mock_run.call_args_list[1][0][0]
+            assert "add" in add_call_args
+            assert "localport=8080" in add_call_args
+
+    @patch("web.dashboard.sys")
+    def test_add_rule_fails_no_admin(self, mock_sys):
+        mock_sys.platform = "win32"
+        check_result = MagicMock(returncode=1, stdout="")
+        add_result = MagicMock(returncode=1)
+        with patch("subprocess.run", side_effect=[check_result, add_result]):
+            assert ensure_firewall_open(8080) is False
+
+    @patch("web.dashboard.sys")
+    def test_netsh_not_found(self, mock_sys):
+        mock_sys.platform = "win32"
+        with patch("subprocess.run", side_effect=FileNotFoundError):
+            assert ensure_firewall_open(8080) is False
 
 
 # ---------------------------------------------------------------------------

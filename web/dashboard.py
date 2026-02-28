@@ -612,6 +612,62 @@ def get_local_ip():
         return "127.0.0.1"
 
 
+def ensure_firewall_open(port=8080):
+    """On Windows, add a firewall rule to allow inbound TCP on *port*.
+
+    Returns True if the rule was added (or already exists), False if we
+    couldn't add it (e.g. not on Windows, or not running as admin).
+    """
+    if sys.platform != "win32":
+        return True  # no firewall management needed
+
+    import subprocess as _sp
+
+    rule_name = f"PACbot Web Dashboard (TCP {port})"
+
+    # Check if rule already exists
+    try:
+        check = _sp.run(
+            ["netsh", "advfirewall", "firewall", "show", "rule",
+             f"name={rule_name}"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if check.returncode == 0 and rule_name in check.stdout:
+            _log.info("Firewall rule '%s' already exists", rule_name)
+            return True
+    except Exception:
+        pass
+
+    # Try to add the rule
+    try:
+        result = _sp.run(
+            ["netsh", "advfirewall", "firewall", "add", "rule",
+             f"name={rule_name}",
+             "dir=in", "action=allow", "protocol=TCP",
+             f"localport={port}", "profile=private"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0:
+            _log.info("Firewall rule added: %s", rule_name)
+            return True
+        else:
+            _log.warning(
+                "Could not add firewall rule (need admin?). "
+                "Remote devices may not be able to connect.\n"
+                "  Fix: run as Administrator, or manually allow TCP port %d:\n"
+                '  netsh advfirewall firewall add rule name="%s" '
+                "dir=in action=allow protocol=TCP localport=%d profile=private",
+                port, rule_name, port,
+            )
+            return False
+    except FileNotFoundError:
+        _log.warning("netsh not found — cannot configure firewall automatically")
+        return False
+    except Exception as exc:
+        _log.warning("Firewall rule creation failed: %s", exc)
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Flask app factory
 # ---------------------------------------------------------------------------
