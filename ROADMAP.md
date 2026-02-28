@@ -12,9 +12,14 @@ Harden existing features before adding new ones.
 - [ ] Improve mithril mining reliability — detect occupied mines and plundered troops
 - [ ] Improve titan rally miss detection — handle titan walking away, detect miss + retry
 - [ ] Teleport system improvements — more reliable targeting and validation
-- [ ] Error recovery — stuck-state detection, disconnect handling, popup resilience
+- [x] Error recovery — stuck-state detection, disconnect handling, popup resilience
+- [x] AP Recovery popup handling — detect game-opened AP popup during EG depart, restore AP inline
 - [ ] Image region audit — verify all `IMAGE_REGIONS` in vision.py are still accurate
-- [ ] Settings validation — validate `settings.json` on startup, catch invalid/corrupt values
+- [x] Settings validation — validate `settings.json` on startup, catch invalid/corrupt values
+- [ ] Fix join_rally success rate (33%) — `jr_slot_to_depart` transition at 0%, war screen scroll settle broken
+- [ ] Fix rally_titan instant failures (53%) — search menu not opening reliably (31-50% success)
+- [ ] Fix heal flow — all heal transitions at 0%, verify `heal.png` template matches current game UI
+- [ ] Tune timed_wait budgets — `jr_backout_close_x` needs 3.5s (currently 0.5-1.5s), `verify_bl_screen` needs 2.5s
 
 ## Phase 2 — Testing & Quality (v1.4.0)
 

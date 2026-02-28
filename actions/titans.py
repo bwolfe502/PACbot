@@ -55,12 +55,15 @@ _AP_GEM_BUTTON = (300, 1466)
 _AP_GEM_CONFIRM = (774, 1098)
 _AP_GEM_COST_REGION = (100, 700, 750, 850)  # OCR region for "Spend X Gem(s)?" text
 
-def _close_ap_menu(device):
-    """Close the AP Recovery menu and the search menu behind it."""
+def _close_ap_menu(device, double_close=True):
+    """Close the AP Recovery menu.  When double_close=True (default), also
+    closes the search menu behind it (used when restore_ap opened via search).
+    Pass double_close=False for game-opened popups with no search menu."""
     tap_image("close_x.png", device)  # Close AP Recovery modal
     time.sleep(0.5)
-    tap_image("close_x.png", device)  # Close search menu
-    time.sleep(0.5)
+    if double_close:
+        tap_image("close_x.png", device)  # Close search menu
+        time.sleep(0.5)
 
 def _read_ap_from_menu(device):
     """Read current/max AP from the AP Recovery menu bar via OCR.
@@ -121,81 +124,27 @@ def _read_gem_cost(device):
         return int(match.group(1).replace(",", ""))
     return None
 
-def restore_ap(device, needed):
-    """Open the AP Recovery menu and restore AP until we have at least `needed`.
-    Uses free restores first, then AP potions (smallest first).
-    Returns True if AP >= needed after restoring, False otherwise.
+def _restore_ap_from_open_menu(device, needed):
+    """Run the AP restoration loop on an already-open AP Recovery menu.
+
+    Tries free restores → potions (smallest first) → gems, respecting config
+    flags.  Returns ``(success, current_ap)`` where *success* is True when
+    ``current_ap >= needed``.  Does **not** close the menu — the caller
+    decides whether to single- or double-close.
     """
     log = get_logger("actions", device)
-    _ap_start = time.time()
-    log.info(">>> restore_ap starting (need %d)...", needed)
 
-    # Navigate to map screen
-    if not navigate(Screen.MAP, device):
-        log.warning("<<< restore_ap: failed to navigate to map screen (%.1fs)", time.time() - _ap_start)
-        stats.record_action(device, "restore_ap", False, time.time() - _ap_start)
-        return False
-
-    # Open AP Recovery menu — retry the entire open sequence if it fails
-    menu_opened = False
-    for open_attempt in range(2):
-        if open_attempt > 0:
-            log.debug("AP: retrying menu open sequence (attempt %d/2)", open_attempt + 1)
-            _close_ap_menu(device)
-            time.sleep(0.5)
-            if not navigate(Screen.MAP, device):
-                return False
-
-        # Tap SEARCH button to open the search/rally menu
-        adb_tap(device, 900, 1800)
-        time.sleep(1.5)
-
-        # NOTE: Do NOT call check_screen() here — its popup auto-dismiss
-        # detects close_x.png on the search menu and closes it before we
-        # can tap the AP Recovery button.
-        log.debug("AP: search menu tap sent, proceeding to AP Recovery button")
-
-        # Tap the blue lightning bolt button (AP Recovery button in search menu)
-        adb_tap(device, 315, 1380)
-        time.sleep(1.5)
-
-        # Wait for AP Recovery menu to appear (check for apwindow.png)
-        for attempt in range(5):
-            screen = load_screenshot(device)
-            if screen is not None:
-                match = find_image(screen, "apwindow.png", threshold=0.8)
-                if match:
-                    log.debug("AP Recovery menu detected (attempt %d)", attempt + 1)
-                    menu_opened = True
-                    break
-                else:
-                    log.debug("Waiting for AP Recovery menu... (attempt %d/5)", attempt + 1)
-            time.sleep(1)
-
-        if menu_opened:
-            break
-
-    if not menu_opened:
-        log.error("AP Recovery menu did not open after all attempts")
-        save_failure_screenshot(device, "ap_menu_failed")
-        _close_ap_menu(device)
-        return False
-
-    # Read current AP
     ap = _read_ap_from_menu(device)
     if ap is None:
         log.warning("Could not read AP from menu")
         save_failure_screenshot(device, "ap_read_failed")
-        _close_ap_menu(device)
-        return False
+        return False, 0
 
     current, maximum = ap
-    log.info("Current AP: %d/%d", current, maximum)
+    log.info("Current AP: %d/%d (need %d)", current, maximum, needed)
 
     if current >= needed:
-        log.info("Already have enough AP (%d >= %d)", current, needed)
-        _close_ap_menu(device)
-        return True
+        return True, current
 
     # Step 1: Try FREE restore (up to 2 attempts — 25 AP each, 2x daily max)
     if config.AP_USE_FREE and current < needed:
@@ -296,11 +245,77 @@ def restore_ap(device, needed):
                 log.warning("Gem restore had no effect (out of gems?)")
                 break
 
-    # Close AP Recovery menu and search menu
+    return current >= needed, current
+
+
+def restore_ap(device, needed):
+    """Open the AP Recovery menu and restore AP until we have at least `needed`.
+    Uses free restores first, then AP potions (smallest first).
+    Returns True if AP >= needed after restoring, False otherwise.
+    """
+    log = get_logger("actions", device)
+    _ap_start = time.time()
+    log.info(">>> restore_ap starting (need %d)...", needed)
+
+    # Navigate to map screen
+    if not navigate(Screen.MAP, device):
+        log.warning("<<< restore_ap: failed to navigate to map screen (%.1fs)", time.time() - _ap_start)
+        stats.record_action(device, "restore_ap", False, time.time() - _ap_start)
+        return False
+
+    # Open AP Recovery menu — retry the entire open sequence if it fails
+    menu_opened = False
+    for open_attempt in range(2):
+        if open_attempt > 0:
+            log.debug("AP: retrying menu open sequence (attempt %d/2)", open_attempt + 1)
+            _close_ap_menu(device)
+            time.sleep(0.5)
+            if not navigate(Screen.MAP, device):
+                return False
+
+        # Tap SEARCH button to open the search/rally menu
+        adb_tap(device, 900, 1800)
+        time.sleep(1.5)
+
+        # NOTE: Do NOT call check_screen() here — its popup auto-dismiss
+        # detects close_x.png on the search menu and closes it before we
+        # can tap the AP Recovery button.
+        log.debug("AP: search menu tap sent, proceeding to AP Recovery button")
+
+        # Tap the blue lightning bolt button (AP Recovery button in search menu)
+        adb_tap(device, 315, 1380)
+        time.sleep(1.5)
+
+        # Wait for AP Recovery menu to appear (check for apwindow.png)
+        for attempt in range(5):
+            screen = load_screenshot(device)
+            if screen is not None:
+                match = find_image(screen, "apwindow.png", threshold=0.8)
+                if match:
+                    log.debug("AP Recovery menu detected (attempt %d)", attempt + 1)
+                    menu_opened = True
+                    break
+                else:
+                    log.debug("Waiting for AP Recovery menu... (attempt %d/5)", attempt + 1)
+            time.sleep(1)
+
+        if menu_opened:
+            break
+
+    if not menu_opened:
+        log.error("AP Recovery menu did not open after all attempts")
+        save_failure_screenshot(device, "ap_menu_failed")
+        _close_ap_menu(device)
+        return False
+
+    # Delegate to shared restoration helper
+    success, current = _restore_ap_from_open_menu(device, needed)
+
+    # Close AP Recovery menu + search menu behind it
     _close_ap_menu(device)
 
     elapsed = time.time() - _ap_start
-    if current >= needed:
+    if success:
         log.info("<<< restore_ap completed in %.1fs (%d >= %d)", elapsed, current, needed)
         stats.record_action(device, "restore_ap", True, elapsed)
         return True

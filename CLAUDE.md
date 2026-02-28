@@ -14,8 +14,8 @@ Runs on Windows with BlueStacks or MuMu Player emulators. GUI built with tkinter
 | `actions/quests.py` | Quest system + tower quest | `check_quests`, `get_quest_tracking_state`, `reset_quest_tracking`, `occupy_tower` |
 | `actions/rallies.py` | Rally joining + blacklist | `join_rally`, `join_war_rallies`, `reset_rally_blacklist` |
 | `actions/combat.py` | Attacks, targeting, teleport | `attack`, `phantom_clash_attack`, `reinforce_throne`, `target`, `teleport` |
-| `actions/titans.py` | Titan rally + AP restore | `rally_titan`, `restore_ap` |
-| `actions/evil_guard.py` | Evil Guard attack sequence | `rally_eg`, `search_eg_reset`, `test_eg_positions` |
+| `actions/titans.py` | Titan rally + AP restore | `rally_titan`, `restore_ap`, `_restore_ap_from_open_menu`, `_close_ap_menu` |
+| `actions/evil_guard.py` | Evil Guard attack sequence | `rally_eg`, `search_eg_reset`, `test_eg_positions`, `_handle_ap_popup` |
 | `actions/farming.py` | Gold + mithril gathering | `mine_mithril`, `gather_gold`, `gather_gold_loop` |
 | `actions/_helpers.py` | Shared state + utilities | `_interruptible_sleep`, `_last_depart_slot` |
 | `vision.py` | Screenshots, template matching, OCR, ADB input | `load_screenshot`, `find_image`, `find_all_matches`, `tap_image`, `wait_for_image_and_tap`, `read_text`, `read_number`, `read_ap`, `adb_tap`, `adb_swipe`, `timed_wait`, `tap`, `logged_tap`, `get_last_best`, `save_failure_screenshot` |
@@ -92,6 +92,8 @@ Screen:    MAP, BATTLE_LIST, ALLIANCE_QUEST, TROOP_DETAIL, TERRITORY,
 | `THRONE_SQUARES` | (11,11), (11,12), (12,11), (12,12) | Untouchable throne cells |
 | `AP_COST_RALLY_TITAN` | 20 | AP cost per titan rally |
 | `AP_COST_EVIL_GUARD` | 70 | AP cost per evil guard rally |
+| `MAX_CONSECUTIVE_ERRORS` | 5 | Stop task after N consecutive action exceptions |
+| `MAX_CONSECUTIVE_NAV_FAILURES` | 10 | Stop task after N consecutive navigate() failures |
 
 ## Mutable Global State (config.py)
 
@@ -121,6 +123,8 @@ All session-scoped, reset on restart:
 - Looping is managed by `runners.py` task runners (`run_once` / `run_repeat`), not by actions. Actions accept a `stop_check` callback for cooperative cancellation
 - `runners.py` is shared by both `main.py` (GUI) and `web/dashboard.py` (Flask) — no duplication
 - Thread-local storage in vision.py for `get_last_best()` template scores
+- **Error recovery**: All auto runners track consecutive failures. After `MAX_CONSECUTIVE_ERRORS` (5) consecutive exceptions, the task stops. After `MAX_CONSECUTIVE_NAV_FAILURES` (10) consecutive navigate() failures, the task stops. Counters reset on any success. Backoff: `10 + N*5` seconds between retries.
+- **ADB auto-reconnect**: `_try_reconnect(device)` in vision.py runs `adb connect` on TCP devices when `load_screenshot`/`adb_tap`/`adb_swipe` timeout. One retry after reconnect.
 
 ### Screen Resolution
 Fixed **1080x1920** (portrait). All pixel coordinates, template regions, and OCR crop zones are calibrated to this resolution. Emulator must be set to this before running.
@@ -192,6 +196,16 @@ State machine via `navigate(target_screen, device)`:
 ### AP Restoration (actions/titans.py + config.py)
 Order: free restores → potions (small→large) → gems.
 Controlled by `AP_USE_FREE`, `AP_USE_POTIONS`, `AP_ALLOW_LARGE_POTIONS`, `AP_USE_GEMS`, `AP_GEM_LIMIT`.
+
+**Architecture**: The restoration logic is in `_restore_ap_from_open_menu(device, needed)` which assumes
+the AP Recovery menu is already visible. Returns `(success, current_ap)`. `restore_ap()` wraps it with
+menu navigation (MAP → search → AP button) and double-close. `_close_ap_menu(device, double_close=True)`
+handles both cases: `True` for bot-opened menus (search menu behind), `False` for game-opened popups.
+
+**Game-triggered AP popup**: When the game opens the AP Recovery popup (e.g. after tapping depart with
+insufficient AP), `_handle_ap_popup(device, needed)` in `evil_guard.py` detects `apwindow.png`, restores
+AP via `_restore_ap_from_open_menu`, and single-closes the popup. Used in `click_depart_with_fallback()`
+(primary) and `poll_troop_ready()` (safety net).
 
 ### Settings Persistence (settings.py)
 `settings.json` stores user preferences (auto-heal, AP options, intervals, territory teams).
@@ -276,7 +290,7 @@ and the web dashboard. Updated via `config.set_device_status(device, msg)`, clea
 ## Tests
 
 ```bash
-py -m pytest          # run all ~413 tests
+py -m pytest          # run all ~447 tests
 py -m pytest -x       # stop on first failure
 py -m pytest -k name  # filter by test name
 ```
@@ -287,7 +301,7 @@ No fixtures require a running emulator — all use mocked ADB/vision.
 
 | File | Tests | Coverage |
 |------|-------|----------|
-| `test_vision.py` | `get_last_best`, `find_image`, `find_all_matches`, `read_number`, `read_text`, `read_ap`, `get_template`, `load_screenshot`, `adb_tap`, `adb_swipe` |
+| `test_vision.py` | `get_last_best`, `find_image`, `find_all_matches`, `read_number`, `read_text`, `read_ap`, `get_template`, `load_screenshot`, `adb_tap`, `adb_swipe`, `_try_reconnect`, ADB reconnect retry |
 | `test_navigation.py` | `check_screen`, `navigate`, `_verify_screen`, `_recover_to_known_screen` |
 | `test_troops.py` | Troop pixel detection, status tracking, icon matching, portrait tracking, triangle detection |
 | `test_botlog.py` | `StatsTracker`, `timed_action` decorator, `get_logger` |
@@ -301,7 +315,7 @@ No fixtures require a running emulator — all use mocked ADB/vision.
 | `test_gather_gold.py` | Gather gold flow, loop troop deployment (`actions.farming`) |
 | `test_tower_quest.py` | Tower/fortress quest occupy, recall, navigation (`actions.quests`) |
 | `test_settings_validation.py` | `validate_settings` — type checks, range/choice validation, device_troops, warnings, schema sync |
-| `test_task_runner.py` | `sleep_interval`, `launch_task`/`stop_task`, run_once, run_repeat, settings load/save (`runners`) |
+| `test_task_runner.py` | `sleep_interval`, `launch_task`/`stop_task`, run_once, run_repeat, consecutive error recovery, settings load/save (`runners`) |
 
 ### Test Conventions
 - Fixtures in `conftest.py`: `mock_device` ("127.0.0.1:9999"), `mock_device_b` ("127.0.0.1:8888")

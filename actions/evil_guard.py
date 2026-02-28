@@ -26,10 +26,47 @@ from troops import (troops_avail, heal_all, read_panel_statuses,
                     TroopAction, capture_departing_portrait)
 
 from actions._helpers import _interruptible_sleep, _last_depart_slot
-from actions.titans import restore_ap
+from actions.titans import restore_ap, _restore_ap_from_open_menu, _close_ap_menu
 from actions.combat import _detect_player_at_eg
 
 _log = get_logger("actions")
+
+
+def _handle_ap_popup(device, needed):
+    """Detect and handle the game's AP Recovery popup that appears when
+    departing with insufficient AP.
+
+    Returns True if AP was restored (caller can retry depart), False if the
+    popup was not detected or restoration failed.
+    """
+    log = get_logger("actions", device)
+
+    screen = load_screenshot(device)
+    if screen is None:
+        return False
+
+    match = find_image(screen, "apwindow.png", threshold=0.8)
+    if not match:
+        return False
+
+    log.warning("AP Recovery popup detected — attempting to restore AP")
+    save_failure_screenshot(device, "eg_ap_popup_detected")
+
+    if not config.AUTO_RESTORE_AP_ENABLED:
+        log.warning("AUTO_RESTORE_AP not enabled — closing popup and aborting")
+        _close_ap_menu(device, double_close=False)
+        return False
+
+    success, current = _restore_ap_from_open_menu(device, needed)
+    _close_ap_menu(device, double_close=False)  # single close: no search menu behind
+
+    if success:
+        log.info("AP restored to %d (need %d) — retrying depart", current, needed)
+        return True
+    else:
+        log.warning("AP restoration failed (%d < %d)", current, needed)
+        return False
+
 
 # Candidate dark priest positions around an EG boss (screen 1080x1920).
 # P1 is the EG boss itself (opens first priest dialog).
@@ -320,9 +357,36 @@ def rally_eg(device, stop_check=None):
         log.debug("P%d: stationed not found in 3s (normal — proceeding to depart)", priest_num)
         return False
 
+    def _check_ap_popup_after_depart(priest_num):
+        """After tapping depart, check if the game opened the AP Recovery
+        popup instead of deploying.  If so, restore AP and retry depart.
+        Returns True if troop deployed (or AP restored + re-depart succeeded),
+        False if AP popup appeared and could not be resolved."""
+        time.sleep(1.0)  # brief wait for popup or deployment animation
+        if not _handle_ap_popup(device, config.AP_COST_EVIL_GUARD):
+            return True  # no popup — depart succeeded normally
+
+        # AP was restored — retry depart if the deployment screen is still up
+        timed_wait(device,
+                   lambda: find_image(load_screenshot(device), "depart.png", threshold=0.8) is not None,
+                   2, "eg_ap_restored_depart_wait")
+        if tap_image("depart.png", device):
+            log.info("P%d: depart tapped after AP restore", priest_num)
+            time.sleep(1.0)
+            # Verify the popup didn't reappear (still not enough AP)
+            screen = load_screenshot(device)
+            if screen is not None and find_image(screen, "apwindow.png", threshold=0.8):
+                log.error("P%d: AP popup reappeared — still insufficient AP", priest_num)
+                _close_ap_menu(device, double_close=False)
+                return False
+            return True
+        log.warning("P%d: depart not found after AP restore — deployment screen may have closed", priest_num)
+        return False
+
     def click_depart_with_fallback(priest_num):
         """Tap the depart button with retries. Captures departing portrait on
-        first attempt for troop identity tracking. Saves failure screenshot on exhaustion."""
+        first attempt for troop identity tracking. Detects AP Recovery popup
+        and restores AP if needed. Saves failure screenshot on exhaustion."""
         for attempt in range(5):
             if attempt == 0:
                 # Capture which troop is being sent (portrait + slot) before departing
@@ -333,7 +397,7 @@ def rally_eg(device, stop_check=None):
                     log.debug("P%d: departing troop is slot %d", priest_num, slot_id)
             if tap_image("depart.png", device):
                 log.debug("P%d: depart tapped (attempt %d)", priest_num, attempt + 1)
-                return True
+                return _check_ap_popup_after_depart(priest_num)
             if tap_image("defending.png", device):
                 log.debug("P%d: found defending, retrying depart", priest_num)
                 timed_wait(device,
@@ -341,7 +405,7 @@ def rally_eg(device, stop_check=None):
                            1, "eg_defending_to_depart")
                 if tap_image("depart.png", device):
                     log.debug("P%d: depart tapped after defending", priest_num)
-                    return True
+                    return _check_ap_popup_after_depart(priest_num)
             if attempt < 4:
                 log.debug("P%d: depart not found, retry %d/5...", priest_num, attempt + 1)
                 timed_wait(device,
@@ -363,6 +427,13 @@ def rally_eg(device, stop_check=None):
             if stop_check and stop_check():
                 log.info("P%d: poll_troop_ready aborted (stop requested)", priest_num)
                 return False
+
+            # Safety net: detect AP Recovery popup (troop never deployed)
+            ap_screen = load_screenshot(device)
+            if ap_screen is not None and find_image(ap_screen, "apwindow.png", threshold=0.8):
+                log.warning("P%d: AP Recovery popup detected during poll — troop never deployed", priest_num)
+                _handle_ap_popup(device, config.AP_COST_EVIL_GUARD)
+                return False  # caller should retry the priest
 
             snapshot = read_panel_statuses(device)
             if snapshot:
