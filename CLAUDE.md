@@ -307,7 +307,7 @@ and the web dashboard. Updated via `config.set_device_status(device, msg)`, clea
 ## Tests
 
 ```bash
-py -m pytest          # run all ~526 tests
+py -m pytest          # run all ~538 tests
 py -m pytest -x       # stop on first failure
 py -m pytest -k name  # filter by test name
 ```
@@ -320,7 +320,7 @@ No fixtures require a running emulator — all use mocked ADB/vision.
 |------|-------|----------|
 | `test_vision.py` | `get_last_best`, `find_image`, `find_all_matches`, `read_number`, `read_text`, `read_ap`, `get_template`, `load_screenshot`, `adb_tap`, `adb_swipe`, `adb_keyevent`, `_try_reconnect`, ADB reconnect retry |
 | `test_navigation.py` | `check_screen`, `navigate`, `_verify_screen`, `_recover_to_known_screen` (4-phase escalation: template dismiss, Android BACK key, center tap, nuclear) |
-| `test_troops.py` | Troop pixel detection, status tracking, icon matching, portrait tracking, triangle detection |
+| `test_troops.py` | Troop pixel detection, status tracking, icon matching, portrait tracking, triangle detection, `heal_all` (nav failure, no-heal skip, single/multi/5-troop sequences, tap coordinates, wait budgets, safety cap, failure screenshots) |
 | `test_botlog.py` | `StatsTracker`, `timed_action` decorator, `get_logger` |
 | `test_config.py` | AP restore options clamping logic (gem limit bounds) |
 | `test_devices.py` | `auto_connect_emulators`, `get_devices`, `get_emulator_instances` |

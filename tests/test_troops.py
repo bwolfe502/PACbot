@@ -700,3 +700,174 @@ class TestCaptureDepartingPortrait:
         mock_ss.return_value = screen
         result = capture_departing_portrait("test_dev", screen=screen)
         assert result is None
+
+
+# ============================================================
+# heal_all
+# ============================================================
+
+from config import Screen
+from troops import heal_all
+
+
+class TestHealAll:
+    """Tests for heal_all() — the iterative troop healing sequence."""
+
+    # --- Navigation failure ---
+
+    @patch("troops.navigate", return_value=False)
+    def test_returns_false_when_nav_fails(self, mock_nav, mock_device):
+        """If navigate to MAP fails, return False immediately."""
+        result = heal_all(mock_device)
+        assert result is False
+        mock_nav.assert_called_once_with(Screen.MAP, mock_device)
+
+    # --- No healing needed ---
+
+    @patch("troops.navigate", return_value=True)
+    @patch("troops.tap_image", return_value=False)
+    def test_no_heal_needed(self, mock_tap_img, mock_nav, mock_device):
+        """When heal.png not found, no taps occur and returns True."""
+        result = heal_all(mock_device)
+        assert result is True
+        mock_tap_img.assert_called_once_with("heal.png", mock_device)
+
+    @patch("troops.navigate", return_value=True)
+    @patch("troops.tap_image", return_value=False)
+    def test_no_heal_skips_nav_back(self, mock_tap_img, mock_nav, mock_device):
+        """When nothing healed, should NOT navigate back to MAP."""
+        heal_all(mock_device)
+        # navigate called once (initial), not a second time
+        assert mock_nav.call_count == 1
+
+    # --- Single troop healed ---
+
+    @patch("troops.navigate", return_value=True)
+    @patch("troops.tap_image", side_effect=[True, False])
+    @patch("troops.timed_wait")
+    @patch("troops.logged_tap")
+    def test_single_heal_sequence(self, mock_logged_tap, mock_wait,
+                                  mock_tap_img, mock_nav, mock_device):
+        """One troop to heal: tap sequence runs once, then loop exits."""
+        result = heal_all(mock_device)
+        assert result is True
+        # 3 logged_taps per heal: heal_all_btn, heal_confirm, heal_close
+        assert mock_logged_tap.call_count == 3
+        # 4 timed_waits per heal: dialog_open, confirm_ready, result_show, close_settle
+        assert mock_wait.call_count == 4
+
+    @patch("troops.navigate", return_value=True)
+    @patch("troops.tap_image", side_effect=[True, False])
+    @patch("troops.timed_wait")
+    @patch("troops.logged_tap")
+    def test_heal_tap_coordinates(self, mock_logged_tap, mock_wait,
+                                  mock_tap_img, mock_nav, mock_device):
+        """Verify the exact coordinates and labels of each logged_tap."""
+        heal_all(mock_device)
+        calls = mock_logged_tap.call_args_list
+        # heal_all_btn
+        assert calls[0] == ((mock_device, 700, 1460, "heal_all_btn"),)
+        # heal_confirm
+        assert calls[1] == ((mock_device, 542, 1425, "heal_confirm"),)
+        # heal_close
+        assert calls[2] == ((mock_device, 1000, 200, "heal_close"),)
+
+    @patch("troops.navigate", return_value=True)
+    @patch("troops.tap_image", side_effect=[True, False])
+    @patch("troops.timed_wait")
+    @patch("troops.logged_tap")
+    def test_heal_wait_budgets(self, mock_logged_tap, mock_wait,
+                               mock_tap_img, mock_nav, mock_device):
+        """Verify timed_wait labels and budgets match expected values."""
+        heal_all(mock_device)
+        calls = mock_wait.call_args_list
+        # (device, condition_fn, budget, label)
+        assert calls[0][0][2] == 1  # heal_dialog_open budget
+        assert calls[0][0][3] == "heal_dialog_open"
+        assert calls[1][0][2] == 1  # heal_confirm_ready budget
+        assert calls[1][0][3] == "heal_confirm_ready"
+        assert calls[2][0][2] == 1  # heal_result_show budget
+        assert calls[2][0][3] == "heal_result_show"
+        assert calls[3][0][2] == 2  # heal_close_settle budget
+        assert calls[3][0][3] == "heal_close_settle"
+
+    @patch("troops.navigate", return_value=True)
+    @patch("troops.tap_image", side_effect=[True, False])
+    @patch("troops.timed_wait")
+    @patch("troops.logged_tap")
+    def test_navigates_back_after_heal(self, mock_logged_tap, mock_wait,
+                                       mock_tap_img, mock_nav, mock_device):
+        """After healing, navigate back to MAP for clean state."""
+        heal_all(mock_device)
+        assert mock_nav.call_count == 2
+        mock_nav.assert_called_with(Screen.MAP, mock_device)
+
+    # --- Multiple troops healed ---
+
+    @patch("troops.navigate", return_value=True)
+    @patch("troops.tap_image", side_effect=[True, True, True, False])
+    @patch("troops.timed_wait")
+    @patch("troops.logged_tap")
+    def test_three_troops_healed(self, mock_logged_tap, mock_wait,
+                                 mock_tap_img, mock_nav, mock_device):
+        """Three troops need healing: full sequence runs 3 times."""
+        result = heal_all(mock_device)
+        assert result is True
+        # 3 logged_taps per iteration × 3 iterations
+        assert mock_logged_tap.call_count == 9
+        # 4 timed_waits per iteration × 3 iterations
+        assert mock_wait.call_count == 12
+        # tap_image called 4 times: True, True, True, False
+        assert mock_tap_img.call_count == 4
+
+    @patch("troops.navigate", return_value=True)
+    @patch("troops.tap_image", side_effect=[True, True, True, True, True, False])
+    @patch("troops.timed_wait")
+    @patch("troops.logged_tap")
+    def test_five_troops_healed(self, mock_logged_tap, mock_wait,
+                                mock_tap_img, mock_nav, mock_device):
+        """All 5 troops healed: loop runs 5 times then exits cleanly."""
+        result = heal_all(mock_device)
+        assert result is True
+        assert mock_logged_tap.call_count == 15
+        assert mock_wait.call_count == 20
+
+    # --- Safety cap ---
+
+    @patch("troops.save_failure_screenshot")
+    @patch("troops.navigate", return_value=True)
+    @patch("troops.tap_image", return_value=True)  # always finds heal
+    @patch("troops.timed_wait")
+    @patch("troops.logged_tap")
+    def test_safety_cap_hit(self, mock_logged_tap, mock_wait,
+                            mock_tap_img, mock_nav, mock_save_fail,
+                            mock_device):
+        """When heal.png always found, loop hits MAX_HEAL_ITERATIONS cap."""
+        result = heal_all(mock_device)
+        assert result is True
+        assert mock_tap_img.call_count == config.MAX_HEAL_ITERATIONS
+        assert mock_logged_tap.call_count == 3 * config.MAX_HEAL_ITERATIONS
+
+    @patch("troops.save_failure_screenshot")
+    @patch("troops.navigate", return_value=True)
+    @patch("troops.tap_image", return_value=True)
+    @patch("troops.timed_wait")
+    @patch("troops.logged_tap")
+    def test_safety_cap_saves_failure_screenshot(self, mock_logged_tap, mock_wait,
+                                                 mock_tap_img, mock_nav,
+                                                 mock_save_fail, mock_device):
+        """Safety cap triggers failure screenshot for debugging."""
+        heal_all(mock_device)
+        mock_save_fail.assert_called_once_with(mock_device, "heal_stuck_ui")
+
+    @patch("troops.save_failure_screenshot")
+    @patch("troops.navigate", return_value=True)
+    @patch("troops.tap_image", side_effect=[True, False])
+    @patch("troops.timed_wait")
+    @patch("troops.logged_tap")
+    def test_normal_exit_no_failure_screenshot(self, mock_logged_tap, mock_wait,
+                                               mock_tap_img, mock_nav,
+                                               mock_save_fail, mock_device):
+        """Normal exit (heal found then not found) should NOT save failure screenshot."""
+        heal_all(mock_device)
+        mock_save_fail.assert_not_called()
