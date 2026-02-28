@@ -8,6 +8,7 @@ requests
 #   macOS:   Apple Vision via pyobjc (~30ms/call, no model download needed)
 # Both are wrapped by ocr_read() in vision.py — see comments there for details.
 customtkinter
+flask
 easyocr; sys_platform == "win32"
 pyobjc-framework-Vision; sys_platform == "darwin"
 pywin32; sys_platform == "win32"

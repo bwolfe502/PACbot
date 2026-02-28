@@ -17,6 +17,7 @@ tunnel_status() -> str
 
 import asyncio
 import base64
+import http.client
 import json
 import logging
 import threading
@@ -45,47 +46,36 @@ LOCAL_TIMEOUT = 25            # per-request timeout for local forwarding
 # ---------------------------------------------------------------------------
 
 def _forward_to_local(msg: dict) -> dict:
-    """Forward a proxied request to the local Flask dashboard."""
+    """Forward a proxied request to the local Flask dashboard.
+
+    Uses http.client directly (instead of urllib.request) so that redirects
+    are returned as-is — the relay server rewrites Location headers and the
+    browser follows the redirect itself.
+    """
     path = msg.get("path", "/")
-    url = LOCAL_URL + path
     method = msg.get("method", "GET")
     headers = msg.get("headers", {})
     body_b64 = msg.get("body_b64", "")
     body = base64.b64decode(body_b64) if body_b64 else None
 
-    # Build request — only attach body for methods that use it
-    req = urllib.request.Request(
-        url,
-        data=body if method in ("POST", "PUT", "PATCH") else None,
-        method=method,
-    )
-    # Forward relevant headers
+    # Filter headers that shouldn't be forwarded
+    fwd_headers = {}
     for k, v in headers.items():
-        lower = k.lower()
-        if lower in ("host", "transfer-encoding", "connection"):
+        if k.lower() in ("host", "transfer-encoding", "connection"):
             continue
-        try:
-            req.add_header(k, v)
-        except Exception:
-            pass
+        fwd_headers[k] = v
 
     try:
-        resp = urllib.request.urlopen(req, timeout=LOCAL_TIMEOUT)
+        conn = http.client.HTTPConnection("127.0.0.1", 8080,
+                                          timeout=LOCAL_TIMEOUT)
+        conn.request(method, path, body=body, headers=fwd_headers)
+        resp = conn.getresponse()
         resp_body = resp.read()
-        resp_headers = {k: v for k, v in resp.headers.items()
+        resp_headers = {k: v for k, v in resp.getheaders()
                         if k.lower() not in ("transfer-encoding", "connection")}
         return {
             "id": msg["id"],
             "status": resp.status,
-            "headers": resp_headers,
-            "body_b64": base64.b64encode(resp_body).decode("ascii"),
-        }
-    except urllib.error.HTTPError as e:
-        resp_body = e.read() if e.fp else b""
-        resp_headers = {k: v for k, v in e.headers.items()} if e.headers else {}
-        return {
-            "id": msg["id"],
-            "status": e.code,
             "headers": resp_headers,
             "body_b64": base64.b64encode(resp_body).decode("ascii"),
         }
@@ -99,6 +89,11 @@ def _forward_to_local(msg: dict) -> dict:
                 f"Local dashboard unreachable: {e}".encode()
             ).decode("ascii"),
         }
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 # ---------------------------------------------------------------------------
 # Async tunnel loop

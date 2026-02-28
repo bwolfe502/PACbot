@@ -56,19 +56,9 @@
         {% set mode_running = [] %}{% for t in active_tasks %}{% if t.endswith('_' + mode.key) %}{% if mode_running.append(t) %}{% endif %}{% endif %}{% endfor %}
         <div class="auto-row" data-mode="{{ mode.key }}">
             <span class="auto-label">{{ mode.label }}</span>
-            {% if mode_running %}
-            <form method="post" action="/tasks/stop-mode" class="inline-form">
-                <input type="hidden" name="mode_key" value="{{ mode.key }}">
-                <button type="submit" class="toggle on" title="Stop {{ mode.label }}"></button>
-            </form>
-            {% else %}
-            <form method="post" action="/tasks/start" class="inline-form device-form">
-                <input type="hidden" name="device" value="{% if devices %}{{ devices[0].id }}{% endif %}">
-                <input type="hidden" name="task_name" value="{{ mode.key }}">
-                <input type="hidden" name="task_type" value="auto">
-                <button type="submit" class="toggle" title="Start {{ mode.label }}"></button>
-            </form>
-            {% endif %}
+            <button type="button" class="toggle{% if mode_running %} on{% endif %}"
+                    onclick="toggleAutoMode('{{ mode.key }}')"
+                    title="{{ mode.label }}"></button>
         </div>
     {% endfor %}
     </div>
@@ -248,6 +238,32 @@ function updateDeviceForms() {
     });
 }
 document.addEventListener('DOMContentLoaded', updateDeviceForms);
+
+function toggleAutoMode(modeKey) {
+    var row = document.querySelector('.auto-row[data-mode="' + modeKey + '"]');
+    if (!row) return;
+    var toggle = row.querySelector('.toggle');
+    var isRunning = toggle && toggle.classList.contains('on');
+    var body;
+    var url;
+    if (isRunning) {
+        url = '/tasks/stop-mode';
+        body = 'mode_key=' + encodeURIComponent(modeKey);
+    } else {
+        url = '/tasks/start';
+        var devices = getSelectedDevices();
+        body = 'device=' + encodeURIComponent(devices.join(','))
+             + '&task_name=' + encodeURIComponent(modeKey)
+             + '&task_type=auto';
+    }
+    // Optimistic toggle
+    if (toggle) toggle.classList.toggle('on');
+    fetch(url, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: body
+    }).catch(function() {});
+}
 
 function confirmRestart() {
     if (!confirm('Restart PACbot? All running tasks will be stopped.')) return;
