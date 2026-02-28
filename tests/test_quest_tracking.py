@@ -1,4 +1,4 @@
-"""Tests for quest rally tracking system (actions.py).
+"""Tests for quest rally tracking system (actions/quests.py).
 
 These functions were refactored to key by (device, quest_type) instead of
 just quest_type, fixing multi-device state corruption. These tests verify
@@ -6,7 +6,7 @@ the fix works correctly.
 """
 from unittest.mock import patch
 
-from actions import (
+from actions.quests import (
     _track_quest_progress,
     _record_rally_started,
     _effective_remaining,
@@ -63,7 +63,7 @@ class TestRecordRallyStarted:
         assert _quest_rallies_pending[(mock_device, QuestType.TITAN)] == 2
 
     def test_timestamp_only_set_on_first(self, mock_device):
-        with patch("actions.time") as mock_time:
+        with patch("actions.quests.time") as mock_time:
             mock_time.time.side_effect = [100.0, 200.0]
             _record_rally_started(mock_device, QuestType.TITAN)
             first_ts = _quest_pending_since[(mock_device, QuestType.TITAN)]
@@ -125,7 +125,7 @@ class TestTrackQuestProgress:
         # Set pending_since to way in the past
         _quest_pending_since[(mock_device, QuestType.TITAN)] = 1.0
 
-        with patch("actions.time") as mock_time:
+        with patch("actions.quests.time") as mock_time:
             mock_time.time.return_value = 500.0  # 499s elapsed > 360s timeout
             _track_quest_progress(mock_device, QuestType.TITAN, 5)  # Same counter (no advance)
 
@@ -137,7 +137,7 @@ class TestTrackQuestProgress:
         _quest_last_seen[(mock_device, QuestType.TITAN)] = 5
         _quest_pending_since[(mock_device, QuestType.TITAN)] = 100.0
 
-        with patch("actions.time") as mock_time:
+        with patch("actions.quests.time") as mock_time:
             mock_time.time.return_value = 200.0  # 100s elapsed < 360s timeout
             _track_quest_progress(mock_device, QuestType.TITAN, 5)
 

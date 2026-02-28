@@ -36,8 +36,9 @@ Clean up the interface and codebase structure for long-term maintainability.
 - [ ] Clean up settings layout — currently cluttered
 - [ ] Reorganize "More Actions" section
 - [ ] Clean up file and folder structure — organize `elements/`, consolidate debug dirs
-- [ ] Refactor main.py — extract GUI from task runner logic
-- [ ] Split actions.py (~3000 lines) into focused modules (rally, quest, utility actions)
+- [x] Refactor main.py — extract task runners into shared `runners.py`, settings into `settings.py`
+- [x] Split actions.py (~3600 lines) into `actions/` package (quests, rallies, combat, titans, evil_guard, farming)
+- [x] Eliminate dashboard duplication — `web/dashboard.py` now imports from `runners.py` and `settings.py`
 
 ## Phase 4 — Quest Expansion (v1.6.0)
 

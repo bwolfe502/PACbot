@@ -224,6 +224,10 @@ def clear_device_status(device):
 auto_occupy_running = False
 auto_occupy_thread = None
 
+# Thread-safe queue for alerts from task runners to GUI
+import queue
+alert_queue = queue.Queue()
+
 BUTTONS = {
     "quest_button": {"x": 300, "y": 1100},
     "search_button": {"x": 900, "y": 1800},

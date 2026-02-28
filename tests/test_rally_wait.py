@@ -12,12 +12,13 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from config import QuestType
-from actions import (
+from actions.quests import (
     _record_rally_started, _track_quest_progress, _effective_remaining,
     reset_quest_tracking, _wait_for_rallies,
     _quest_rallies_pending, _quest_last_seen, _quest_pending_since,
-    _last_depart_slot, _quest_rally_slots,
+    _quest_rally_slots,
 )
+from actions._helpers import _last_depart_slot
 from troops import TroopAction, TroopStatus, DeviceTroopSnapshot
 
 
@@ -108,9 +109,9 @@ class TestSlotTracking:
 
 class TestWaitForRallies:
 
-    @patch("actions.stats")
-    @patch("actions.time")
-    @patch("actions.read_panel_statuses")
+    @patch("actions.quests.stats")
+    @patch("actions.quests.time")
+    @patch("actions.quests.read_panel_statuses")
     def test_no_rallying_clears_pending(self, mock_panel, mock_time, mock_stats, mock_device):
         """No rallying troops + pending > 0 → clears pending (false positive)."""
         # Extra time.time() calls from _interruptible_sleep loop
@@ -129,9 +130,9 @@ class TestWaitForRallies:
         call_args = mock_stats.record_action.call_args
         assert call_args[0][1] == "rally_false_positive_cleared"
 
-    @patch("actions.stats")
-    @patch("actions.time")
-    @patch("actions.read_panel_statuses")
+    @patch("actions.quests.stats")
+    @patch("actions.quests.time")
+    @patch("actions.quests.read_panel_statuses")
     def test_rallying_then_complete(self, mock_panel, mock_time, mock_stats, mock_device):
         """Rallying troop found → polls → rallying count drops → returns."""
         # Extra time.time() calls from _interruptible_sleep loop
@@ -153,8 +154,8 @@ class TestWaitForRallies:
         call_args = mock_stats.record_action.call_args
         assert call_args[0][1] == "wait_for_rallies"
 
-    @patch("actions.stats")
-    @patch("actions.read_panel_statuses", return_value=None)
+    @patch("actions.quests.stats")
+    @patch("actions.quests.read_panel_statuses", return_value=None)
     def test_panel_failure_fallback(self, mock_panel, mock_stats, mock_device):
         """Panel read fails → returns without clearing pending (old behavior resumes)."""
         _quest_rallies_pending[(mock_device, QuestType.TITAN)] = 1
@@ -162,8 +163,8 @@ class TestWaitForRallies:
         assert _quest_rallies_pending[(mock_device, QuestType.TITAN)] == 1  # unchanged
         mock_stats.record_action.assert_not_called()
 
-    @patch("actions.stats")
-    @patch("actions.read_panel_statuses")
+    @patch("actions.quests.stats")
+    @patch("actions.quests.read_panel_statuses")
     def test_stop_check_exits_immediately(self, mock_panel, mock_stats, mock_device):
         """stop_check returning True exits immediately without modifying state."""
         _quest_rallies_pending[(mock_device, QuestType.TITAN)] = 1
@@ -173,9 +174,9 @@ class TestWaitForRallies:
         _wait_for_rallies(mock_device, lambda: True)  # stop immediately
         assert _quest_rallies_pending[(mock_device, QuestType.TITAN)] == 1
 
-    @patch("actions.stats")
-    @patch("actions.time")
-    @patch("actions.read_panel_statuses")
+    @patch("actions.quests.stats")
+    @patch("actions.quests.time")
+    @patch("actions.quests.read_panel_statuses")
     def test_timeout_safety(self, mock_panel, mock_time, mock_stats, mock_device):
         """Polls until QUEST_PENDING_TIMEOUT then gives up."""
         # Extra time.time() calls from _interruptible_sleep loop
@@ -189,9 +190,9 @@ class TestWaitForRallies:
         # Returns without crash, pending still set
         assert _quest_rallies_pending[(mock_device, QuestType.TITAN)] == 1
 
-    @patch("actions.stats")
-    @patch("actions.time")
-    @patch("actions.read_panel_statuses")
+    @patch("actions.quests.stats")
+    @patch("actions.quests.time")
+    @patch("actions.quests.read_panel_statuses")
     def test_no_rallying_single_transient_does_not_clear(self, mock_panel, mock_time, mock_stats, mock_device):
         """First read has no rallying, second does — don't clear (transient miss)."""
         # Extra time.time() calls from _interruptible_sleep loop
@@ -209,9 +210,9 @@ class TestWaitForRallies:
         # Should NOT have cleared pending (confirmation read found rallying)
         assert _quest_rallies_pending[(mock_device, QuestType.TITAN)] == 1
 
-    @patch("actions.stats")
-    @patch("actions.time")
-    @patch("actions.read_panel_statuses")
+    @patch("actions.quests.stats")
+    @patch("actions.quests.time")
+    @patch("actions.quests.read_panel_statuses")
     def test_panel_fail_during_poll_falls_back(self, mock_panel, mock_time, mock_stats, mock_device):
         """Panel read fails during poll loop → returns gracefully."""
         # Extra time.time() calls from _interruptible_sleep loop
@@ -228,9 +229,9 @@ class TestWaitForRallies:
         _wait_for_rallies(mock_device, lambda: False)
         assert _quest_rallies_pending[(mock_device, QuestType.TITAN)] == 1
 
-    @patch("actions.stats")
-    @patch("actions.time")
-    @patch("actions.read_panel_statuses")
+    @patch("actions.quests.stats")
+    @patch("actions.quests.time")
+    @patch("actions.quests.read_panel_statuses")
     def test_rallying_count_increases_updates_baseline(self, mock_panel, mock_time, mock_stats, mock_device):
         """If another rally joins while waiting, baseline updates."""
         # Extra time.time() calls from _interruptible_sleep loops (2 poll iterations)
@@ -257,13 +258,13 @@ class TestWaitForRallies:
 
 class TestToggle:
 
-    @patch("actions._wait_for_rallies")
-    @patch("actions._get_actionable_quests", return_value=[])
-    @patch("actions._deduplicate_quests", side_effect=lambda q: q)
-    @patch("actions._ocr_quest_rows")
-    @patch("actions._claim_quest_rewards", return_value=None)
-    @patch("actions.navigate", return_value=True)
-    @patch("actions.config")
+    @patch("actions.quests._wait_for_rallies")
+    @patch("actions.quests._get_actionable_quests", return_value=[])
+    @patch("actions.quests._deduplicate_quests", side_effect=lambda q: q)
+    @patch("actions.quests._ocr_quest_rows")
+    @patch("actions.quests._claim_quest_rewards", return_value=None)
+    @patch("actions.quests.navigate", return_value=True)
+    @patch("actions.quests.config")
     def test_toggle_off_skips_panel_wait(self, mock_config, mock_nav,
                                           mock_claim, mock_ocr, mock_dedup,
                                           mock_actionable, mock_wait, mock_device):
@@ -279,13 +280,13 @@ class TestToggle:
         check_quests(mock_device)
         mock_wait.assert_not_called()
 
-    @patch("actions._wait_for_rallies")
-    @patch("actions._get_actionable_quests", return_value=[])
-    @patch("actions._deduplicate_quests", side_effect=lambda q: q)
-    @patch("actions._ocr_quest_rows")
-    @patch("actions._claim_quest_rewards", return_value=None)
-    @patch("actions.navigate", return_value=True)
-    @patch("actions.config")
+    @patch("actions.quests._wait_for_rallies")
+    @patch("actions.quests._get_actionable_quests", return_value=[])
+    @patch("actions.quests._deduplicate_quests", side_effect=lambda q: q)
+    @patch("actions.quests._ocr_quest_rows")
+    @patch("actions.quests._claim_quest_rewards", return_value=None)
+    @patch("actions.quests.navigate", return_value=True)
+    @patch("actions.quests.config")
     def test_toggle_on_calls_panel_wait(self, mock_config, mock_nav,
                                          mock_claim, mock_ocr, mock_dedup,
                                          mock_actionable, mock_wait, mock_device):

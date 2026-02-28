@@ -1,6 +1,6 @@
-"""Tests for _classify_quest_text (actions.py)."""
+"""Tests for _classify_quest_text (actions/quests.py)."""
 
-from actions import _classify_quest_text
+from actions.quests import _classify_quest_text
 from config import QuestType
 
 

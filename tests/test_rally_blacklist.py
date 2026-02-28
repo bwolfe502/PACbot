@@ -1,4 +1,4 @@
-"""Tests for rally owner blacklist (actions.py).
+"""Tests for rally owner blacklist (actions/rallies.py).
 
 When joining a rally fails (e.g. "Cannot march across protected zones"),
 the rally owner is tracked. After RALLY_BLACKLIST_THRESHOLD consecutive
@@ -9,7 +9,7 @@ import time
 import pytest
 from unittest.mock import patch
 
-from actions import (
+from actions.rallies import (
     _blacklist_rally_owner,
     _is_rally_owner_blacklisted,
     _record_rally_owner_failure,

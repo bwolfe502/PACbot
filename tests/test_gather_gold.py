@@ -5,7 +5,8 @@ from unittest.mock import patch, MagicMock
 
 import config
 from config import QuestType
-from actions import gather_gold, gather_gold_loop, _get_actionable_quests
+from actions.farming import gather_gold, gather_gold_loop
+from actions.quests import _get_actionable_quests
 
 
 # ============================================================
@@ -44,36 +45,36 @@ class TestGatherActionable:
 # ============================================================
 
 class TestGatherGold:
-    @patch("actions.load_screenshot", return_value=MagicMock())
-    @patch("actions.heal_all")
-    @patch("actions.troops_avail", return_value=0)
-    @patch("actions.navigate", return_value=True)
+    @patch("actions.farming.load_screenshot", return_value=MagicMock())
+    @patch("actions.farming.heal_all")
+    @patch("actions.farming.troops_avail", return_value=0)
+    @patch("actions.farming.navigate", return_value=True)
     def test_returns_false_when_no_troops(self, mock_nav, mock_troops,
                                           mock_heal, mock_ss, mock_device):
         config.MIN_TROOPS_AVAILABLE = 0
         result = gather_gold(mock_device)
         assert result is False
 
-    @patch("actions.load_screenshot", return_value=MagicMock())
-    @patch("actions.heal_all")
-    @patch("actions.troops_avail", return_value=5)
-    @patch("actions.navigate", return_value=False)
+    @patch("actions.farming.load_screenshot", return_value=MagicMock())
+    @patch("actions.farming.heal_all")
+    @patch("actions.farming.troops_avail", return_value=5)
+    @patch("actions.farming.navigate", return_value=False)
     def test_returns_false_when_nav_fails(self, mock_nav, mock_troops,
                                            mock_heal, mock_ss, mock_device):
         config.MIN_TROOPS_AVAILABLE = 0
         result = gather_gold(mock_device)
         assert result is False
 
-    @patch("actions.save_failure_screenshot")
-    @patch("actions.find_image", return_value=None)
-    @patch("actions._set_gather_level")
-    @patch("actions.logged_tap")
-    @patch("actions.timed_wait")
-    @patch("actions.check_screen", return_value=config.Screen.MAP)
-    @patch("actions.load_screenshot", return_value=MagicMock())
-    @patch("actions.heal_all")
-    @patch("actions.troops_avail", return_value=5)
-    @patch("actions.navigate", return_value=True)
+    @patch("actions.farming.save_failure_screenshot")
+    @patch("actions.farming.find_image", return_value=None)
+    @patch("actions.farming._set_gather_level")
+    @patch("actions.farming.logged_tap")
+    @patch("actions.farming.timed_wait")
+    @patch("actions.farming.check_screen", return_value=config.Screen.MAP)
+    @patch("actions.farming.load_screenshot", return_value=MagicMock())
+    @patch("actions.farming.heal_all")
+    @patch("actions.farming.troops_avail", return_value=5)
+    @patch("actions.farming.navigate", return_value=True)
     def test_returns_false_when_depart_not_found(self, mock_nav, mock_troops,
                                                    mock_heal, mock_ss,
                                                    mock_check, mock_wait,
@@ -85,17 +86,17 @@ class TestGatherGold:
         assert result is False
         mock_save_fail.assert_called_once()
 
-    @patch("actions.adb_tap")
-    @patch("actions._save_click_trail")
-    @patch("actions.find_image")
-    @patch("actions._set_gather_level")
-    @patch("actions.logged_tap")
-    @patch("actions.timed_wait")
-    @patch("actions.check_screen", return_value=config.Screen.MAP)
-    @patch("actions.load_screenshot", return_value=MagicMock())
-    @patch("actions.heal_all")
-    @patch("actions.troops_avail", return_value=5)
-    @patch("actions.navigate", return_value=True)
+    @patch("actions.farming.adb_tap")
+    @patch("actions.farming._save_click_trail")
+    @patch("actions.farming.find_image")
+    @patch("actions.farming._set_gather_level")
+    @patch("actions.farming.logged_tap")
+    @patch("actions.farming.timed_wait")
+    @patch("actions.farming.check_screen", return_value=config.Screen.MAP)
+    @patch("actions.farming.load_screenshot", return_value=MagicMock())
+    @patch("actions.farming.heal_all")
+    @patch("actions.farming.troops_avail", return_value=5)
+    @patch("actions.farming.navigate", return_value=True)
     def test_returns_true_when_depart_found(self, mock_nav, mock_troops,
                                               mock_heal, mock_ss,
                                               mock_check, mock_wait,
@@ -108,10 +109,10 @@ class TestGatherGold:
         result = gather_gold(mock_device)
         assert result is True
 
-    @patch("actions.load_screenshot", return_value=MagicMock())
-    @patch("actions.heal_all")
-    @patch("actions.troops_avail", return_value=5)
-    @patch("actions.navigate", return_value=True)
+    @patch("actions.farming.load_screenshot", return_value=MagicMock())
+    @patch("actions.farming.heal_all")
+    @patch("actions.farming.troops_avail", return_value=5)
+    @patch("actions.farming.navigate", return_value=True)
     def test_stop_check_after_nav(self, mock_nav, mock_troops, mock_heal,
                                    mock_ss, mock_device):
         config.MIN_TROOPS_AVAILABLE = 0
@@ -124,8 +125,8 @@ class TestGatherGold:
 # ============================================================
 
 class TestRunGatherLoop:
-    @patch("actions.gather_gold")
-    @patch("actions.troops_avail", return_value=5)
+    @patch("actions.farming.gather_gold")
+    @patch("actions.farming.troops_avail", return_value=5)
     def test_deploys_up_to_max(self, mock_troops, mock_gather, mock_device):
         config.GATHER_MAX_TROOPS = 3
         config.MIN_TROOPS_AVAILABLE = 0
@@ -134,8 +135,8 @@ class TestRunGatherLoop:
         assert result == 3
         assert mock_gather.call_count == 3
 
-    @patch("actions.gather_gold")
-    @patch("actions.troops_avail", side_effect=[5, 5, 1])
+    @patch("actions.farming.gather_gold")
+    @patch("actions.farming.troops_avail", side_effect=[5, 5, 1])
     def test_stops_when_not_enough_troops(self, mock_troops, mock_gather, mock_device):
         config.GATHER_MAX_TROOPS = 5
         config.MIN_TROOPS_AVAILABLE = 1
@@ -143,8 +144,8 @@ class TestRunGatherLoop:
         result = gather_gold_loop(mock_device)
         assert result == 2
 
-    @patch("actions.gather_gold")
-    @patch("actions.troops_avail", return_value=5)
+    @patch("actions.farming.gather_gold")
+    @patch("actions.farming.troops_avail", return_value=5)
     def test_stops_on_failure(self, mock_troops, mock_gather, mock_device):
         config.GATHER_MAX_TROOPS = 3
         config.MIN_TROOPS_AVAILABLE = 0
@@ -152,8 +153,8 @@ class TestRunGatherLoop:
         result = gather_gold_loop(mock_device)
         assert result == 1
 
-    @patch("actions.gather_gold")
-    @patch("actions.troops_avail", return_value=5)
+    @patch("actions.farming.gather_gold")
+    @patch("actions.farming.troops_avail", return_value=5)
     def test_stop_check_honored(self, mock_troops, mock_gather, mock_device):
         config.GATHER_MAX_TROOPS = 3
         config.MIN_TROOPS_AVAILABLE = 0
@@ -165,8 +166,8 @@ class TestRunGatherLoop:
         result = gather_gold_loop(mock_device, stop_check=stop_after_one)
         assert result == 1
 
-    @patch("actions.gather_gold")
-    @patch("actions.troops_avail", return_value=5)
+    @patch("actions.farming.gather_gold")
+    @patch("actions.farming.troops_avail", return_value=5)
     def test_returns_zero_on_immediate_stop(self, mock_troops, mock_gather, mock_device):
         config.GATHER_MAX_TROOPS = 3
         config.MIN_TROOPS_AVAILABLE = 0

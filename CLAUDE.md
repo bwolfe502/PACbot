@@ -7,22 +7,31 @@ Runs on Windows with BlueStacks or MuMu Player emulators. GUI built with tkinter
 
 | File | Purpose | Key exports |
 |------|---------|-------------|
-| `main.py` | GUI + task launcher | Tkinter app, settings load/save, daemon thread spawner |
-| `actions.py` | All game actions (~3000 lines) | `rally_titan`, `rally_eg`, `join_rally`, `join_war_rallies`, `check_quests`, `attack`, `target`, `teleport`, `reinforce_throne`, `restore_ap`, `mine_mithril`, `phantom_clash_attack` |
+| `main.py` | GUI entry point | Tkinter app, `create_gui()` |
+| `runners.py` | Shared task runners | `run_auto_quest`, `run_auto_titan`, `run_repeat`, `run_once`, `launch_task`, `stop_task` |
+| `settings.py` | Settings persistence | `DEFAULTS`, `load_settings`, `save_settings`, `SETTINGS_FILE` |
+| `actions/` | Game actions package (7 submodules) | Re-exports all public functions via `__init__.py` |
+| `actions/quests.py` | Quest system + tower quest | `check_quests`, `get_quest_tracking_state`, `reset_quest_tracking`, `occupy_tower` |
+| `actions/rallies.py` | Rally joining + blacklist | `join_rally`, `join_war_rallies`, `reset_rally_blacklist` |
+| `actions/combat.py` | Attacks, targeting, teleport | `attack`, `phantom_clash_attack`, `reinforce_throne`, `target`, `teleport` |
+| `actions/titans.py` | Titan rally + AP restore | `rally_titan`, `restore_ap` |
+| `actions/evil_guard.py` | Evil Guard attack sequence | `rally_eg`, `search_eg_reset`, `test_eg_positions` |
+| `actions/farming.py` | Gold + mithril gathering | `mine_mithril`, `gather_gold`, `gather_gold_loop` |
+| `actions/_helpers.py` | Shared state + utilities | `_interruptible_sleep`, `_last_depart_slot` |
 | `vision.py` | Screenshots, template matching, OCR, ADB input | `load_screenshot`, `find_image`, `find_all_matches`, `tap_image`, `wait_for_image_and_tap`, `read_text`, `read_number`, `read_ap`, `adb_tap`, `adb_swipe`, `timed_wait`, `tap`, `logged_tap`, `get_last_best`, `save_failure_screenshot` |
 | `navigation.py` | Screen detection + state-machine navigation | `check_screen`, `navigate` |
 | `troops.py` | Troop counting (pixel), status model (OCR), healing | `troops_avail`, `all_troops_home`, `heal_all`, `read_panel_statuses`, `get_troop_status`, `detect_selected_troop`, `capture_portrait`, `store_portrait`, `identify_troop`, `TroopAction`, `TroopStatus`, `DeviceTroopSnapshot` |
 | `territory.py` | Territory grid analysis + auto-occupy | `attack_territory`, `auto_occupy_loop`, `open_territory_manager`, `sample_specific_squares` |
-| `config.py` | Global mutable state, enums, constants | `QuestType`, `RallyType`, `Screen`, ADB path, thresholds, team colors |
+| `config.py` | Global mutable state, enums, constants | `QuestType`, `RallyType`, `Screen`, ADB path, thresholds, team colors, `alert_queue` |
 | `devices.py` | ADB device detection + emulator window mapping | `auto_connect_emulators`, `get_devices`, `get_emulator_instances` |
 | `botlog.py` | Logging, metrics, timing | `setup_logging`, `get_logger`, `set_console_verbose`, `StatsTracker`, `timed_action`, `stats` |
-| `web/dashboard.py` | Flask web dashboard (mobile remote control) | `create_app`, `launch_task`, `stop_task`, auto-mode runners |
+| `web/dashboard.py` | Flask web dashboard (mobile remote control) | `create_app`, routes, auto-mode toggles |
 
 ## Dependency Graph
 
 ```
 main.py (GUI)
-  ├─ config
+  ├─ config, settings, runners
   ├─ devices
   ├─ navigation ──┬─ vision ── config, botlog
   ├─ vision       │
@@ -31,9 +40,24 @@ main.py (GUI)
   ├─ territory ── actions (teleport)
   └─ botlog (standalone)
 
+runners.py (shared task runners)
+  ├─ config, settings
+  ├─ actions (public API)
+  └─ troops, navigation, territory
+
+actions/ package (internal deps — no cycles)
+  _helpers   → (leaf — no deps)
+  farming    → (leaf — no action deps)
+  combat     → _helpers
+  titans     → _helpers
+  rallies    → _helpers
+  evil_guard → titans, combat, _helpers
+  quests     → (lazy) rallies, combat, titans, evil_guard, farming, _helpers
+
 web/dashboard.py (Flask)
   ├─ config, devices, navigation, vision, troops, actions, territory, botlog
-  └─ Duplicates task runners from main.py (to avoid circular imports)
+  ├─ runners (shared task runners — no duplication)
+  └─ settings (shared persistence — no duplication)
 ```
 
 `botlog.py` and `config.py` have no internal dependencies (safe to import anywhere).
@@ -86,15 +110,16 @@ All session-scoped, reset on restart:
 
 ## Architecture Patterns
 
-### Threading & Task Launching (main.py)
+### Threading & Task Launching (runners.py + main.py)
 - Main thread: Tkinter event loop (GUI)
 - Worker threads: Daemon threads per action, launched on button click
-- `launch_task(device, task_name, target_func, stop_event, args)` — Spawns daemon thread
-- `stop_task(task_key)` — Sets the stop event; `stop_all_tasks_matching(suffix)` for bulk stop
+- `launch_task(device, task_name, target_func, stop_event, args)` — Spawns daemon thread (in `runners.py`)
+- `stop_task(task_key)` — Sets the stop event; `stop_all_tasks_matching(suffix)` for bulk stop (in `runners.py`)
 - Per-device lock: `config.get_device_lock(device)` prevents concurrent tasks on same device
 - Stop signals: `threading.Event()` stored in `config.running_tasks[task_key]`
 - `TASK_FUNCTIONS` dict maps GUI labels → callable functions
-- Looping is managed by main.py's task runner (run_once / run_repeat), not by actions.py. Actions accept a `stop_check` callback for cooperative cancellation
+- Looping is managed by `runners.py` task runners (`run_once` / `run_repeat`), not by actions. Actions accept a `stop_check` callback for cooperative cancellation
+- `runners.py` is shared by both `main.py` (GUI) and `web/dashboard.py` (Flask) — no duplication
 - Thread-local storage in vision.py for `get_last_best()` template scores
 
 ### Screen Resolution
@@ -157,20 +182,21 @@ State machine via `navigate(target_screen, device)`:
 - `MANUAL_ATTACK_SQUARES` / `MANUAL_IGNORE_SQUARES` override auto-detection
 - `open_territory_manager(device)`: Tkinter window for visual square selection (click to cycle: none → attack → ignore)
 
-### Rally Owner Blacklist (actions.py)
+### Rally Owner Blacklist (actions/rallies.py)
 - `_ocr_rally_owner()` reads "{Name}'s Troop" from war screen card
 - `_ocr_error_banner()` detects in-game error banners → instant blacklist
 - 2 consecutive failures without error text → blacklist owner
 - 30-minute expiry, reset on auto-quest start
 - Per-device, session-scoped
 
-### AP Restoration (actions.py + config.py)
+### AP Restoration (actions/titans.py + config.py)
 Order: free restores → potions (small→large) → gems.
 Controlled by `AP_USE_FREE`, `AP_USE_POTIONS`, `AP_ALLOW_LARGE_POTIONS`, `AP_USE_GEMS`, `AP_GEM_LIMIT`.
 
-### Settings Persistence (main.py)
+### Settings Persistence (settings.py)
 `settings.json` stores user preferences (auto-heal, AP options, intervals, territory teams).
 Loaded on startup, saved on quit/restart. `DEFAULTS` dict provides fallback values.
+Shared by both `main.py` (GUI) and `web/dashboard.py` (Flask).
 
 ### Web Dashboard (web/dashboard.py)
 Mobile-friendly Flask app for remote control from any browser. Runs alongside tkinter GUI
@@ -180,8 +206,7 @@ in a background thread — both share the same process (`config.running_tasks`, 
 
 **Architecture**:
 - `create_app()` factory returns Flask app; started via `threading.Thread` in `main.py`
-- Duplicates task runner functions (`run_auto_quest`, `run_auto_titan`, etc.) from `main.py`
-  to avoid circular imports — both must be kept in sync
+- Imports shared task runners from `runners.py` and settings from `settings.py` — no duplication
 - `AUTO_RUNNERS` dict maps auto-mode keys → runner lambdas
 - `TASK_FUNCTIONS` dict maps one-shot action names → callable functions
 - Device list cached for 15s (`_DEVICE_CACHE_TTL`) to avoid spamming ADB on every poll
@@ -251,7 +276,7 @@ and the web dashboard. Updated via `config.set_device_status(device, msg)`, clea
 ## Tests
 
 ```bash
-py -m pytest          # run all ~326 tests
+py -m pytest          # run all ~413 tests
 py -m pytest -x       # stop on first failure
 py -m pytest -k name  # filter by test name
 ```
@@ -268,18 +293,22 @@ No fixtures require a running emulator — all use mocked ADB/vision.
 | `test_botlog.py` | `StatsTracker`, `timed_action` decorator, `get_logger` |
 | `test_config.py` | AP restore options clamping logic (gem limit bounds) |
 | `test_devices.py` | `auto_connect_emulators`, `get_devices`, `get_emulator_instances` |
-| `test_rally_blacklist.py` | Direct blacklist, failure thresholds, 30-min expiry, reset |
-| `test_rally_wait.py` | Troop-tracked rally, slot tracking, panel-based waiting, false positive detection |
-| `test_quest_tracking.py` | Multi-device quest rally tracking, `_track_quest_progress`, `_record_rally_started`, `_effective_remaining` |
-| `test_check_quests_helpers.py` | `_deduplicate_quests`, `_get_actionable_quests` |
-| `test_classify_quest.py` | `_classify_quest_text` OCR classification (all QuestType values) |
+| `test_rally_blacklist.py` | Direct blacklist, failure thresholds, 30-min expiry, reset (`actions.rallies`) |
+| `test_rally_wait.py` | Troop-tracked rally, slot tracking, panel-based waiting, false positive detection (`actions.quests`) |
+| `test_quest_tracking.py` | Multi-device quest rally tracking, `_track_quest_progress`, `_record_rally_started` (`actions.quests`) |
+| `test_check_quests_helpers.py` | `_deduplicate_quests`, `_get_actionable_quests` (`actions.quests`) |
+| `test_classify_quest.py` | `_classify_quest_text` OCR classification (all QuestType values) (`actions.quests`) |
+| `test_gather_gold.py` | Gather gold flow, loop troop deployment (`actions.farming`) |
+| `test_tower_quest.py` | Tower/fortress quest occupy, recall, navigation (`actions.quests`) |
 | `test_settings_validation.py` | `validate_settings` — type checks, range/choice validation, device_troops, warnings, schema sync |
-| `test_task_runner.py` | `sleep_interval`, `launch_task`/`stop_task`, run_once, run_repeat, settings load/save |
+| `test_task_runner.py` | `sleep_interval`, `launch_task`/`stop_task`, run_once, run_repeat, settings load/save (`runners`) |
 
 ### Test Conventions
 - Fixtures in `conftest.py`: `mock_device` ("127.0.0.1:9999"), `mock_device_b` ("127.0.0.1:8888")
-- `reset_quest_state` autouse fixture clears quest tracking, rally blacklist, and slot tracking before each test
+- `reset_quest_state` autouse fixture calls `reset_quest_tracking()` + `reset_rally_blacklist()` before each test
 - All ADB calls and screenshots are mocked via `unittest.mock.patch`
+- Mock patches target the submodule where the function is used (e.g. `actions.farming.navigate`, not `actions.navigate`)
+- Tests import directly from submodules (e.g. `from actions.quests import check_quests`)
 - Test names: `test_<function>_<scenario>` (e.g. `test_find_image_returns_none_below_threshold`)
 - Use `@pytest.mark.parametrize` for related test cases that vary only by input/expected values
 
@@ -297,8 +326,18 @@ No fixtures require a running emulator — all use mocked ADB/vision.
 PACbot/
 ├── CLAUDE.md            # AI technical reference (this file)
 ├── ROADMAP.md           # Development roadmap
-├── main.py              # GUI entry point
-├── actions.py           # Game actions (~3000 lines)
+├── main.py              # GUI entry point (~1830 lines)
+├── runners.py           # Shared task runners (used by main.py + dashboard)
+├── settings.py          # Settings persistence (used by main.py + dashboard)
+├── actions/             # Game actions package
+│   ├── __init__.py      # Re-exports all public functions
+│   ├── _helpers.py      # Shared state (_last_depart_slot, _interruptible_sleep)
+│   ├── quests.py        # Quest system + tower quest (~910 lines)
+│   ├── rallies.py       # Rally joining + blacklist (~810 lines)
+│   ├── combat.py        # Attacks, targeting, teleport (~390 lines)
+│   ├── titans.py        # Titan rally + AP restore (~425 lines)
+│   ├── evil_guard.py    # Evil Guard attack sequence (~850 lines)
+│   └── farming.py       # Gold + mithril gathering (~350 lines)
 ├── vision.py            # CV + OCR + ADB input
 ├── navigation.py        # Screen detection + nav
 ├── troops.py            # Troop counting/status/healing
@@ -314,7 +353,7 @@ PACbot/
 │   └── statuses/        # Troop status icon templates
 ├── platform-tools/      # Bundled ADB executable
 ├── web/                 # Flask web dashboard
-│   ├── dashboard.py     # App factory, routes, task runners
+│   ├── dashboard.py     # App factory, routes (~600 lines)
 │   ├── static/
 │   │   └── style.css    # Mobile-first dark CSS (cache-busted ?v=N)
 │   └── templates/
@@ -322,7 +361,7 @@ PACbot/
 │       ├── index.html   # Dashboard: device cards, toggles, actions, running list
 │       ├── settings.html # Settings form
 │       └── logs.html    # Log viewer
-├── tests/               # pytest suite (~326 tests)
+├── tests/               # pytest suite (~413 tests)
 ├── logs/                # Log files
 ├── stats/               # Session stats JSON
 └── debug/               # Debug screenshots

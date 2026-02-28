@@ -5,7 +5,7 @@ Tests _deduplicate_quests (pure function) and _get_actionable_quests.
 from unittest.mock import patch
 
 from config import QuestType
-from actions import _deduplicate_quests, _get_actionable_quests, _all_quests_visually_complete, _quest_rallies_pending
+from actions.quests import _deduplicate_quests, _get_actionable_quests, _all_quests_visually_complete, _quest_rallies_pending
 
 
 # ============================================================
@@ -170,7 +170,7 @@ class TestAllQuestsVisuallyComplete:
         ]
         assert _all_quests_visually_complete(mock_device, quests) is True
 
-    @patch("actions._is_troop_defending", return_value=True)
+    @patch("actions.quests._is_troop_defending", return_value=True)
     def test_tower_ok_if_defending(self, mock_defending, mock_device):
         quests = [
             {"quest_type": QuestType.TITAN, "current": 15, "target": 15, "completed": False},
@@ -178,7 +178,7 @@ class TestAllQuestsVisuallyComplete:
         ]
         assert _all_quests_visually_complete(mock_device, quests) is True
 
-    @patch("actions._is_troop_defending", return_value=False)
+    @patch("actions.quests._is_troop_defending", return_value=False)
     def test_tower_blocks_if_not_defending(self, mock_defending, mock_device):
         quests = [
             {"quest_type": QuestType.TITAN, "current": 15, "target": 15, "completed": False},
@@ -186,7 +186,7 @@ class TestAllQuestsVisuallyComplete:
         ]
         assert _all_quests_visually_complete(mock_device, quests) is False
 
-    @patch("actions._is_troop_defending", return_value=True)
+    @patch("actions.quests._is_troop_defending", return_value=True)
     def test_fortress_ok_if_defending(self, mock_defending, mock_device):
         quests = [
             {"quest_type": QuestType.FORTRESS, "current": 5, "target": 30, "completed": False},
