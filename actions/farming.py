@@ -200,11 +200,11 @@ def mine_mithril_if_due(device, stop_check=None):
 def _set_gather_level(device, target_level):
     """Tap +/- buttons to set the gold mine level in the search menu.
     Deterministic approach: tap minus to floor the slider, then tap plus to target.
-    The slider range includes levels 1-6+, so 10 minus taps guarantees we hit bottom."""
+    The slider range is levels 1-6, so 5 minus taps guarantees we hit bottom."""
     log = get_logger("actions", device)
 
     # Floor the slider by tapping minus enough times to reach level 1
-    for _ in range(10):
+    for _ in range(5):
         logged_tap(device, 320, 1140, "gather_minus_reset")
         time.sleep(0.12)
 
@@ -284,9 +284,17 @@ def gather_gold(device, stop_check=None):
         logged_tap(device, 540, 900, "gold_mine_on_map")
         timed_wait(device, lambda: False, 3, "gold_mine_select")
 
-        # Step 6: Tap Gather button
-        logged_tap(device, 540, 1125, "gather_button")
-        timed_wait(device, lambda: False, 1.5, "gather_button_response")
+        # Step 6: Tap Gather button (template match — position varies with popup)
+        if not wait_for_image_and_tap("gather.png", device, timeout=5, threshold=0.8):
+            log.info("Gather button not found — mine tap may have missed")
+            if mine_attempt == 0:
+                save_failure_screenshot(device, "gather_button_miss")
+                navigate(Screen.MAP, device)
+                continue
+            else:
+                log.warning("Gather button not found after 2 attempts")
+                save_failure_screenshot(device, "gather_button_fail")
+                break
 
         # Step 7: Wait for deployment panel and tap DEPART
         if wait_for_image_and_tap("depart.png", device, timeout=8, threshold=0.7):

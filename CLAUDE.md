@@ -141,6 +141,8 @@ Device IDs are either `"127.0.0.1:<port>"` (TCP) or `"emulator-<port>"` (local A
 - Dynamic region learning: `StatsTracker` accumulates hit positions, auto-narrows search after 3+ hits
 - `TAP_OFFSETS` dict: some templates need offset taps (e.g. depart.png +75px x to dodge chat overlay)
 - `get_last_best()` returns thread-local best score on miss (useful for confidence logging)
+- **Preferred over blind taps**: `wait_for_image_and_tap` replaces `logged_tap` where button position
+  varies (e.g. `gather.png` in gold mine popup, where depart y-position varies: 950, 1128, 1307)
 
 ### OCR (vision.py)
 - Windows: EasyOCR (deep learning, ~500-2000ms/call on CPU)
@@ -331,7 +333,7 @@ No fixtures require a running emulator — all use mocked ADB/vision.
 | `test_classify_quest.py` | `_classify_quest_text` OCR classification (all QuestType values) (`actions.quests`) |
 | `test_combat.py` | `_check_dead`, `_find_green_pixel`, `_detect_player_at_eg`, `teleport` (happy path, timeout, dead detection, cancel) (`actions.combat`) |
 | `test_territory.py` | `_classify_square_team` (exact/noisy colors, thresholds, team configs), `_get_border_color` (sampling, clock avoidance), `_has_flag` (red pixel detection), `_is_adjacent_to_my_territory` (adjacency, throne, edges), `attack_territory` (full workflow), `auto_occupy_loop` (cycle, stop signal) (`territory`) |
-| `test_gather_gold.py` | Gather gold flow (depart verification, retry logic), loop troop deployment with retry (`actions.farming`) |
+| `test_gather_gold.py` | Gather gold flow (gather.png template tap, depart verification, retry logic), loop troop deployment with retry (`actions.farming`) |
 | `test_tower_quest.py` | Tower/fortress quest occupy, recall, navigation (`actions.quests`) |
 | `test_settings_validation.py` | `validate_settings` — type checks, range/choice validation, device_troops, warnings, schema sync |
 | `test_task_runner.py` | `sleep_interval`, `launch_task`/`stop_task`, run_once, run_repeat, consecutive error recovery, settings load/save (`runners`) |

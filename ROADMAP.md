@@ -14,7 +14,7 @@ Harden existing features before adding new ones.
 - [ ] Teleport system improvements — more reliable targeting and validation
 - [x] Error recovery — stuck-state detection, disconnect handling, popup resilience
 - [x] AP Recovery popup handling — detect game-opened AP popup during EG depart, restore AP inline
-- [ ] Image region audit — verify all `IMAGE_REGIONS` in vision.py are still accurate
+- [ ] Image region audit — verify all `IMAGE_REGIONS` in vision.py are still accurate. Known widening needed: heal.png, depart.png, stationed.png, mithril_depart.png
 - [x] Settings validation — validate `settings.json` on startup, catch invalid/corrupt values
 - [ ] Fix join_rally success rate (33%) — `jr_slot_to_depart` transition at 0%, war screen scroll settle broken
 - [ ] Fix rally_titan instant failures (53%) — search menu not opening reliably (31-50% success)
@@ -34,7 +34,7 @@ Build confidence that everything works before shipping updates.
 ### Major Test Gaps (P1)
 - [ ] Expand `test_quests.py` — check_quests orchestration, tower quest flow, claim rewards, OCR parsing
 - [ ] Expand `test_rallies.py` — join_rally (649 LOC untested), join_war_rallies, _ocr_error_banner
-- [ ] `test_farming.py` — mine_mithril, mine_mithril_if_due interval logic, _set_gather_level
+- [ ] `test_farming.py` — mine_mithril, mine_mithril_if_due interval logic, _set_gather_level, gather.png template tap (gather_gold updated to use wait_for_image_and_tap)
 
 ### Infrastructure
 - [x] Audit existing test suite — no bloat found, 418 tests in 40s, well-structured
