@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>9Bot — Installation Guide</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0c0c18;
+    color: #e0e0f0;
+    min-height: 100vh;
+    line-height: 1.6;
+}
+.page {
+    max-width: 680px;
+    margin: 0 auto;
+    padding: 32px 20px 60px;
+}
+.header {
+    text-align: center;
+    margin-bottom: 32px;
+}
+.logo {
+    color: #64d8ff;
+    font-family: 'Bodoni Moda', serif;
+    font-style: italic;
+    font-weight: 700;
+    font-size: 48px;
+    text-shadow: 0 0 20px rgba(100, 216, 255, 0.3);
+}
+.logo-sub {
+    font-family: system-ui, sans-serif;
+    font-weight: 300;
+    font-size: 13px;
+    letter-spacing: 5px;
+    color: #64d8ff;
+}
+h1 {
+    font-size: 22px;
+    font-weight: 700;
+    color: #fff;
+    margin-top: 12px;
+}
+.subtitle {
+    font-size: 14px;
+    color: #778;
+    margin-top: 4px;
+}
+.download-box {
+    text-align: center;
+    padding: 24px 20px;
+    background: linear-gradient(135deg, #181830 0%, #1a1e38 100%);
+    border: 1px solid rgba(100,216,255,0.15);
+    border-radius: 14px;
+    margin-bottom: 36px;
+}
+.download-btn {
+    display: inline-block;
+    padding: 14px 36px;
+    background: rgba(100,216,255,0.12);
+    border: 1px solid rgba(100,216,255,0.3);
+    border-radius: 10px;
+    color: #64d8ff;
+    font-size: 16px;
+    font-weight: 700;
+    text-decoration: none;
+    transition: all 0.15s ease;
+}
+.download-btn:hover {
+    background: rgba(100,216,255,0.2);
+    border-color: rgba(100,216,255,0.5);
+}
+.download-btn:active {
+    transform: scale(0.97);
+}
+.download-hint {
+    font-size: 12px;
+    color: #556;
+    margin-top: 10px;
+}
+.step {
+    display: flex;
+    gap: 14px;
+    margin-bottom: 28px;
+}
+.step-num {
+    width: 32px;
+    height: 32px;
+    min-width: 32px;
+    border-radius: 50%;
+    background: rgba(100,216,255,0.12);
+    border: 1px solid rgba(100,216,255,0.25);
+    color: #64d8ff;
+    font-size: 15px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 2px;
+}
+.step-body h2 {
+    font-size: 16px;
+    font-weight: 700;
+    color: #fff;
+    margin: 0 0 6px;
+}
+.step-body p {
+    font-size: 14px;
+    color: #bbc;
+    margin: 0 0 10px;
+}
+.note {
+    font-size: 13px;
+    color: #889;
+    background: rgba(255,255,255,0.03);
+    border-left: 2px solid rgba(100,216,255,0.2);
+    padding: 8px 12px;
+    border-radius: 0 6px 6px 0;
+    line-height: 1.5;
+}
+.warn {
+    border-left-color: rgba(255,183,77,0.4);
+    background: rgba(255,183,77,0.04);
+}
+code {
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 12px;
+    background: rgba(100,216,255,0.08);
+    border: 1px solid rgba(100,216,255,0.15);
+    border-radius: 4px;
+    padding: 1px 6px;
+    color: #64d8ff;
+}
+.checklist {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.check {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    font-size: 14px;
+    color: #ccd;
+}
+.check-icon {
+    font-size: 16px;
+    color: #556;
+    flex-shrink: 0;
+    margin-top: 1px;
+}
+.hint {
+    font-size: 12px;
+    color: #667;
+    margin-top: 2px;
+    line-height: 1.4;
+}
+.divider {
+    height: 1px;
+    background: rgba(255,255,255,0.06);
+    margin: 32px 0 24px;
+}
+a { color: #64d8ff; }
+.section-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: #fff;
+    margin: 0 0 16px;
+}
+.faq {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+.faq-item {
+    font-size: 14px;
+    color: #bbc;
+    line-height: 1.5;
+}
+.faq-item strong {
+    color: #dde;
+}
+</style>
+</head>
+<body>
+<div class="page">
+
+<div class="header">
+    <div class="logo">9</div>
+    <div class="logo-sub">B O T</div>
+    <h1>Installation Guide</h1>
+    <p class="subtitle">Everything you need to get 9Bot running from scratch.</p>
+</div>
+
+<div class="download-box">
+    <a href="https://github.com/bwolfe502/9Bot/releases/latest" target="_blank" class="download-btn">Download Latest Release</a>
+    <div class="download-hint">Extract the ZIP to your desktop. Don't put it inside Program Files.</div>
+</div>
+
+<!-- Step 1 -->
+<div class="step">
+    <div class="step-num">1</div>
+    <div class="step-body">
+        <h2>Install an Android Emulator</h2>
+        <p>9Bot works with <strong>BlueStacks</strong> or <strong>MuMu Player</strong>. Pick one and install it:</p>
+        <div class="checklist">
+            <div class="check">
+                <span class="check-icon">&#9744;</span>
+                <div>
+                    <strong>BlueStacks 5</strong> &mdash; most popular, works well
+                    <div class="hint">Download from <a href="https://www.bluestacks.com" target="_blank">bluestacks.com</a></div>
+                </div>
+            </div>
+            <div class="check">
+                <span class="check-icon">&#9744;</span>
+                <div>
+                    <strong>MuMu Player</strong> &mdash; lightweight alternative
+                    <div class="hint">Download from <a href="https://www.mumuplayer.com" target="_blank">mumuplayer.com</a></div>
+                </div>
+            </div>
+        </div>
+        <div class="note" style="margin-top:12px">
+            You only need one. If you're not sure, go with BlueStacks.
+        </div>
+    </div>
+</div>
+
+<!-- Step 2 -->
+<div class="step">
+    <div class="step-num">2</div>
+    <div class="step-body">
+        <h2>Configure the Emulator</h2>
+        <p>Open your emulator's settings and change two things:</p>
+        <div class="checklist">
+            <div class="check">
+                <span class="check-icon">&#9744;</span>
+                <div>
+                    <strong>Screen resolution</strong> &mdash; set to <code>1080 x 1920</code> (portrait)
+                    <div class="hint">BlueStacks: Settings &rarr; Display &rarr; Resolution &rarr; Custom (1080 x 1920)<br>
+                    MuMu: Settings &rarr; Display &rarr; 1080x1920</div>
+                </div>
+            </div>
+            <div class="check">
+                <span class="check-icon">&#9744;</span>
+                <div>
+                    <strong>ADB (Android Debug Bridge)</strong> &mdash; must be enabled
+                    <div class="hint">BlueStacks: Settings &rarr; Advanced &rarr; Enable Android Debug Bridge<br>
+                    MuMu: Already enabled by default</div>
+                </div>
+            </div>
+        </div>
+        <div class="note warn" style="margin-top:12px">
+            These settings are required. 9Bot won't work without the correct resolution and ADB enabled.
+        </div>
+    </div>
+</div>
+
+<!-- Step 3 -->
+<div class="step">
+    <div class="step-num">3</div>
+    <div class="step-body">
+        <h2>Install the Game</h2>
+        <p>Open the emulator and install the game from the Play Store (or sideload the APK). Log in to your account and make sure you can reach the <strong>map screen</strong> &mdash; the main world view where you see your castle.</p>
+    </div>
+</div>
+
+<!-- Step 4 -->
+<div class="step">
+    <div class="step-num">4</div>
+    <div class="step-body">
+        <h2>Install Python</h2>
+        <p>9Bot needs <strong>Python 3.10 or newer</strong>. If you don't have it:</p>
+        <div class="checklist">
+            <div class="check">
+                <span class="check-icon">&#9744;</span>
+                <div>
+                    Download from <a href="https://www.python.org/downloads/" target="_blank">python.org/downloads</a>
+                    <div class="hint">During installation, check the box that says <strong>"Add Python to PATH"</strong> &mdash; this is important!</div>
+                </div>
+            </div>
+        </div>
+        <div class="note" style="margin-top:12px">
+            Already have Python? Open a command prompt and type <code>python --version</code> or <code>py --version</code> to check. 3.10+ is required.
+        </div>
+    </div>
+</div>
+
+<!-- Step 5 -->
+<div class="step">
+    <div class="step-num">5</div>
+    <div class="step-body">
+        <h2>Run 9Bot</h2>
+        <p>Double-click <code>run.bat</code> (Windows) or <code>run.command</code> (Mac) in the 9Bot folder.</p>
+        <div class="note" style="margin-top:10px">
+            The first launch takes a few minutes &mdash; it creates a virtual environment and downloads dependencies automatically. A dashboard window will open when it's ready.
+        </div>
+    </div>
+</div>
+
+<!-- Step 6 -->
+<div class="step">
+    <div class="step-num">6</div>
+    <div class="step-body">
+        <h2>You're In!</h2>
+        <p>The 9Bot dashboard should now be open. Your emulator should appear as a connected device.</p>
+        <p>Head to the <strong>Guide</strong> page in the dashboard for instructions on setting up markers and turning on Auto Quest.</p>
+        <div class="note">
+            If no devices show up, make sure your emulator is running and ADB is enabled, then hit the <strong>Refresh</strong> button at the bottom of the dashboard.
+        </div>
+    </div>
+</div>
+
+<div class="divider"></div>
+
+<h2 class="section-title">Troubleshooting</h2>
+
+<div class="faq">
+    <div class="faq-item">
+        <strong>No devices detected?</strong><br>
+        Make sure the emulator is fully started (not still loading) and ADB is enabled in its settings. Click Refresh on the dashboard. For BlueStacks, you may need to restart it after enabling ADB.
+    </div>
+    <div class="faq-item">
+        <strong>run.bat closes immediately?</strong><br>
+        Windows: Right-click <code>run.bat</code> and select "Run as administrator". If that doesn't help, open a command prompt in the 9Bot folder and type <code>py run_web.py</code> to see the error. Mac: open Terminal, <code>cd</code> to the 9Bot folder, and run <code>python3 run_web.py</code>.
+    </div>
+    <div class="faq-item">
+        <strong>"Python not found"?</strong><br>
+        Make sure you installed Python with the <strong>"Add to PATH"</strong> option checked. If you missed it, re-run the Python installer, choose "Modify", and check the PATH box. You may need to restart your computer afterward.
+    </div>
+    <div class="faq-item">
+        <strong>Multiple emulator instances?</strong><br>
+        9Bot supports running multiple emulator instances at the same time. Each one shows up as a separate device on the dashboard. Make sure each instance has the correct resolution set.
+    </div>
+</div>
+
+</div>
+</body>
+</html>
