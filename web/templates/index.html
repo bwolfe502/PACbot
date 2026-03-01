@@ -3,17 +3,22 @@
 
 {% block content %}
 
-<!-- Phone Access -->
+<!-- Remote Access -->
 {% if relay_url %}
 <div class="phone-access" onclick="copyUrl(this)" data-url="{{ relay_url }}">
     <span class="phone-icon">&#127760;</span>
     <span>Remote: <strong>{{ relay_url }}</strong></span>
     <span class="copy-hint">tap to copy</span>
 </div>
+{% else %}
+<a href="/settings" class="phone-access" style="text-decoration:none">
+    <span class="phone-icon">&#127760;</span>
+    <span>Remote access: <strong>Set up in Settings &rarr; Remote Access</strong></span>
+</a>
 {% endif %}
 <div class="phone-access" onclick="copyUrl(this)" data-url="http://{{ local_ip }}:8080">
     <span class="phone-icon">&#128241;</span>
-    <span>LAN: <strong>http://{{ local_ip }}:8080</strong></span>
+    <span>Same WiFi: <strong>http://{{ local_ip }}:8080</strong></span>
     <span class="copy-hint">tap to copy</span>
 </div>
 
