@@ -683,8 +683,14 @@ def check_quests(device, stop_check=None):
     if stop_check and stop_check():
         return True
 
-    # Recovery: recall any troop stuck stationing from a prior failed EG rally
+    # Priority 1: recall any troop stuck defending with no active tower quest.
+    # This runs BEFORE quest OCR so a stray defender gets freed immediately.
     if navigate(Screen.MAP, device):
+        if device not in _tower_quest_state:
+            snapshot = read_panel_statuses(device)
+            if snapshot is not None and snapshot.any_doing(TroopAction.DEFENDING):
+                log.info("Stray defending troop detected (no tower quest active) — recalling first")
+                recall_tower_troop(device, stop_check)
         _recall_stray_stationed(device, stop_check)
     if stop_check and stop_check():
         return True
@@ -1013,13 +1019,59 @@ def occupy_tower(device, stop_check=None):
         return False
 
 
+def _recall_tap_sequence(device, log, stop_check=None):
+    """Execute the tower recall blind-tap sequence.
+
+    Steps: tap tower → Detail → Recall → Confirm → close.
+    Returns True if we completed the sequence (caller must verify outcome).
+    """
+    # Tap the tower (try a few Y positions — centering isn't always exact)
+    for tower_y in (900, 960, 840):
+        logged_tap(device, 540, tower_y, "recall_tower_tap")
+        time.sleep(1.2)
+        screen = load_screenshot(device)
+        if screen is not None and find_image(screen, "close_x.png", threshold=0.6) is not None:
+            log.debug("Tower popup detected after tap at y=%d", tower_y)
+            break
+    else:
+        # No popup detected — still try the sequence in case close_x
+        # doesn't appear but the tower menu is open
+        log.debug("No popup detected after tower taps — trying sequence anyway")
+
+    if stop_check and stop_check():
+        return False
+
+    # Detail button
+    logged_tap(device, 360, 1430, "recall_detail")
+    time.sleep(1)
+
+    # Recall troops button
+    logged_tap(device, 180, 330, "recall_troops_btn")
+    time.sleep(1)
+
+    if stop_check and stop_check():
+        return False
+
+    # Red Confirm button
+    logged_tap(device, 315, 1080, "recall_confirm")
+    time.sleep(0.5)
+
+    # Close dialogs
+    tap_image("close_x.png", device)
+    time.sleep(0.5)
+    logged_tap(device, 540, 900, "recall_dismiss")
+    time.sleep(1)
+    return True
+
+
 @timed_action("recall_tower")
 def recall_tower_troop(device, stop_check=None):
     """Recall a troop defending a tower.
 
-    7-step sequence: tap defending icon -> tap tower -> Detail ->
-    Recall troops -> Confirm -> close X -> dismiss.
-    Returns True on success, False on failure.
+    Tries two approaches with verification:
+    1. Tap defending panel icon to center map, then blind-tap sequence.
+    2. Navigate to tower via friend marker, then blind-tap sequence.
+    Returns True only when verified (troop no longer defending).
     """
     log = get_logger("actions", device)
 
@@ -1032,41 +1084,51 @@ def recall_tower_troop(device, stop_check=None):
 
     config.set_device_status(device, "Recalling Tower Troop...")
 
-    # Step 1: Tap the defending icon on troop panel to center tower
-    if not tap_image("statuses/defending.png", device):
-        log.warning("Tower recall: no defending icon found on troop panel")
-        return False
-    time.sleep(1.5)
+    # --- Approach 1: center via defending panel icon ---
+    for attempt in range(2):
+        if stop_check and stop_check():
+            return False
 
-    # Step 2: Tap the tower (now centered on screen)
-    logged_tap(device, 540, 900, "recall_tower_tap")
-    time.sleep(1)
+        if attempt > 0:
+            navigate(Screen.MAP, device)
 
-    # Step 3: Tap Detail
-    logged_tap(device, 360, 1430, "recall_detail")
-    time.sleep(1)
+        if not tap_image("statuses/defending.png", device):
+            log.warning("Tower recall: no defending icon on panel")
+            return False
+        time.sleep(2)  # wait for map centering animation
 
+        _recall_tap_sequence(device, log, stop_check)
+
+        # Verify: is the troop still defending?
+        if not navigate(Screen.MAP, device):
+            continue
+        snapshot = read_panel_statuses(device)
+        if snapshot is not None and not snapshot.any_doing(TroopAction.DEFENDING):
+            _tower_quest_state.pop(device, None)
+            log.info("Tower troop recalled successfully")
+            return True
+        log.warning("Tower recall: troop still defending after panel-icon attempt %d", attempt + 1)
+        save_failure_screenshot(device, f"recall_tower_still_defending_a{attempt + 1}")
+
+    # --- Approach 2: navigate to tower via friend marker ---
     if stop_check and stop_check():
         return False
+    log.info("Tower recall: trying friend marker navigation")
+    if _navigate_to_tower(device):
+        time.sleep(1)
+        _recall_tap_sequence(device, log, stop_check)
 
-    # Step 4: Tap Recall troops
-    logged_tap(device, 180, 330, "recall_troops_btn")
-    time.sleep(1)
+        if navigate(Screen.MAP, device):
+            snapshot = read_panel_statuses(device)
+            if snapshot is not None and not snapshot.any_doing(TroopAction.DEFENDING):
+                _tower_quest_state.pop(device, None)
+                log.info("Tower troop recalled via friend marker")
+                return True
+            log.warning("Tower recall: troop still defending after friend-marker attempt")
+            save_failure_screenshot(device, "recall_tower_still_defending_friend")
 
-    # Step 5: Tap red Confirm
-    logged_tap(device, 315, 1080, "recall_confirm")
-    time.sleep(0.5)
-
-    # Step 6: Tap close X
-    tap_image("close_x.png", device)
-    time.sleep(0.5)
-
-    # Step 7: Tap to dismiss remaining menu
-    logged_tap(device, 540, 900, "recall_dismiss")
-
-    _tower_quest_state.pop(device, None)
-    log.info("Tower troop recalled")
-    return True
+    log.error("Tower recall FAILED — troop still defending after all attempts")
+    return False
 
 
 def _run_tower_quest(device, quests, stop_check=None):
