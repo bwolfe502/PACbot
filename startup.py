@@ -266,12 +266,13 @@ def shutdown():
         pass
 
 
-def create_bug_report_zip(clear_debug=True):
+def create_bug_report_zip(clear_debug=True, notes=None):
     """Create a bug report zip file in memory and return the bytes.
 
     Args:
         clear_debug: If True (default), remove debug screenshots after zipping.
             Pass False for periodic auto-uploads to keep debug files intact.
+        notes: Optional user notes string to include as ``notes.txt`` in the zip.
 
     Returns ``(zip_bytes, filename)`` tuple.
     """
@@ -316,6 +317,10 @@ def create_bug_report_zip(clear_debug=True):
                 zf.writestr("settings.json", json.dumps(safe_settings, indent=2))
             except Exception:
                 zf.write(settings_path, "settings.json")
+
+        # User notes (if provided)
+        if notes and notes.strip():
+            zf.writestr("notes.txt", notes.strip())
 
         # System info report
         try:
@@ -381,8 +386,12 @@ _last_upload_error = None     # str or None
 _upload_interval_hours = 24
 
 
-def upload_bug_report(settings=None):
+def upload_bug_report(settings=None, notes=None):
     """Upload a bug report ZIP to the relay server.
+
+    Args:
+        settings: Settings dict (loaded from file if None).
+        notes: Optional user notes to include in the zip.
 
     Returns ``(success, message)`` tuple.
     """
@@ -397,7 +406,7 @@ def upload_bug_report(settings=None):
     host = relay_url.replace("wss://", "").replace("ws://", "").split("/")[0]
     upload_url = f"https://{host}/_upload?bot={bot_name}"
 
-    zip_bytes, filename = create_bug_report_zip(clear_debug=False)
+    zip_bytes, filename = create_bug_report_zip(clear_debug=False, notes=notes)
 
     import requests as _req
     try:

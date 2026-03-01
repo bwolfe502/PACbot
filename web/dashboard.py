@@ -732,7 +732,8 @@ def create_app():
         from startup import create_bug_report_zip
         from flask import send_file
         import io
-        zip_bytes, filename = create_bug_report_zip()
+        notes = request.form.get("notes", "").strip() or None
+        zip_bytes, filename = create_bug_report_zip(notes=notes)
         return send_file(
             io.BytesIO(zip_bytes),
             mimetype="application/zip",
@@ -744,7 +745,8 @@ def create_app():
     def api_upload_logs():
         """Manually upload a bug report to the relay server."""
         from startup import upload_bug_report
-        ok, msg = upload_bug_report()
+        notes = request.form.get("notes", "").strip() or None
+        ok, msg = upload_bug_report(notes=notes)
         return jsonify({"ok": ok, "message": msg})
 
     @app.route("/api/quit", methods=["POST"])

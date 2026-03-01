@@ -1072,6 +1072,51 @@ h3 { font-size: 15px; margin-bottom: 12px; color: #64d8ff; }
     color: #99a;
 }
 
+.bottom-btn-bugreport {
+    border-color: rgba(180,130,255,0.15);
+    color: #a89;
+}
+
+.bottom-btn-bugreport:active {
+    background: rgba(180,130,255,0.06);
+    color: #b4a0ff;
+}
+
+/* Bug report modal */
+.bugreport-modal {
+    max-width: 380px;
+}
+
+.bugreport-notes {
+    width: 100%;
+    min-height: 100px;
+    padding: 10px 12px;
+    background: #0c0c18;
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 8px;
+    color: #e0e0f0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    resize: vertical;
+}
+
+.bugreport-notes::placeholder {
+    color: #556;
+}
+
+.bugreport-notes:focus {
+    outline: none;
+    border-color: rgba(100,216,255,0.3);
+}
+
+.bugreport-hint {
+    font-size: 11px;
+    color: #556;
+    margin-top: 8px;
+    margin-bottom: 4px;
+}
+
 /* Summary bar */
 .summary-bar {
     display: flex;

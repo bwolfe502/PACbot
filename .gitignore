@@ -20,7 +20,7 @@ debug/
 # Logs and stats
 logs/
 stats/
-pacbot.log
+9bot.log
 
 # License key
 .license_key
