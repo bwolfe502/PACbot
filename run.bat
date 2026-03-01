@@ -97,7 +97,7 @@ echo.
 py updater.py
 
 echo.
-py main.py
+py run_web.py
 if errorlevel 1 (
   echo.
   echo ==========================================

@@ -79,6 +79,44 @@ h3 { font-size: 15px; margin-bottom: 12px; color: #64d8ff; }
 
 .muted { color: #778; font-size: 14px; }
 
+/* Phone access banner */
+.phone-access {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    background: #141428;
+    border: 1px solid rgba(100,216,255,0.1);
+    border-radius: 10px;
+    margin-bottom: 10px;
+    font-size: 13px;
+    color: #889;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.phone-access:active {
+    background: #1a1e38;
+    border-color: rgba(100,216,255,0.25);
+}
+
+.phone-access strong {
+    color: #64d8ff;
+    font-weight: 600;
+}
+
+.phone-icon {
+    font-size: 16px;
+    flex-shrink: 0;
+}
+
+.copy-hint {
+    margin-left: auto;
+    font-size: 11px;
+    color: #556;
+}
+
 /* Device cards */
 .device-card {
     display: flex;
@@ -677,6 +715,116 @@ h3 { font-size: 15px; margin-bottom: 12px; color: #64d8ff; }
 .quest-type { color: #bbc; text-transform: capitalize; }
 .quest-count { color: #e0e0f0; }
 .quest-pending { color: #ffb74d; font-size: 12px; }
+
+/* ============================================================
+   Territory Grid Manager
+   ============================================================ */
+
+/* Allow territory page to use full screen width for bigger tap targets */
+.territory-page main {
+    max-width: 100%;
+    padding: 12px 8px;
+}
+
+.terr-grid-wrap {
+    display: flex;
+    align-items: flex-end;
+    margin-bottom: 1px;
+}
+
+.terr-grid-corner {
+    width: 24px;
+    flex-shrink: 0;
+}
+
+.terr-col-headers {
+    display: grid;
+    grid-template-columns: repeat(24, 1fr);
+    flex: 1;
+    min-width: 0;
+}
+
+.terr-header-cell {
+    font-size: 9px;
+    color: #556;
+    text-align: center;
+    line-height: 16px;
+    user-select: none;
+}
+
+.terr-row-num {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+}
+
+.terr-grid-body {
+    display: flex;
+}
+
+.terr-row-headers {
+    width: 24px;
+    flex-shrink: 0;
+    display: grid;
+    grid-template-rows: repeat(24, 1fr);
+}
+
+.terr-grid {
+    flex: 1;
+    min-width: 0;
+    display: grid;
+    grid-template-columns: repeat(24, 1fr);
+    grid-template-rows: repeat(24, 1fr);
+    gap: 1px;
+    background: rgba(255,255,255,0.03);
+    aspect-ratio: 1 / 1;
+}
+
+.terr-cell {
+    background: #1a1a30;
+    border-radius: 2px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.1s ease;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+    min-width: 0;
+    min-height: 0;
+}
+
+.terr-cell:active {
+    filter: brightness(1.3);
+}
+
+.terr-cell.terr-attack {
+    background: #2e7d32;
+    box-shadow: inset 0 0 0 1px rgba(76,175,80,0.3);
+}
+
+.terr-cell.terr-ignore {
+    background: #c62828;
+    box-shadow: inset 0 0 0 1px rgba(239,83,80,0.3);
+}
+
+.terr-cell.terr-throne {
+    background: #333355;
+    cursor: default;
+}
+
+.terr-cell.terr-throne:active {
+    filter: none;
+}
+
+.terr-throne-label {
+    font-size: 8px;
+    font-weight: 700;
+    color: #667;
+    line-height: 1;
+    user-select: none;
+}
 
 /* Safe area for notched iPhones */
 @supports (padding-bottom: env(safe-area-inset-bottom)) {

@@ -1720,41 +1720,10 @@ def create_gui():
             print(f"Failed to save settings: {e}")
         try:
             stop_all()
-        except Exception as e:
-            print(f"Failed to stop tasks: {e}")
-        try:
-            from tunnel import stop_tunnel
-            stop_tunnel()
         except Exception:
             pass
-        # Save session stats and print summary
-        try:
-            from botlog import stats, get_logger
-            _log = get_logger("main")
-            stats.save()
-            _log.info("Session stats saved")
-            summary = stats.summary()
-            if summary:
-                _log.info("Session stats:\n%s", summary)
-        except Exception as e:
-            print(f"Failed to save stats: {e}")
-        # Flush all log handlers before exiting
-        try:
-            logging.shutdown()
-        except Exception:
-            pass
-        # Disconnect ADB devices to avoid zombie adb processes
-        try:
-            from devices import get_devices
-            for d in get_devices():
-                try:
-                    subprocess.run([config.adb_path, "disconnect", d],
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                   timeout=2)
-                except Exception:
-                    pass
-        except Exception:
-            pass
+        from startup import shutdown
+        shutdown()
         try:
             window.destroy()
         except Exception:
@@ -1830,53 +1799,6 @@ def create_gui():
 # ============================================================
 
 if __name__ == "__main__":
-    # Set up structured logging (rotating file + console)
-    from botlog import setup_logging, stats, get_logger
-    setup_logging()
-    config.log_adb_path()
-
-    # Compatibility bridge: capture any remaining print() calls to legacy log file
-    _log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pacbot.log")
-    _log_file = open(_log_path, "w", encoding="utf-8")
-
-    class _Tee:
-        """Write to both the original stream and the log file."""
-        def __init__(self, stream, log):
-            self._stream = stream
-            self._log = log
-        def write(self, data):
-            self._stream.write(data)
-            try:
-                self._log.write(data)
-                self._log.flush()
-            except Exception:
-                pass
-        def flush(self):
-            self._stream.flush()
-            try:
-                self._log.flush()
-            except Exception:
-                pass
-
-    sys.stdout = _Tee(sys.stdout, _log_file)
-    sys.stderr = _Tee(sys.stderr, _log_file)
-
-    _main_log = get_logger("main")
-
-    app_dir = os.path.dirname(os.path.abspath(__file__))
-    if not os.path.isdir(os.path.join(app_dir, ".git")):
-        from license import validate_license
-        validate_license()
-    else:
-        _main_log.info("Git repo detected — skipping license check (developer mode).")
-    # Auto-update check (skipped automatically for .git clones)
-    from updater import check_and_update
-    if check_and_update():
-        _main_log.info("Update installed — restarting...")
-        os.execv(sys.executable, [sys.executable] + sys.argv)
-
-    _main_log.info("Running PACbot...")
-    # Pre-initialize OCR engine in background thread (Windows only — loads EasyOCR models).
-    # On macOS, Apple Vision has no startup cost so this is a no-op.
-    threading.Thread(target=warmup_ocr, daemon=True).start()
+    from startup import initialize
+    initialize()
     create_gui()

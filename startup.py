@@ -1,0 +1,303 @@
+"""PACbot startup & shutdown — shared initialization for all entry points.
+
+Used by both ``run_web.py`` (web-only) and ``main.py`` (legacy tkinter GUI).
+"""
+
+import os
+import sys
+import logging
+import platform
+import subprocess
+import threading
+
+import config
+from config import (running_tasks, set_min_troops, set_auto_heal,
+                    set_auto_restore_ap, set_ap_restore_options,
+                    set_territory_config, set_eg_rally_own, set_titan_rally_own,
+                    set_gather_options, set_tower_quest_enabled)
+from settings import load_settings, save_settings
+
+
+def apply_settings(settings):
+    """Push settings values into config globals.
+
+    Called on startup and whenever settings are saved (from any UI).
+    """
+    set_auto_heal(settings.get("auto_heal", True))
+    set_auto_restore_ap(settings.get("auto_restore_ap", False))
+    set_ap_restore_options(
+        settings.get("ap_use_free", True),
+        settings.get("ap_use_potions", True),
+        settings.get("ap_allow_large_potions", True),
+        settings.get("ap_use_gems", False),
+        settings.get("ap_gem_limit", 0),
+    )
+    set_min_troops(settings.get("min_troops", 0))
+    set_eg_rally_own(settings.get("eg_rally_own", True))
+    set_titan_rally_own(settings.get("titan_rally_own", True))
+    set_territory_config(settings.get("my_team", "yellow"))
+    config.MITHRIL_INTERVAL = settings.get("mithril_interval", 19)
+    from botlog import set_console_verbose
+    set_console_verbose(settings.get("verbose_logging", False))
+    set_gather_options(
+        settings.get("gather_enabled", True),
+        settings.get("gather_mine_level", 4),
+        settings.get("gather_max_troops", 3),
+    )
+    set_tower_quest_enabled(settings.get("tower_quest_enabled", False))
+    for dev_id, count in settings.get("device_troops", {}).items():
+        try:
+            config.DEVICE_TOTAL_TROOPS[dev_id] = int(count)
+        except (ValueError, TypeError):
+            config.DEVICE_TOTAL_TROOPS[dev_id] = 5
+
+
+def initialize():
+    """One-time app startup: logging, settings, devices, OCR warmup.
+
+    Returns the loaded settings dict.
+    """
+    from botlog import setup_logging, get_logger
+    setup_logging()
+    config.log_adb_path()
+
+    log = get_logger("startup")
+
+    # Compatibility bridge: capture print() calls to legacy log file
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    _log_path = os.path.join(script_dir, "pacbot.log")
+    _log_file = open(_log_path, "w", encoding="utf-8")
+
+    class _Tee:
+        """Write to both the original stream and a log file."""
+        def __init__(self, stream, logf):
+            self._stream = stream
+            self._log = logf
+        def write(self, data):
+            self._stream.write(data)
+            try:
+                self._log.write(data)
+                self._log.flush()
+            except Exception:
+                pass
+        def flush(self):
+            self._stream.flush()
+            try:
+                self._log.flush()
+            except Exception:
+                pass
+
+    sys.stdout = _Tee(sys.stdout, _log_file)
+    sys.stderr = _Tee(sys.stderr, _log_file)
+
+    # License check (skipped for git clones / dev mode)
+    if not os.path.isdir(os.path.join(script_dir, ".git")):
+        from license import validate_license
+        validate_license()
+    else:
+        log.info("Git repo detected — skipping license check (developer mode).")
+
+    # Auto-update check
+    from updater import check_and_update
+    if check_and_update():
+        log.info("Update installed — restarting...")
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+    # Load and apply settings
+    settings = load_settings()
+    apply_settings(settings)
+
+    # Connect emulators
+    from devices import auto_connect_emulators
+    auto_connect_emulators()
+
+    # Pre-initialize OCR engine in background thread
+    from vision import warmup_ocr
+    threading.Thread(target=warmup_ocr, daemon=True).start()
+
+    log.info("PACbot initialized.")
+    return settings
+
+
+def shutdown():
+    """Graceful shutdown: stop tasks, save stats, disconnect ADB, flush logs."""
+    from botlog import get_logger
+
+    log = get_logger("startup")
+    log.info("Shutting down...")
+
+    # Stop all running tasks
+    try:
+        config.auto_occupy_running = False
+        config.MITHRIL_ENABLED = False
+        config.MITHRIL_DEPLOY_TIME.clear()
+        for key in list(running_tasks.keys()):
+            from runners import stop_task
+            stop_task(key)
+        config.DEVICE_STATUS.clear()
+        log.info("=== ALL TASKS STOPPED ===")
+    except Exception as e:
+        print(f"Failed to stop tasks: {e}")
+
+    # Stop relay tunnel if running
+    try:
+        from tunnel import stop_tunnel
+        stop_tunnel()
+    except Exception:
+        pass
+
+    # Save session stats
+    try:
+        from botlog import stats
+        stats.save()
+        log.info("Session stats saved")
+        summary = stats.summary()
+        if summary:
+            log.info("Session stats:\n%s", summary)
+    except Exception as e:
+        print(f"Failed to save stats: {e}")
+
+    # Flush all log handlers
+    try:
+        logging.shutdown()
+    except Exception:
+        pass
+
+    # Disconnect ADB devices
+    try:
+        from devices import get_devices
+        for d in get_devices():
+            try:
+                subprocess.run([config.adb_path, "disconnect", d],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               timeout=2)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def create_bug_report_zip():
+    """Create a bug report zip file in memory and return the bytes.
+
+    Returns ``(zip_bytes, filename)`` tuple.
+    """
+    import io
+    import zipfile
+    from datetime import datetime
+    from botlog import stats, SCRIPT_DIR, LOG_DIR, STATS_DIR, BOT_VERSION
+
+    buf = io.BytesIO()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"pacbot_bugreport_{timestamp}.zip"
+
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        # Logs (current + rotated backups)
+        for suffix in ["", ".1", ".2", ".3"]:
+            logfile = os.path.join(LOG_DIR, f"pacbot.log{suffix}")
+            if os.path.isfile(logfile):
+                zf.write(logfile, f"logs/pacbot.log{suffix}")
+
+        # Failure screenshots
+        failures_dir = os.path.join(SCRIPT_DIR, "debug", "failures")
+        if os.path.isdir(failures_dir):
+            for f in os.listdir(failures_dir):
+                if f.endswith(".png"):
+                    zf.write(os.path.join(failures_dir, f), f"debug/failures/{f}")
+
+        # Session stats
+        if os.path.isdir(STATS_DIR):
+            for f in os.listdir(STATS_DIR):
+                if f.endswith(".json"):
+                    zf.write(os.path.join(STATS_DIR, f), f"stats/{f}")
+
+        # Settings
+        settings_path = os.path.join(SCRIPT_DIR, "settings.json")
+        if os.path.isfile(settings_path):
+            zf.write(settings_path, "settings.json")
+
+        # System info report
+        try:
+            from devices import get_devices
+            device_list = get_devices()
+        except Exception:
+            device_list = ["(could not detect)"]
+
+        cpu_cores = os.cpu_count() or "unknown"
+        cpu_arch = platform.machine()
+        ram_gb = _get_ram_gb()
+
+        info_lines = [
+            "PACbot Bug Report",
+            f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            "",
+            "=== System ===",
+            f"Version: {BOT_VERSION}",
+            f"Python: {sys.version}",
+            f"OS: {platform.system()} {platform.release()} ({platform.version()})",
+            f"CPU: {cpu_arch}, {cpu_cores} cores",
+            f"RAM: {ram_gb}",
+            f"ADB: {config.adb_path}",
+            f"Devices: {', '.join(device_list) if device_list else '(none)'}",
+            "",
+            "=== Session Summary ===",
+            stats.summary(),
+        ]
+        zf.writestr("report_info.txt", "\n".join(info_lines))
+
+    buf.seek(0)
+    zip_bytes = buf.getvalue()
+
+    # Clean up debug files now that they're safely zipped
+    _clear_debug_files(SCRIPT_DIR)
+
+    return zip_bytes, filename
+
+
+def _clear_debug_files(script_dir):
+    """Remove debug screenshots and click trails after bug report export."""
+    for subdir in ["debug/failures", "debug/clicks", "debug"]:
+        dirpath = os.path.join(script_dir, subdir)
+        if not os.path.isdir(dirpath):
+            continue
+        for f in os.listdir(dirpath):
+            fpath = os.path.join(dirpath, f)
+            if os.path.isfile(fpath) and f.endswith(".png"):
+                try:
+                    os.remove(fpath)
+                except Exception:
+                    pass
+
+
+def _get_ram_gb():
+    """Get total system RAM in human-readable format. Cross-platform."""
+    try:
+        if platform.system() == "Windows":
+            import ctypes
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_ulong),
+                            ("dwMemoryLoad", ctypes.c_ulong),
+                            ("ullTotalPhys", ctypes.c_ulonglong),
+                            ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong),
+                            ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong),
+                            ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+            mem = MEMORYSTATUSEX()
+            mem.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(mem))
+            return f"{mem.ullTotalPhys / (1024**3):.1f} GB"
+        elif platform.system() == "Darwin":
+            result = subprocess.run(["sysctl", "-n", "hw.memsize"],
+                                    capture_output=True, text=True, timeout=5)
+            return f"{int(result.stdout.strip()) / (1024**3):.1f} GB"
+        else:
+            with open("/proc/meminfo") as f:
+                for line in f:
+                    if line.startswith("MemTotal:"):
+                        kb = int(line.split()[1])
+                        return f"{kb / (1024**2):.1f} GB"
+    except Exception:
+        pass
+    return "unknown"

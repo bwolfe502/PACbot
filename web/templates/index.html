@@ -3,6 +3,13 @@
 
 {% block content %}
 
+<!-- Phone Access -->
+<div class="phone-access" onclick="copyUrl(this)">
+    <span class="phone-icon">&#128241;</span>
+    <span>Phone access: <strong>http://{{ local_ip }}:8080</strong></span>
+    <span class="copy-hint">tap to copy</span>
+</div>
+
 <!-- Device Cards -->
 {% if not devices %}
 <div class="card">
@@ -112,13 +119,17 @@
         <button type="submit" class="bottom-btn">Refresh</button>
     </form>
     <button type="button" class="bottom-btn bottom-btn-danger" style="flex:1" id="restart-btn" onclick="confirmRestart()">Restart</button>
+    <a href="/api/bug-report" class="bottom-btn" style="flex:1;text-align:center;text-decoration:none">Bug Report</a>
 </div>
 
 {% endblock %}
 
 {% block scripts %}
 <script>
-function renderTroops(container, troops, age) {
+// Per-device troop data for client-side countdown between polls
+var _troopData = {};
+
+function renderTroops(container, troops, age, elapsed) {
     if (!troops || troops.length === 0) {
         container.innerHTML = '<span class="muted" style="font-size:11px">No troop data yet</span>';
         return;
@@ -128,14 +139,32 @@ function renderTroops(container, troops, age) {
         var isHome = t.action === 'Home';
         var cls = ACTION_CLASSES[t.action] || 'troop-deployed';
         var label = t.action;
-        if (!isHome && t.time_left != null) label += ' ' + fmtTime(t.time_left);
+        if (!isHome && t.time_left != null) {
+            var adjusted = Math.max(0, t.time_left - (elapsed || 0));
+            label += ' ' + fmtTime(adjusted);
+        }
         html += '<span class="troop-slot ' + cls + '">' + label + '</span>';
     });
     if (age != null) {
-        html += '<span class="troop-age">' + (age < 60 ? age + 's ago' : Math.floor(age/60) + 'm ago') + '</span>';
+        var displayAge = age + (elapsed || 0);
+        html += '<span class="troop-age">' + (displayAge < 60 ? displayAge + 's ago' : Math.floor(displayAge/60) + 'm ago') + '</span>';
     }
     container.innerHTML = html;
 }
+
+function tickTroopTimers() {
+    var now = Date.now();
+    Object.keys(_troopData).forEach(function(deviceId) {
+        var entry = _troopData[deviceId];
+        var elapsed = Math.floor((now - entry.lastPollTime) / 1000);
+        if (elapsed < 1) return;
+        var card = document.querySelector('.device-card[data-device="' + deviceId + '"]');
+        if (!card) return;
+        var troopEl = card.querySelector('.troop-slots');
+        if (troopEl) renderTroops(troopEl, entry.troops, entry.snapshotAge, elapsed);
+    });
+}
+setInterval(tickTroopTimers, 1000);
 
 function fmtNum(n) {
     if (n == null) return '?';
@@ -201,7 +230,14 @@ function refreshStatus() {
                     }
                 }
                 var troopEl = card.querySelector('.troop-slots');
-                if (troopEl) renderTroops(troopEl, dev.troops, dev.snapshot_age);
+                if (troopEl) {
+                    _troopData[dev.id] = {
+                        troops: dev.troops,
+                        snapshotAge: dev.snapshot_age,
+                        lastPollTime: Date.now()
+                    };
+                    renderTroops(troopEl, dev.troops, dev.snapshot_age, 0);
+                }
                 var questEl = card.querySelector('.quest-tracking');
                 if (questEl) renderQuests(questEl, dev.quests);
             });
@@ -265,6 +301,14 @@ function toggleAutoMode(modeKey) {
         method: 'POST',
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
         body: body
+    }).catch(function() {});
+}
+
+function copyUrl(el) {
+    var url = 'http://{{ local_ip }}:8080';
+    navigator.clipboard.writeText(url).then(function() {
+        var hint = el.querySelector('.copy-hint');
+        if (hint) { hint.textContent = 'copied!'; setTimeout(function() { hint.textContent = 'tap to copy'; }, 1500); }
     }).catch(function() {});
 }
 

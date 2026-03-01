@@ -26,10 +26,7 @@ from flask import Flask, render_template, request, redirect, url_for, jsonify
 # PACbot imports (same as main.py)
 # ---------------------------------------------------------------------------
 import config
-from config import (running_tasks, QuestType, RallyType, Screen,
-                     set_min_troops, set_auto_heal, set_auto_restore_ap,
-                     set_ap_restore_options, set_territory_config, set_eg_rally_own,
-                     set_titan_rally_own)
+from config import (running_tasks, QuestType, RallyType, Screen)
 from devices import get_devices, get_emulator_instances, auto_connect_emulators
 from navigation import check_screen
 from vision import (adb_tap, load_screenshot, find_image, tap_image,
@@ -173,36 +170,7 @@ def cleanup_dead_tasks():
 
 from settings import SETTINGS_FILE, DEFAULTS, load_settings as _load_settings, save_settings as _save_settings
 
-def _apply_settings(settings):
-    """Push settings values into config globals."""
-    set_auto_heal(settings.get("auto_heal", True))
-    set_auto_restore_ap(settings.get("auto_restore_ap", False))
-    set_ap_restore_options(
-        settings.get("ap_use_free", True),
-        settings.get("ap_use_potions", True),
-        settings.get("ap_allow_large_potions", True),
-        settings.get("ap_use_gems", False),
-        settings.get("ap_gem_limit", 0),
-    )
-    set_min_troops(settings.get("min_troops", 0))
-    set_eg_rally_own(settings.get("eg_rally_own", True))
-    set_titan_rally_own(settings.get("titan_rally_own", True))
-    set_territory_config(settings.get("my_team", "yellow"))
-    config.MITHRIL_INTERVAL = settings.get("mithril_interval", 19)
-    from botlog import set_console_verbose
-    set_console_verbose(settings.get("verbose_logging", False))
-    from config import set_gather_options, set_tower_quest_enabled
-    set_gather_options(
-        settings.get("gather_enabled", True),
-        settings.get("gather_mine_level", 4),
-        settings.get("gather_max_troops", 3),
-    )
-    set_tower_quest_enabled(settings.get("tower_quest_enabled", False))
-    for dev_id, count in settings.get("device_troops", {}).items():
-        try:
-            config.DEVICE_TOTAL_TROOPS[dev_id] = int(count)
-        except (ValueError, TypeError):
-            config.DEVICE_TOTAL_TROOPS[dev_id] = 5
+from startup import apply_settings as _apply_settings
 
 
 # ---------------------------------------------------------------------------
@@ -422,9 +390,7 @@ def create_app():
     def api_refresh_devices():
         auto_connect_emulators()
         _device_cache["ts"] = 0  # bust cache
-        devs = get_devices()
-        instances = get_emulator_instances()
-        return jsonify({"devices": [{"id": d, "name": instances.get(d, d)} for d in devs]})
+        return redirect(url_for("index"))
 
     @app.route("/tasks/start", methods=["POST"])
     def start_task():
@@ -563,6 +529,19 @@ def create_app():
         threading.Thread(target=_do_restart, daemon=True).start()
         return jsonify({"ok": True, "message": "Restarting..."})
 
+    @app.route("/api/bug-report")
+    def api_bug_report():
+        from startup import create_bug_report_zip
+        from flask import send_file
+        import io
+        zip_bytes, filename = create_bug_report_zip()
+        return send_file(
+            io.BytesIO(zip_bytes),
+            mimetype="application/zip",
+            as_attachment=True,
+            download_name=filename,
+        )
+
     @app.route("/api/logs")
     def api_logs():
         log_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
@@ -575,5 +554,26 @@ def create_app():
             except Exception:
                 pass
         return jsonify({"lines": [l.rstrip() for l in lines]})
+
+    # --- Territory grid manager ---
+
+    @app.route("/territory")
+    def territory_page():
+        return render_template("territory.html")
+
+    @app.route("/api/territory/grid")
+    def api_territory_grid():
+        return jsonify({
+            "attack": [list(s) for s in config.MANUAL_ATTACK_SQUARES],
+            "ignore": [list(s) for s in config.MANUAL_IGNORE_SQUARES],
+            "throne": [[11, 11], [11, 12], [12, 11], [12, 12]],
+        })
+
+    @app.route("/api/territory/grid", methods=["POST"])
+    def api_territory_grid_save():
+        data = request.get_json()
+        config.MANUAL_ATTACK_SQUARES = {tuple(s) for s in data.get("attack", [])}
+        config.MANUAL_IGNORE_SQUARES = {tuple(s) for s in data.get("ignore", [])}
+        return jsonify({"ok": True})
 
     return app

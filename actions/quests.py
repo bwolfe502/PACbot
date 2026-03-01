@@ -672,6 +672,14 @@ def check_quests(device, stop_check=None):
             if stop_check and stop_check():
                 return True
 
+        # Check if rally quests are covered by in-flight rallies but not yet done.
+        # Don't send troops to gather while rallies are pending — they may be needed
+        # if a pending rally fails.
+        has_pending_rallies = any(
+            cnt > 0 for (dev, qt), cnt in _quest_rallies_pending.items()
+            if dev == device and qt in (QuestType.TITAN, QuestType.EVIL_GUARD)
+        )
+
         if has_eg or has_titan:
             if _run_rally_loop(device, actionable, stop_check):
                 return True  # stop_check triggered
@@ -683,10 +691,25 @@ def check_quests(device, stop_check=None):
                 if stop_check and stop_check():
                     return True
                 attack(device)
-            # After PVP, deploy gather troops if also needed
-            if has_gather and not (stop_check and stop_check()):
+            # After PVP, deploy gather troops only if no rallies pending
+            if has_gather and not has_pending_rallies and not (stop_check and stop_check()):
                 if navigate(Screen.MAP, device):
                     gather_gold_loop(device, stop_check)
+            return True
+
+        elif has_pending_rallies:
+            # Rally quests are covered by in-flight rallies — wait for completion
+            # instead of deploying gather troops
+            pending_str = ", ".join(
+                f"{qt} ({cnt})" for (dev, qt), cnt in _quest_rallies_pending.items()
+                if dev == device and cnt > 0
+            )
+            if config.RALLY_PANEL_WAIT_ENABLED:
+                log.info("Rally quests pending: %s — watching troop panel", pending_str)
+                if navigate(Screen.MAP, device):
+                    _wait_for_rallies(device, stop_check)
+            else:
+                log.info("Waiting for pending rallies: %s", pending_str)
             return True
 
         elif has_gather:

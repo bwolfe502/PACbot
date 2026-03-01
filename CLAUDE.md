@@ -7,7 +7,9 @@ Runs on Windows with BlueStacks or MuMu Player emulators. GUI built with tkinter
 
 | File | Purpose | Key exports |
 |------|---------|-------------|
-| `main.py` | GUI entry point | Tkinter app, `create_gui()` |
+| `run_web.py` | Web-only entry point (primary) | `main` (pywebview + browser fallback) |
+| `startup.py` | Shared initialization & shutdown | `initialize`, `shutdown`, `apply_settings`, `create_bug_report_zip` |
+| `main.py` | Legacy GUI entry point (deprecated) | Tkinter app, `create_gui()` |
 | `runners.py` | Shared task runners | `run_auto_quest`, `run_auto_titan`, `run_repeat`, `run_once`, `launch_task`, `stop_task` |
 | `settings.py` | Settings persistence | `DEFAULTS`, `load_settings`, `save_settings`, `SETTINGS_FILE` |
 | `actions/` | Game actions package (7 submodules) | Re-exports all public functions via `__init__.py` |
@@ -30,7 +32,12 @@ Runs on Windows with BlueStacks or MuMu Player emulators. GUI built with tkinter
 ## Dependency Graph
 
 ```
-main.py (GUI)
+run_web.py (primary entry point)
+  ├─ startup (initialize, shutdown)
+  ├─ web/dashboard (create_app)
+  └─ tunnel (optional relay)
+
+main.py (legacy GUI — deprecated)
   ├─ config, settings, runners
   ├─ devices
   ├─ navigation ──┬─ vision ── config, botlog
@@ -114,7 +121,8 @@ All session-scoped, reset on restart:
 ## Architecture Patterns
 
 ### Threading & Task Launching (runners.py + main.py)
-- Main thread: Tkinter event loop (GUI)
+- `run_web.py` uses werkzeug `make_server` in a daemon thread, with pywebview blocking the main thread (or browser fallback with infinite sleep loop)
+- Legacy `main.py`: Main thread runs Tkinter event loop (GUI)
 - Worker threads: Daemon threads per action, launched on button click
 - `launch_task(device, task_name, target_func, stop_event, args)` — Spawns daemon thread (in `runners.py`)
 - `stop_task(task_key)` — Sets the stop event; `stop_all_tasks_matching(suffix)` for bulk stop (in `runners.py`)
@@ -226,6 +234,9 @@ due to terrain. Mountain passes are strategic locations not on the territory gri
 - 30-minute expiry, reset on auto-quest start
 - Per-device, session-scoped
 
+### Quest Dispatch (actions/quests.py)
+**Gather priority**: Gold gathering is blocked while titan/EG rallies are in-flight (pending). The bot waits for rally completion instead of deploying gather troops, preserving troop availability for potential rally retries.
+
 ### Titan Search Retry (actions/titans.py)
 `rally_titan` searches for the titan, which centers the map on it, then blind-taps (540, 900)
 to select it. If the titan walks off-center before the tap lands, the confirm popup never appears
@@ -254,20 +265,22 @@ Loaded on startup, saved on quit/restart. `DEFAULTS` dict provides fallback valu
 Shared by both `main.py` (GUI) and `web/dashboard.py` (Flask).
 
 ### Web Dashboard (web/dashboard.py)
-Mobile-friendly Flask app for remote control from any browser. Runs alongside tkinter GUI
-in a background thread — both share the same process (`config.running_tasks`, `DEVICE_STATUS`, etc.).
+Mobile-friendly Flask app for remote control from any browser. `run_web.py` is now the primary
+entry point — launches the Flask server in a daemon thread with pywebview providing a native
+window (falls back to opening in the system browser if pywebview is unavailable). A phone access
+banner displays the LAN URL for mobile remote control.
 
-**Enable**: `"web_dashboard": true` in `settings.json`, then access `http://<your-ip>:8080`.
+**Enable**: access `http://<your-ip>:8080` (started automatically by `run_web.py`).
 
 **Architecture**:
-- `create_app()` factory returns Flask app; started via `threading.Thread` in `main.py`
+- `create_app()` factory returns Flask app; started via werkzeug `make_server` in `run_web.py`
 - Imports shared task runners from `runners.py` and settings from `settings.py` — no duplication
 - `AUTO_RUNNERS` dict maps auto-mode keys → runner lambdas
 - `TASK_FUNCTIONS` dict maps one-shot action names → callable functions
 - Device list cached for 15s (`_DEVICE_CACHE_TTL`) to avoid spamming ADB on every poll
 - CSS cache busting: `style.css?v=19` in `base.html` — bump on every CSS change
 
-**Pages**: Dashboard (`/`), Settings (`/settings`), Debug (`/debug`), Logs (`/logs`)
+**Pages**: Dashboard (`/`), Settings (`/settings`), Debug (`/debug`), Logs (`/logs`), Territory Grid (`/territory`)
 
 **API endpoints**:
 - `GET /api/status` — device statuses, troop snapshots, quest tracking, active tasks (polled every 3s)
@@ -278,6 +291,9 @@ in a background thread — both share the same process (`config.running_tasks`, 
 - `POST /settings` — save settings form
 - `POST /api/restart` — save settings, stop all, `os.execv` restart
 - `GET /api/logs` — last 150 log lines as JSON
+- `POST /api/bug-report` — generate and download bug report ZIP
+- `GET /api/territory/grid` — territory grid state (colors, flags, adjacency)
+- `POST /api/territory/squares` — update manual attack/ignore squares
 
 **Dashboard UI components**:
 - **Device card**: status dot (pulsing green when active), status text (color-coded), troop slots, quest pills
@@ -386,7 +402,9 @@ PACbot/
 ├── CLAUDE.md            # AI technical reference (this file)
 ├── ROADMAP.md           # Development roadmap
 ├── TESTING.md           # Tester protocol (bug reporting + active testing guide)
-├── main.py              # GUI entry point (~1830 lines)
+├── run_web.py           # Primary entry point (web + pywebview)
+├── startup.py           # Shared initialization (used by run_web.py + main.py)
+├── main.py              # Legacy GUI entry point (deprecated)
 ├── runners.py           # Shared task runners (used by main.py + dashboard)
 ├── settings.py          # Settings persistence (used by main.py + dashboard)
 ├── actions/             # Game actions package
