@@ -49,7 +49,7 @@ if not exist ".venv\Scripts\python.exe" (
 )
 echo.
 echo Activating venv...
-call ".venv\Scripts\activate.bat"
+call ".venv\Scripts\activate.bat" >nul 2>&1
 
 REM Check if first-time setup (easyocr not installed yet)
 set FIRST_RUN=0

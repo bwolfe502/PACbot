@@ -76,11 +76,8 @@
 
 <!-- Device Cards -->
 {% if not devices %}
-<div class="card">
+<div class="card" style="text-align:center; padding:24px 16px">
     <p class="muted">No devices found. Start your emulator and refresh.</p>
-    <form method="post" action="/api/devices/refresh">
-        <button type="submit" class="btn">Refresh Devices</button>
-    </form>
 </div>
 {% endif %}
 
@@ -189,25 +186,30 @@
 {% endif %}
 
 {% if not (device_readonly is defined and device_readonly) %}
-<!-- Quick Actions -->
-<div class="section-header" style="margin-top:24px">Actions</div>
-<div class="action-grid">
-{% for name in oneshot_farm %}
-<form method="post" action="{% if device_filter %}/d/{{ device_hash }}/tasks/start?token={{ device_token }}{% else %}/tasks/start{% endif %}" class="device-form">
-    <input type="hidden" name="device" value="{% if devices %}{{ devices[0].id }}{% endif %}">
-    <input type="hidden" name="task_name" value="{{ name }}">
-    <input type="hidden" name="task_type" value="oneshot">
-    <button type="submit" class="action-chip">{{ name }}</button>
-</form>
-{% endfor %}
-{% for name in oneshot_war %}
-<form method="post" action="{% if device_filter %}/d/{{ device_hash }}/tasks/start?token={{ device_token }}{% else %}/tasks/start{% endif %}" class="device-form">
-    <input type="hidden" name="device" value="{% if devices %}{{ devices[0].id }}{% endif %}">
-    <input type="hidden" name="task_name" value="{{ name }}">
-    <input type="hidden" name="task_type" value="oneshot">
-    <button type="submit" class="action-chip action-chip-war">{{ name }}</button>
-</form>
-{% endfor %}
+<!-- Quick Actions (collapsible, starts minimized) -->
+<div class="actions-section">
+    <div class="actions-header" onclick="toggleActions(this)">
+        <span class="section-header" style="margin:0; border:none; padding:0; cursor:pointer">More Actions</span>
+        <span class="controls-arrow">&#9654;</span>
+    </div>
+    <div class="action-grid" style="display:none">
+    {% for name in oneshot_farm %}
+    <form method="post" action="{% if device_filter %}/d/{{ device_hash }}/tasks/start?token={{ device_token }}{% else %}/tasks/start{% endif %}" class="device-form">
+        <input type="hidden" name="device" value="{% if devices %}{{ devices[0].id }}{% endif %}">
+        <input type="hidden" name="task_name" value="{{ name }}">
+        <input type="hidden" name="task_type" value="oneshot">
+        <button type="submit" class="action-chip">{{ name }}</button>
+    </form>
+    {% endfor %}
+    {% for name in oneshot_war %}
+    <form method="post" action="{% if device_filter %}/d/{{ device_hash }}/tasks/start?token={{ device_token }}{% else %}/tasks/start{% endif %}" class="device-form">
+        <input type="hidden" name="device" value="{% if devices %}{{ devices[0].id }}{% endif %}">
+        <input type="hidden" name="task_name" value="{{ name }}">
+        <input type="hidden" name="task_type" value="oneshot">
+        <button type="submit" class="action-chip action-chip-war">{{ name }}</button>
+    </form>
+    {% endfor %}
+    </div>
 </div>
 {% endif %}
 
@@ -569,6 +571,15 @@ function toggleAutoMode(modeKey, deviceId) {
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
         body: body
     }).catch(function() {});
+}
+
+function toggleActions(header) {
+    var section = header.closest('.actions-section');
+    var grid = section.querySelector('.action-grid');
+    var arrow = header.querySelector('.controls-arrow');
+    var isOpen = grid.style.display !== 'none';
+    grid.style.display = isOpen ? 'none' : '';
+    arrow.innerHTML = isOpen ? '&#9654;' : '&#9660;';
 }
 
 function toggleControls(header) {
