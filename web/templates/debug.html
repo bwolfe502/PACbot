@@ -25,6 +25,7 @@
 
 <div class="section-header" style="margin-top:24px">Reports</div>
 <div class="action-grid">
+<button class="action-chip action-chip-debug" id="bug-report-btn" onclick="downloadBugReport()">Bug Report</button>
 <button class="action-chip action-chip-debug" id="upload-logs-btn" onclick="uploadLogs()">Upload Logs</button>
 </div>
 
@@ -81,6 +82,46 @@ function updateDeviceForms() {
 
 function takeScreenshot(device) {
     window.location.href = '/api/screenshot?device=' + encodeURIComponent(device) + '&download=1';
+}
+
+function downloadBugReport() {
+    var btn = document.getElementById('bug-report-btn');
+    btn.textContent = 'Generating...';
+    btn.disabled = true;
+    fetch('/api/bug-report', {method: 'POST'})
+        .then(function(r) {
+            if (!r.ok) throw new Error('Failed');
+            var filename = 'bug_report.zip';
+            var cd = r.headers.get('Content-Disposition');
+            if (cd) {
+                var m = cd.match(/filename="?([^"]+)"?/);
+                if (m) filename = m[1];
+            }
+            return r.blob().then(function(blob) { return {blob: blob, filename: filename}; });
+        })
+        .then(function(data) {
+            var a = document.createElement('a');
+            a.href = URL.createObjectURL(data.blob);
+            a.download = data.filename;
+            a.click();
+            URL.revokeObjectURL(a.href);
+            btn.textContent = 'Downloaded!';
+            btn.style.borderColor = '#4cff8e';
+            setTimeout(function() {
+                btn.textContent = 'Bug Report';
+                btn.disabled = false;
+                btn.style.borderColor = '';
+            }, 3000);
+        })
+        .catch(function() {
+            btn.textContent = 'Error';
+            btn.style.borderColor = '#ff6464';
+            btn.disabled = false;
+            setTimeout(function() {
+                btn.textContent = 'Bug Report';
+                btn.style.borderColor = '';
+            }, 3000);
+        });
 }
 
 function uploadLogs() {

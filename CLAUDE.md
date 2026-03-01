@@ -351,7 +351,7 @@ banner displays the LAN URL for mobile remote control.
 - Thread safety: `_task_start_lock` prevents TOCTOU race on `running_tasks` during concurrent task starts
 - Device ID validation: per-device settings routes (`/settings/device/<id>`) reject unknown device IDs
 
-**Pages**: Dashboard (`/`), Settings (`/settings`), Debug (`/debug`), Logs (`/logs`), Territory Grid (`/territory`), Device View (`/d/<dhash>?token=...`)
+**Pages**: Dashboard (`/`), Settings (`/settings`), Guide (`/guide`), Debug (`/debug`), Logs (`/logs`), Territory Grid (`/territory`), Device View (`/d/<dhash>?token=...`)
 
 **API endpoints**:
 - `GET /api/status` — device statuses, troop snapshots, quest tracking, quest age (seconds since last check), mithril timer, active tasks, tunnel status (polled every 3s)
@@ -399,7 +399,7 @@ banner displays the LAN URL for mobile remote control.
 - Broken Lands (`bl`): Combat (Pass Battle, Occupy Towers, Reinforce Throne) + Farming (Auto Quest, Rally Titans, Mine Mithril)
 - Home Server (`rw`): Events (Join Groot) + Farming (Rally Titans, Mine Mithril) + Combat (Reinforce Throne)
 
-**Templates**: `base.html` (nav, shared JS), `index.html` (dashboard + device view), `settings.html` (with per-device tabs), `debug.html` (debug actions), `logs.html`
+**Templates**: `base.html` (nav, shared JS), `index.html` (dashboard + device view), `settings.html` (with per-device tabs), `guide.html` (quick start guide), `debug.html` (debug actions), `logs.html`
 
 ### Relay Tunnel (tunnel.py + relay/)
 WebSocket relay for remote access — lets users control 9Bot from outside the LAN.
@@ -645,6 +645,7 @@ No fixtures require a running emulator — all use mocked ADB/vision.
 │       ├── base.html    # Nav, shared JS (fmtTime, quest labels, action classes)
 │       ├── index.html   # Dashboard: device cards, toggles, actions, running list
 │       ├── settings.html # Settings form
+│       ├── guide.html   # Quick Start Guide (setup instructions)
 │       ├── debug.html   # Debug actions (Check Screen, Check Troops, Diagnose Grid, Scan Corner Coords)
 │       └── logs.html    # Log viewer
 ├── relay/               # Relay server (deployed on droplet)
