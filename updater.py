@@ -12,7 +12,7 @@ import shutil
 # CONFIGURATION — set these after creating your GitHub repo
 # ============================================================
 GITHUB_USER = "bwolfe502"
-GITHUB_REPO = "PACbot"  # Change this if your repo name is different
+GITHUB_REPO = "9Bot"
 
 VERSION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "version.txt")
 
