@@ -1,4 +1,4 @@
-# PACbot
+# 9Bot
 
 Automated game bot for Android emulators on Windows.
 
@@ -11,7 +11,7 @@ Automated game bot for Android emulators on Windows.
 
 ## Emulator Setup
 
-Before PACbot will work, change these two settings in your emulator:
+Before 9Bot will work, change these two settings in your emulator:
 
 1. Open emulator **Settings** (gear icon)
 2. Go to **Advanced** or **Device**
@@ -20,12 +20,12 @@ Before PACbot will work, change these two settings in your emulator:
 5. Turn **ON** "Android Debug Bridge (ADB)"
 6. Click **Save** and restart the emulator if prompted
 
-> PACbot will not work without both of these settings.
+> 9Bot will not work without both of these settings.
 
 ## Installation
 
 1. Install Python 3.11+ (check **"Add python.exe to PATH"** and **"Install launcher (py.exe)"** during install)
-2. Unzip PACbot anywhere (e.g. Desktop)
+2. Unzip 9Bot anywhere (e.g. Desktop)
 3. Double-click **`run.bat`**
 
 First run automatically creates a virtual environment, installs dependencies, checks for updates, and prompts for your license key.
@@ -34,7 +34,7 @@ First run automatically creates a virtual environment, installs dependencies, ch
 
 1. Open your emulator and load the game
 2. Make sure the game is on the **map screen**
-3. Double-click `run.bat` to start PACbot
+3. Double-click `run.bat` to start 9Bot
 4. If no devices appear, click **Auto-Connect** then **Refresh**
 
 ## Features
@@ -65,7 +65,7 @@ For BL / Burning Expedition weeks.
 |---------|-------------|
 | **Auto Heal** | Automatically heal troops before actions. On by default. |
 | **Auto Restore AP** | Restore Action Points before PvE actions. Configure sources: Free, Potions, Large Potions, Gems (with limit). |
-| **Min Troops** | Minimum available troops before PACbot will deploy. |
+| **Min Troops** | Minimum available troops before 9Bot will deploy. |
 | **Randomize +/-** | Adds random variation to intervals (e.g. 30s ± 5 = 25-35s). |
 | **Territory Teams** | Set your team color and the enemy color to attack. |
 
@@ -87,11 +87,11 @@ Each task row has a **repeat checkbox** with an interval, or a **button** to run
 |--------|--------|
 | **STOP ALL** | Stops every running task on every device immediately |
 | **Restart** | Saves settings, stops tasks, checks for updates, relaunches |
-| **Quit** | Saves settings, stops tasks, closes PACbot |
+| **Quit** | Saves settings, stops tasks, closes 9Bot |
 
 ## Tips
 
-- Start your emulator and load the game **before** starting PACbot
+- Start your emulator and load the game **before** starting 9Bot
 - Make sure the game is on the **map screen** before starting auto tasks
 - Set **Min Troops** if you want to keep a reserve
 - For pass battles, place your **Personal "Enemy" marker** first
@@ -104,7 +104,7 @@ Each task row has a **repeat checkbox** with an interval, or a **button** to run
 Python is not installed correctly. Reinstall and make sure both "Add to PATH" and "Install launcher" are checked.
 
 **No devices found**
-Make sure your emulator is fully loaded before starting PACbot. Click Auto-Connect, then Refresh. Verify ADB is enabled in emulator settings.
+Make sure your emulator is fully loaded before starting 9Bot. Click Auto-Connect, then Refresh. Verify ADB is enabled in emulator settings.
 
 ## License
 

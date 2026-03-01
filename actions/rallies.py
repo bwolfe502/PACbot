@@ -179,12 +179,12 @@ def join_rally(rally_types, device, skip_heal=False, stop_check=None):
         rally_types = [rally_types]
     log.info(">>> join_rally starting (types: %s)", "/".join(rally_types))
 
-    if config.AUTO_HEAL_ENABLED and not skip_heal:
+    if config.get_device_config(device, "auto_heal") and not skip_heal:
         heal_all(device)
 
     troops = troops_avail(device)
-    if troops <= config.MIN_TROOPS_AVAILABLE:
-        log.warning("Not enough troops available (have %d, need more than %d)", troops, config.MIN_TROOPS_AVAILABLE)
+    if troops <= config.get_device_config(device, "min_troops"):
+        log.warning("Not enough troops available (have %d, need more than %d)", troops, config.get_device_config(device, "min_troops"))
         return False
 
     # Capture a tighter baseline right before entering the war screen.
@@ -279,16 +279,17 @@ def join_rally(rally_types, device, skip_heal=False, stop_check=None):
     def _ocr_rally_owner(screen, join_y):
         """OCR the rally owner name from a war screen rally card.
         The name appears as "{Name}'s Troop" in the upper-right portion of the card,
-        roughly 80-160px above the join/full button.
+        roughly 130-210px above the join/full button.
         Returns the owner name (without "'s Troop"), or a visual hash fallback
         like 'crop_a1b2c3d4' if OCR fails — never returns empty string."""
         h, w = screen.shape[:2]
         # The owner name is in the right section of the card, above the troop portraits.
         # join_y is the top-left Y of the join button template match.
-        y_start = max(0, join_y - 160)
-        y_end = max(0, join_y - 80)
+        # Calibrated via live testing (Feb 2026): 130-210px above join, x:230-800.
+        y_start = max(0, join_y - 210)
+        y_end = max(0, join_y - 130)
         x_start = 230
-        x_end = min(w, 650)
+        x_end = min(w, 800)
         if y_start >= y_end:
             return f"pos_{join_y}"
         owner_crop = screen[y_start:y_end, x_start:x_end]
@@ -300,9 +301,8 @@ def join_rally(rally_types, device, skip_heal=False, stop_check=None):
         cv2.imwrite(_crop_path, owner_crop)
 
         gray = cv2.cvtColor(owner_crop, cv2.COLOR_BGR2GRAY)
-        # Apply Otsu threshold to isolate text from game background
-        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        upscaled = cv2.resize(thresh, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+        # Grayscale upscale (better accuracy than Otsu threshold on game UI text)
+        upscaled = cv2.resize(gray, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
 
         # Also save the preprocessed image for debugging
         cv2.imwrite(os.path.join(_debug_dir, f"owner_thresh_y{join_y}.png"), upscaled)
@@ -317,8 +317,13 @@ def join_rally(rally_types, device, skip_heal=False, stop_check=None):
             log.warning("Rally owner OCR empty (join_y=%d, crop y:%d-%d x:%d-%d)",
                         join_y, y_start, y_end, x_start, x_end)
 
-        # Extract owner name from "{Name}'s Troop" pattern
-        match = re.match(r"(.+?)[''\u2019]s\s+[Tt]roop", raw)
+        # Extract owner name from "{Name}'s Troop" pattern.
+        # OCR can mangle the apostrophe in various ways:
+        #   "DNGs Troop"      — apostrophe dropped, s attached to name
+        #   "DRP's Troop"     — clean read
+        #   'Bchen" S Troop'  — smart quote artifact + uppercase S + space
+        # Pattern allows optional whitespace/quotes between name and s/S.
+        match = re.match(r"(.+?)[\s''\u2019\u201c\u201d\"]*[sS]\s+[Tt]roop", raw)
         if match:
             return match.group(1).strip()
         # Fallback: if OCR read something but didn't match pattern, return raw
@@ -630,6 +635,19 @@ def join_rally(rally_types, device, skip_heal=False, stop_check=None):
         log.debug("Scroll down attempt %d/5", attempt + 1)
         adb_swipe(device, 560, 948, 560, 245, 500)
         timed_wait(device, lambda: False, 1.5, "jr_scroll_down_settle")
+
+        # If no join buttons in the bottom quarter of the screen, we've
+        # scrolled past all rallies into the marches section — stop early
+        quick_screen = load_screenshot(device)
+        if quick_screen is not None:
+            join_locs = find_all_matches(quick_screen, "rally/join.png")
+            screen_h = quick_screen.shape[0]
+            bottom_quarter = screen_h * 3 // 4  # y=1440 on 1920px screen
+            has_bottom_joins = any(jy >= bottom_quarter for _, jy in join_locs)
+            if not has_bottom_joins:
+                log.info("No join buttons in bottom quarter (below y=%d) — past rally section, stopping scroll", bottom_quarter)
+                break
+
         result = check_for_joinable_rally()
         if result not in (False, "lost"):
             return result
@@ -649,12 +667,12 @@ def join_rally(rally_types, device, skip_heal=False, stop_check=None):
 def join_war_rallies(device):
     """Try to join castle, pass, or tower rallies - checks all 3 on the same screenshot"""
     log = get_logger("actions", device)
-    if config.AUTO_HEAL_ENABLED:
+    if config.get_device_config(device, "auto_heal"):
         heal_all(device)
 
     troops = troops_avail(device)
-    if troops <= config.MIN_TROOPS_AVAILABLE:
-        log.warning("Not enough troops available (have %d, need more than %d)", troops, config.MIN_TROOPS_AVAILABLE)
+    if troops <= config.get_device_config(device, "min_troops"):
+        log.warning("Not enough troops available (have %d, need more than %d)", troops, config.get_device_config(device, "min_troops"))
         return
 
     if not navigate(Screen.WAR, device):
@@ -804,6 +822,19 @@ def join_war_rallies(device):
             return
         adb_swipe(device, 560, 948, 560, 245, 500)
         time.sleep(1.5)  # Wait for scroll momentum to settle
+
+        # If no join buttons in the bottom quarter of the screen, we've
+        # scrolled past all rallies into the marches section — stop early
+        quick_screen = load_screenshot(device)
+        if quick_screen is not None:
+            join_locs = find_all_matches(quick_screen, "rally/join.png")
+            screen_h = quick_screen.shape[0]
+            bottom_quarter = screen_h * 3 // 4
+            has_bottom_joins = any(jy >= bottom_quarter for _, jy in join_locs)
+            if not has_bottom_joins:
+                log.info("No join buttons in bottom quarter (below y=%d) — past rally section, stopping scroll", bottom_quarter)
+                break
+
         if check_all_rallies_on_screen():
             return
 

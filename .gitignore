@@ -20,7 +20,7 @@ debug/
 # Logs and stats
 logs/
 stats/
-pacbot.log
+9bot.log
 
 # License key
 .license_key
@@ -30,6 +30,9 @@ settings.json
 
 # Reports (generated locally, sent directly to testers)
 reports/
+
+# Relay site (local dev only)
+relay/site/
 
 # IDE
 .claude/

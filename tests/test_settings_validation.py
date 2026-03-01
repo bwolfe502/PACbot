@@ -32,6 +32,9 @@ DEFAULTS = {
     "gather_mine_level": 4,
     "gather_max_troops": 3,
     "tower_quest_enabled": False,
+    "remote_access": True,
+    "auto_upload_logs": False,
+    "upload_interval_hours": 24,
 }
 
 
@@ -299,3 +302,86 @@ class TestRulesCompleteness:
     def test_every_rule_has_default(self):
         for key in SETTINGS_RULES:
             assert key in DEFAULTS, f"SETTINGS_RULES key '{key}' missing from DEFAULTS"
+
+
+class TestDeviceSettingsValidation:
+    """Validate device_settings sub-dict inside settings."""
+
+    def test_valid_device_overrides_passthrough(self):
+        settings = dict(DEFAULTS)
+        settings["device_settings"] = {
+            "127.0.0.1:5555": {"auto_heal": False, "min_troops": 3}
+        }
+        cleaned, warnings = validate_settings(settings, DEFAULTS)
+        ds = cleaned.get("device_settings", {})
+        assert "127.0.0.1:5555" in ds
+        assert ds["127.0.0.1:5555"]["auto_heal"] is False
+        assert ds["127.0.0.1:5555"]["min_troops"] == 3
+        assert warnings == []
+
+    def test_non_overridable_key_dropped(self):
+        """Keys not in DEVICE_OVERRIDABLE_KEYS are stripped."""
+        settings = dict(DEFAULTS)
+        settings["device_settings"] = {
+            "127.0.0.1:5555": {"auto_heal": True, "verbose_logging": True}
+        }
+        cleaned, warnings = validate_settings(settings, DEFAULTS)
+        ds = cleaned.get("device_settings", {})
+        assert "verbose_logging" not in ds.get("127.0.0.1:5555", {})
+        assert any("verbose_logging" in w for w in warnings)
+
+    def test_invalid_type_dropped(self):
+        """Override with wrong type is stripped."""
+        settings = dict(DEFAULTS)
+        settings["device_settings"] = {
+            "127.0.0.1:5555": {"min_troops": "not_a_number"}
+        }
+        cleaned, warnings = validate_settings(settings, DEFAULTS)
+        ds = cleaned.get("device_settings", {})
+        assert "min_troops" not in ds.get("127.0.0.1:5555", {})
+        assert len(warnings) > 0
+
+    def test_invalid_range_dropped(self):
+        """Integer override out of range is dropped."""
+        settings = dict(DEFAULTS)
+        settings["device_settings"] = {
+            "127.0.0.1:5555": {"min_troops": 99}
+        }
+        cleaned, warnings = validate_settings(settings, DEFAULTS)
+        ds = cleaned.get("device_settings", {})
+        # Out-of-range value should be dropped (not clamped) with a warning
+        assert "min_troops" not in ds.get("127.0.0.1:5555", {})
+        assert any("out of range" in w for w in warnings)
+
+    def test_empty_overrides_cleaned(self):
+        """Device with no valid overrides gets cleaned up."""
+        settings = dict(DEFAULTS)
+        settings["device_settings"] = {
+            "127.0.0.1:5555": {"verbose_logging": True}
+        }
+        cleaned, warnings = validate_settings(settings, DEFAULTS)
+        ds = cleaned.get("device_settings", {})
+        # Empty dict may or may not be removed, but invalid key should be gone
+        if "127.0.0.1:5555" in ds:
+            assert "verbose_logging" not in ds["127.0.0.1:5555"]
+
+    def test_my_team_override_valid_choice(self):
+        """Valid my_team choice passes through."""
+        settings = dict(DEFAULTS)
+        settings["device_settings"] = {
+            "127.0.0.1:5555": {"my_team": "blue"}
+        }
+        cleaned, warnings = validate_settings(settings, DEFAULTS)
+        ds = cleaned.get("device_settings", {})
+        assert ds["127.0.0.1:5555"]["my_team"] == "blue"
+        assert warnings == []
+
+    def test_my_team_override_invalid_choice(self):
+        """Invalid my_team choice is dropped."""
+        settings = dict(DEFAULTS)
+        settings["device_settings"] = {
+            "127.0.0.1:5555": {"my_team": "purple"}
+        }
+        cleaned, warnings = validate_settings(settings, DEFAULTS)
+        ds = cleaned.get("device_settings", {})
+        assert ds.get("127.0.0.1:5555", {}).get("my_team") != "purple"

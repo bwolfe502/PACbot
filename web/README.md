@@ -1,19 +1,19 @@
-# PACbot Web Dashboard — Control from Your Phone
+# 9Bot Web Dashboard — Control from Your Phone
 
-Control PACbot from your iPhone (or any phone/tablet) using a web browser instead of TeamViewer.
+Control 9Bot from your iPhone (or any phone/tablet) using a web browser instead of TeamViewer.
 
 ## How It Works
 
-PACbot runs a small web server on your PC. You open that address in Safari on your phone, and you get a mobile-friendly dashboard with the same controls as the desktop GUI.
+9Bot runs a small web server on your PC. You open that address in Safari on your phone, and you get a mobile-friendly dashboard with the same controls as the desktop GUI.
 
 ## Setup (5 minutes)
 
 ### Step 1: Enable the Web Dashboard
 
-In PACbot's desktop GUI, find the **Settings** section and check the **"Web"** checkbox.
+In 9Bot's desktop GUI, find the **Settings** section and check the **"Web"** checkbox.
 
-- If Flask is not installed, PACbot will ask to install it (click **Yes** — it's a one-time ~10 MB download)
-- **Restart PACbot** after enabling
+- If Flask is not installed, 9Bot will ask to install it (click **Yes** — it's a one-time ~10 MB download)
+- **Restart 9Bot** after enabling
 
 ### Step 2: Find Your PC's IP Address
 
@@ -37,7 +37,7 @@ You need your PC's local IP address (something like `192.168.1.42`).
 2. Open **Safari** (iPhone) or **Chrome** (Android)
 3. Type in the address bar: `http://YOUR_IP:5000`
    - Example: `http://192.168.1.42:5000`
-4. You should see the PACbot dashboard!
+4. You should see the 9Bot dashboard!
 
 ### Step 4: Add to Home Screen (Optional)
 
@@ -47,7 +47,7 @@ Make it feel like a real app:
 1. While the dashboard is open in Safari, tap the **Share** button (square with arrow)
 2. Scroll down and tap **"Add to Home Screen"**
 3. Tap **Add**
-4. Now you have a PACbot icon on your home screen!
+4. Now you have a 9Bot icon on your home screen!
 
 ## Accessing from Outside Your Home
 
@@ -91,20 +91,20 @@ If you want to access the dashboard via your home's public IP address:
 ## Troubleshooting
 
 ### "This site can't be reached"
-- Make sure PACbot is running on your PC
-- Make sure "Web" is checked in PACbot settings
+- Make sure 9Bot is running on your PC
+- Make sure "Web" is checked in 9Bot settings
 - Make sure you're using the correct IP address
 - Make sure your phone is on the same WiFi as your PC
 - Try `http://YOUR_IP:5000` (not https)
 
 ### "Flask not installed"
-- In PACbot, check the "Web" box — it will offer to install Flask automatically
+- In 9Bot, check the "Web" box — it will offer to install Flask automatically
 - Or manually: open Command Prompt and run `pip install flask`
 
 ### Dashboard loads but buttons don't work
 - Make sure your emulator is running (BlueStacks, MuMu, etc.)
 - Click "Refresh Devices" on the dashboard
-- Try restarting PACbot
+- Try restarting 9Bot
 
 ### Windows Firewall blocking access
 - Windows may block incoming connections on port 5000
@@ -119,4 +119,4 @@ If you want to access the dashboard via your home's public IP address:
 - **Home** — Shows connected devices, their current status, and running tasks
 - **Tasks** — Start and stop bot tasks (Auto Quest, Rally Titans, etc.)
 - **Settings** — Change all bot settings (same options as the desktop GUI)
-- **Logs** — View recent PACbot log output (auto-refreshes every 5 seconds)
+- **Logs** — View recent 9Bot log output (auto-refreshes every 5 seconds)

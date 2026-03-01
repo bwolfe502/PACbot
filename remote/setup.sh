@@ -1,10 +1,10 @@
 #!/bin/bash
-# PACbot Remote Environment — One-Time Setup
+# 9Bot Remote Environment — One-Time Setup
 # Run on a fresh Linux server: sudo bash setup.sh
 set -e
 
 echo "=============================="
-echo "  PACbot Remote Setup"
+echo "  9Bot Remote Setup"
 echo "=============================="
 echo ""
 
@@ -82,9 +82,9 @@ else
     echo "  ADB installed."
 fi
 
-# ── Create PACbot venv ──
+# ── Create 9Bot venv ──
 echo ""
-echo "Setting up PACbot Python environment..."
+echo "Setting up 9Bot Python environment..."
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$SCRIPT_DIR"
 

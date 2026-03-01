@@ -1,18 +1,20 @@
-opencv-python
-numpy
-Pillow
-psutil
-requests
+opencv-python==4.13.0.90
+numpy==2.4.2
+Pillow==12.1.0
+psutil==7.2.2
+requests==2.32.5
 # OCR backends (platform-specific):
 #   Windows: EasyOCR (neural network, ~500-2000ms/call, downloads models on first run)
 #   macOS:   Apple Vision via pyobjc (~30ms/call, no model download needed)
 # Both are wrapped by ocr_read() in vision.py — see comments there for details.
-customtkinter
-flask
-easyocr; sys_platform == "win32"
+customtkinter==5.2.2
+flask==3.1.3
+werkzeug==3.1.6
+easyocr==1.7.2; sys_platform == "win32"
 pyobjc-framework-Vision; sys_platform == "darwin"
-pywin32; sys_platform == "win32"
-websockets
+pywin32==311; sys_platform == "win32"
+websockets==16.0
+qrcode==8.2
 # pywebview is optional — provides native desktop window instead of browser tab.
 # Install manually: pip install pywebview
 # Falls back to opening browser if not installed.

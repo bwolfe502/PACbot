@@ -1,10 +1,14 @@
-"""PACbot startup & shutdown — shared initialization for all entry points.
+"""9Bot startup & shutdown — shared initialization for all entry points.
 
 Used by both ``run_web.py`` (web-only) and ``main.py`` (legacy tkinter GUI).
 """
 
 import os
 import sys
+import json
+import base64
+import hashlib
+import hmac
 import logging
 import platform
 import subprocess
@@ -16,6 +20,83 @@ from config import (running_tasks, set_min_troops, set_auto_heal,
                     set_territory_config, set_eg_rally_own, set_titan_rally_own,
                     set_gather_options, set_tower_quest_enabled)
 from settings import load_settings, save_settings
+
+# Relay server connection details (obfuscated, not plaintext in source)
+_RELAY_URL_B64 = "d3NzOi8vMTQ1My5saWZlL3dzL3R1bm5lbA=="
+_RELAY_SECRET_B64 = "MEpRR2l2bmJDMkNEUHlaS3dFVW5Qc1FrbGlWZ0phMXVZbmZ3MktOcHpYTQ=="
+
+
+def get_relay_config(settings):
+    """Compute relay configuration, auto-deriving from the license key.
+
+    Returns ``(relay_url, relay_secret, bot_name)`` when relay should be
+    active, or ``None`` when it should be disabled.
+    """
+    if not settings.get("remote_access", True):
+        return None
+
+    try:
+        from license import get_license_key
+        key = get_license_key()
+    except Exception:
+        key = None
+
+    if not key:
+        return None
+
+    bot_name = hashlib.sha256(key.encode()).hexdigest()[:10]
+    relay_url = base64.b64decode(_RELAY_URL_B64).decode()
+    relay_secret = base64.b64decode(_RELAY_SECRET_B64).decode()
+    return relay_url, relay_secret, bot_name
+
+
+def device_hash(device_id):
+    """Short URL-safe hash of a device ID (doesn't expose IP/port)."""
+    return hashlib.sha256(device_id.encode()).hexdigest()[:8]
+
+
+def _get_license_key():
+    try:
+        from license import get_license_key
+        return get_license_key()
+    except Exception:
+        return None
+
+
+def generate_device_token(device_id):
+    """Deterministic per-device token derived from the license key.
+
+    Returns a 16-char hex string, or ``None`` if no license key is available.
+    """
+    key = _get_license_key()
+    if not key:
+        return None
+    return hashlib.sha256(f"{key}:{device_id}".encode()).hexdigest()[:16]
+
+
+def generate_device_ro_token(device_id):
+    """Deterministic read-only token for a device.
+
+    Returns a 16-char hex string, or ``None`` if no license key is available.
+    """
+    key = _get_license_key()
+    if not key:
+        return None
+    return hashlib.sha256(f"{key}:ro:{device_id}".encode()).hexdigest()[:16]
+
+
+def validate_device_token(device_id, token):
+    """Validate a device token using constant-time comparison.
+
+    Returns ``"full"``, ``"readonly"``, or ``None`` (invalid).
+    """
+    full = generate_device_token(device_id)
+    if full and hmac.compare_digest(token, full):
+        return "full"
+    ro = generate_device_ro_token(device_id)
+    if ro and hmac.compare_digest(token, ro):
+        return "readonly"
+    return None
 
 
 def apply_settings(settings):
@@ -51,6 +132,11 @@ def apply_settings(settings):
         except (ValueError, TypeError):
             config.DEVICE_TOTAL_TROOPS[dev_id] = 5
 
+    # Per-device setting overrides
+    config.clear_device_overrides()
+    for dev_id, overrides in settings.get("device_settings", {}).items():
+        config.set_device_overrides(dev_id, overrides)
+
 
 def initialize():
     """One-time app startup: logging, settings, devices, OCR warmup.
@@ -65,7 +151,7 @@ def initialize():
 
     # Compatibility bridge: capture print() calls to legacy log file
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    _log_path = os.path.join(script_dir, "pacbot.log")
+    _log_path = os.path.join(script_dir, "9bot.log")
     _log_file = open(_log_path, "w", encoding="utf-8")
 
     class _Tee:
@@ -101,7 +187,10 @@ def initialize():
     from updater import check_and_update
     if check_and_update():
         log.info("Update installed — restarting...")
-        os.execv(sys.executable, [sys.executable] + sys.argv)
+        try:
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+        except OSError as e:
+            log.error("Failed to restart after update: %s", e)
 
     # Load and apply settings
     settings = load_settings()
@@ -115,7 +204,7 @@ def initialize():
     from vision import warmup_ocr
     threading.Thread(target=warmup_ocr, daemon=True).start()
 
-    log.info("PACbot initialized.")
+    log.info("9Bot initialized.")
     return settings
 
 
@@ -129,7 +218,7 @@ def shutdown():
     # Stop all running tasks
     try:
         config.auto_occupy_running = False
-        config.MITHRIL_ENABLED = False
+        config.MITHRIL_ENABLED_DEVICES.clear()
         config.MITHRIL_DEPLOY_TIME.clear()
         for key in list(running_tasks.keys()):
             from runners import stop_task
@@ -177,8 +266,13 @@ def shutdown():
         pass
 
 
-def create_bug_report_zip():
+def create_bug_report_zip(clear_debug=True, notes=None):
     """Create a bug report zip file in memory and return the bytes.
+
+    Args:
+        clear_debug: If True (default), remove debug screenshots after zipping.
+            Pass False for periodic auto-uploads to keep debug files intact.
+        notes: Optional user notes string to include as ``notes.txt`` in the zip.
 
     Returns ``(zip_bytes, filename)`` tuple.
     """
@@ -189,14 +283,14 @@ def create_bug_report_zip():
 
     buf = io.BytesIO()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"pacbot_bugreport_{timestamp}.zip"
+    filename = f"9bot_bugreport_{timestamp}.zip"
 
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         # Logs (current + rotated backups)
         for suffix in ["", ".1", ".2", ".3"]:
-            logfile = os.path.join(LOG_DIR, f"pacbot.log{suffix}")
+            logfile = os.path.join(LOG_DIR, f"9bot.log{suffix}")
             if os.path.isfile(logfile):
-                zf.write(logfile, f"logs/pacbot.log{suffix}")
+                zf.write(logfile, f"logs/9bot.log{suffix}")
 
         # Failure screenshots
         failures_dir = os.path.join(SCRIPT_DIR, "debug", "failures")
@@ -211,10 +305,22 @@ def create_bug_report_zip():
                 if f.endswith(".json"):
                     zf.write(os.path.join(STATS_DIR, f), f"stats/{f}")
 
-        # Settings
+        # Settings (redact secrets)
         settings_path = os.path.join(SCRIPT_DIR, "settings.json")
         if os.path.isfile(settings_path):
-            zf.write(settings_path, "settings.json")
+            try:
+                with open(settings_path, "r", encoding="utf-8") as sf:
+                    safe_settings = json.load(sf)
+                for key in ("relay_secret",):
+                    if key in safe_settings and safe_settings[key]:
+                        safe_settings[key] = "***REDACTED***"
+                zf.writestr("settings.json", json.dumps(safe_settings, indent=2))
+            except Exception:
+                zf.write(settings_path, "settings.json")
+
+        # User notes (if provided)
+        if notes and notes.strip():
+            zf.writestr("notes.txt", notes.strip())
 
         # System info report
         try:
@@ -228,7 +334,7 @@ def create_bug_report_zip():
         ram_gb = _get_ram_gb()
 
         info_lines = [
-            "PACbot Bug Report",
+            "9Bot Bug Report",
             f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
             "",
             "=== System ===",
@@ -248,8 +354,8 @@ def create_bug_report_zip():
     buf.seek(0)
     zip_bytes = buf.getvalue()
 
-    # Clean up debug files now that they're safely zipped
-    _clear_debug_files(SCRIPT_DIR)
+    if clear_debug:
+        _clear_debug_files(SCRIPT_DIR)
 
     return zip_bytes, filename
 
@@ -267,6 +373,116 @@ def _clear_debug_files(script_dir):
                     os.remove(fpath)
                 except Exception:
                     pass
+
+
+# ---------------------------------------------------------------------------
+# Bug report auto-upload
+# ---------------------------------------------------------------------------
+
+_upload_thread = None
+_upload_stop = threading.Event()
+_last_upload_time = None      # datetime or None
+_last_upload_error = None     # str or None
+_upload_interval_hours = 24
+
+
+def upload_bug_report(settings=None, notes=None):
+    """Upload a bug report ZIP to the relay server.
+
+    Args:
+        settings: Settings dict (loaded from file if None).
+        notes: Optional user notes to include in the zip.
+
+    Returns ``(success, message)`` tuple.
+    """
+    global _last_upload_time, _last_upload_error
+    if settings is None:
+        settings = load_settings()
+    relay_cfg = get_relay_config(settings)
+    if not relay_cfg:
+        return False, "Relay not configured (no license or remote access disabled)"
+
+    relay_url, relay_secret, bot_name = relay_cfg
+    host = relay_url.replace("wss://", "").replace("ws://", "").split("/")[0]
+    upload_url = f"https://{host}/_upload?bot={bot_name}"
+
+    zip_bytes, filename = create_bug_report_zip(clear_debug=False, notes=notes)
+
+    import requests as _req
+    try:
+        resp = _req.post(
+            upload_url,
+            files={"file": (filename, zip_bytes, "application/zip")},
+            headers={"Authorization": f"Bearer {relay_secret}"},
+            timeout=120,
+        )
+    except Exception as e:
+        _last_upload_error = str(e)
+        return False, f"Upload failed: {e}"
+
+    if resp.status_code == 200:
+        from datetime import datetime
+        _last_upload_time = datetime.now()
+        _last_upload_error = None
+        return True, "Upload successful"
+
+    _last_upload_error = f"HTTP {resp.status_code}"
+    return False, f"Upload failed: HTTP {resp.status_code}"
+
+
+def start_auto_upload(settings):
+    """Start periodic bug report upload in a background thread."""
+    global _upload_thread, _upload_interval_hours
+    if _upload_thread is not None and _upload_thread.is_alive():
+        return
+    _upload_stop.clear()
+    _upload_interval_hours = max(1, settings.get("upload_interval_hours", 24))
+
+    def _loop():
+        from botlog import get_logger
+        log = get_logger("auto_upload")
+        log.info("Auto-upload started (every %dh)", _upload_interval_hours)
+        while not _upload_stop.is_set():
+            _upload_stop.wait(_upload_interval_hours * 3600)
+            if _upload_stop.is_set():
+                break
+            try:
+                ok, msg = upload_bug_report(settings)
+                if ok:
+                    log.info("Auto-upload: %s", msg)
+                else:
+                    log.warning("Auto-upload: %s", msg)
+            except Exception as e:
+                log.warning("Auto-upload error: %s", e)
+        log.info("Auto-upload stopped")
+
+    _upload_thread = threading.Thread(target=_loop, daemon=True, name="auto-upload")
+    _upload_thread.start()
+
+
+def stop_auto_upload():
+    """Stop the periodic upload thread."""
+    global _upload_thread
+    _upload_stop.set()
+    if _upload_thread is not None:
+        _upload_thread.join(timeout=2)
+        _upload_thread = None
+
+
+def upload_status():
+    """Return dict describing auto-upload state."""
+    from datetime import datetime
+    enabled = (_upload_thread is not None and _upload_thread.is_alive())
+    result = {
+        "enabled": enabled,
+        "interval_hours": _upload_interval_hours,
+        "last_upload": _last_upload_time.isoformat() if _last_upload_time else None,
+        "error": _last_upload_error,
+    }
+    if enabled and _last_upload_time:
+        next_dt = _last_upload_time.timestamp() + _upload_interval_hours * 3600
+        result["next_upload_in_s"] = max(0, int(next_dt - datetime.now().timestamp()))
+    return result
 
 
 def _get_ram_gb():

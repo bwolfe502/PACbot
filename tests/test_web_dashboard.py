@@ -20,10 +20,11 @@ if "PIL.ImageTk" not in sys.modules:
 import config
 from web.dashboard import (
     create_app, launch_task, stop_task, stop_all, cleanup_dead_tasks,
-    sleep_interval, run_once, TASK_FUNCTIONS, AUTO_RUNNERS,
+    run_once, TASK_FUNCTIONS, AUTO_RUNNERS,
     _load_settings, _save_settings, _apply_settings,
     DEFAULTS, ensure_firewall_open,
 )
+from runners import sleep_interval
 
 
 @pytest.fixture
@@ -64,7 +65,7 @@ class TestIndexRoute:
     def test_index_returns_200(self, mock_instances, mock_devs, client):
         resp = client.get("/")
         assert resp.status_code == 200
-        assert b"PACbot" in resp.data
+        assert b"9Bot" in resp.data
 
     @patch("web.dashboard.get_devices", return_value=[])
     @patch("web.dashboard.get_emulator_instances", return_value={})
@@ -171,6 +172,38 @@ class TestApiStatus:
         finally:
             ev.set()
             t.join(timeout=1)
+
+
+class TestApiStatusTunnel:
+    """Tunnel status field in /api/status response."""
+
+    @patch("web.dashboard.get_devices", return_value=[])
+    @patch("web.dashboard.get_emulator_instances", return_value={})
+    @patch("web.dashboard.tunnel_status", return_value="connected")
+    def test_tunnel_connected(self, mock_ts, mock_inst, mock_devs, client):
+        data = json.loads(client.get("/api/status").data)
+        assert data["tunnel"] == "connected"
+
+    @patch("web.dashboard.get_devices", return_value=[])
+    @patch("web.dashboard.get_emulator_instances", return_value={})
+    @patch("web.dashboard.tunnel_status", return_value="connecting")
+    def test_tunnel_connecting(self, mock_ts, mock_inst, mock_devs, client):
+        data = json.loads(client.get("/api/status").data)
+        assert data["tunnel"] == "connecting"
+
+    @patch("web.dashboard.get_devices", return_value=[])
+    @patch("web.dashboard.get_emulator_instances", return_value={})
+    @patch("web.dashboard.tunnel_status", return_value="disconnected")
+    def test_tunnel_disconnected(self, mock_ts, mock_inst, mock_devs, client):
+        data = json.loads(client.get("/api/status").data)
+        assert data["tunnel"] == "disconnected"
+
+    @patch("web.dashboard.get_devices", return_value=[])
+    @patch("web.dashboard.get_emulator_instances", return_value={})
+    @patch("web.dashboard.tunnel_status", return_value="disabled")
+    def test_tunnel_disabled(self, mock_ts, mock_inst, mock_devs, client):
+        data = json.loads(client.get("/api/status").data)
+        assert data["tunnel"] == "disabled"
 
 
 class TestApiLogs:
@@ -389,7 +422,7 @@ class TestEnsureFirewallOpen:
     @patch("web.dashboard.sys")
     def test_rule_already_exists(self, mock_sys):
         mock_sys.platform = "win32"
-        rule_name = "PACbot Web Dashboard (TCP 8080)"
+        rule_name = "9Bot Web Dashboard (TCP 8080)"
         mock_result = MagicMock(returncode=0, stdout=f"Rule Name: {rule_name}\n")
         with patch("subprocess.run", return_value=mock_result) as mock_run:
             assert ensure_firewall_open(8080) is True
@@ -518,8 +551,8 @@ class TestTerritoryGridApi:
 class TestBugReportApi:
     @patch("startup.create_bug_report_zip")
     def test_bug_report_returns_zip(self, mock_zip, client):
-        mock_zip.return_value = (b"PK\x03\x04fake_zip_data", "pacbot_bugreport_test.zip")
-        resp = client.get("/api/bug-report")
+        mock_zip.return_value = (b"PK\x03\x04fake_zip_data", "9bot_bugreport_test.zip")
+        resp = client.post("/api/bug-report")
         assert resp.status_code == 200
         assert resp.content_type == "application/zip"
         assert b"PK" in resp.data  # zip magic bytes
@@ -578,7 +611,7 @@ class TestCreateBugReportZip:
         import io
         from startup import create_bug_report_zip
         zip_bytes, filename = create_bug_report_zip()
-        assert filename.startswith("pacbot_bugreport_")
+        assert filename.startswith("9bot_bugreport_")
         assert filename.endswith(".zip")
         # Verify it's a valid zip
         buf = io.BytesIO(zip_bytes)
@@ -595,9 +628,176 @@ class TestCreateBugReportZip:
         buf = io.BytesIO(zip_bytes)
         with zipfile.ZipFile(buf, "r") as zf:
             info = zf.read("report_info.txt").decode("utf-8")
-            assert "PACbot Bug Report" in info
+            assert "9Bot Bug Report" in info
             assert "Python:" in info
             assert "OS:" in info
+
+
+class TestCreateBugReportZipClearDebug:
+    """Test clear_debug parameter on create_bug_report_zip."""
+
+    @patch("devices.get_devices", return_value=[])
+    @patch("startup._clear_debug_files")
+    def test_clear_debug_true_calls_cleanup(self, mock_clear, mock_devs):
+        from startup import create_bug_report_zip
+        create_bug_report_zip(clear_debug=True)
+        mock_clear.assert_called_once()
+
+    @patch("devices.get_devices", return_value=[])
+    @patch("startup._clear_debug_files")
+    def test_clear_debug_false_skips_cleanup(self, mock_clear, mock_devs):
+        from startup import create_bug_report_zip
+        create_bug_report_zip(clear_debug=False)
+        mock_clear.assert_not_called()
+
+    @patch("devices.get_devices", return_value=[])
+    @patch("startup._clear_debug_files")
+    def test_clear_debug_default_is_true(self, mock_clear, mock_devs):
+        from startup import create_bug_report_zip
+        create_bug_report_zip()
+        mock_clear.assert_called_once()
+
+
+class TestUploadBugReport:
+    """Test upload_bug_report() in startup.py."""
+
+    @patch("startup.get_relay_config", return_value=None)
+    def test_no_relay_returns_failure(self, mock_cfg):
+        from startup import upload_bug_report
+        ok, msg = upload_bug_report(settings={})
+        assert ok is False
+        assert "not configured" in msg.lower()
+
+    @patch("startup.create_bug_report_zip",
+           return_value=(b"PK\x03\x04fake", "test.zip"))
+    @patch("startup.get_relay_config",
+           return_value=("wss://example.com/ws/tunnel", "secret123", "bot42"))
+    def test_successful_upload(self, mock_cfg, mock_zip):
+        import startup
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        with patch.object(startup, "upload_bug_report", wraps=startup.upload_bug_report):
+            with patch("requests.post", return_value=mock_resp) as mock_post:
+                ok, msg = startup.upload_bug_report(settings={})
+        assert ok is True
+        assert "successful" in msg.lower()
+        # Verify clear_debug=False was passed
+        mock_zip.assert_called_once_with(clear_debug=False, notes=None)
+        # Verify URL derived from relay URL
+        call_args = mock_post.call_args
+        assert "example.com/_upload" in call_args[0][0]
+
+    @patch("startup.create_bug_report_zip",
+           return_value=(b"PK\x03\x04fake", "test.zip"))
+    @patch("startup.get_relay_config",
+           return_value=("wss://example.com/ws/tunnel", "secret123", "bot42"))
+    def test_http_error_returns_failure(self, mock_cfg, mock_zip):
+        from startup import upload_bug_report
+        mock_resp = MagicMock()
+        mock_resp.status_code = 500
+        with patch("requests.post", return_value=mock_resp):
+            ok, msg = upload_bug_report(settings={})
+        assert ok is False
+        assert "500" in msg
+
+    @patch("startup.create_bug_report_zip",
+           return_value=(b"PK\x03\x04fake", "test.zip"))
+    @patch("startup.get_relay_config",
+           return_value=("wss://example.com/ws/tunnel", "secret123", "bot42"))
+    def test_network_error_returns_failure(self, mock_cfg, mock_zip):
+        from startup import upload_bug_report
+        with patch("requests.post", side_effect=ConnectionError("timeout")):
+            ok, msg = upload_bug_report(settings={})
+        assert ok is False
+        assert "timeout" in msg.lower()
+
+
+class TestUploadStatus:
+    def test_disabled_when_no_thread(self):
+        import startup
+        startup._upload_thread = None
+        result = startup.upload_status()
+        assert result["enabled"] is False
+
+    def test_shows_last_upload_time(self):
+        import startup
+        from datetime import datetime
+        startup._last_upload_time = datetime(2026, 3, 1, 12, 0, 0)
+        startup._last_upload_error = None
+        result = startup.upload_status()
+        assert result["last_upload"] is not None
+        assert result["error"] is None
+        startup._last_upload_time = None
+
+    def test_shows_error(self):
+        import startup
+        startup._last_upload_error = "Connection refused"
+        result = startup.upload_status()
+        assert result["error"] == "Connection refused"
+        startup._last_upload_error = None
+
+
+class TestAutoUploadThread:
+    def test_start_and_stop(self):
+        import startup
+        startup.start_auto_upload({"upload_interval_hours": 1})
+        assert startup._upload_thread is not None
+        assert startup._upload_thread.is_alive()
+        startup.stop_auto_upload()
+        assert startup._upload_thread is None
+
+    def test_stop_when_not_started(self):
+        import startup
+        startup._upload_thread = None
+        startup.stop_auto_upload()  # should not raise
+
+
+class TestUploadLogsApi:
+    """Test /api/upload-logs route."""
+
+    @patch("startup.upload_bug_report", return_value=(True, "Upload successful"))
+    def test_upload_success(self, mock_upload, client):
+        resp = client.post("/api/upload-logs")
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert data["ok"] is True
+        assert "successful" in data["message"].lower()
+
+    @patch("startup.upload_bug_report",
+           return_value=(False, "Relay not configured"))
+    def test_upload_failure(self, mock_upload, client):
+        resp = client.post("/api/upload-logs")
+        data = json.loads(resp.data)
+        assert data["ok"] is False
+
+
+class TestApiStatusUpload:
+    """Upload status field in /api/status response."""
+
+    @patch("web.dashboard.get_devices", return_value=[])
+    @patch("web.dashboard.get_emulator_instances", return_value={})
+    @patch("web.dashboard._upload_status", return_value={"enabled": True})
+    def test_upload_status_included(self, mock_us, mock_inst, mock_devs, client):
+        data = json.loads(client.get("/api/status").data)
+        assert "upload" in data
+        assert data["upload"]["enabled"] is True
+
+    @patch("web.dashboard.get_devices", return_value=[])
+    @patch("web.dashboard.get_emulator_instances", return_value={})
+    @patch("web.dashboard._upload_status", return_value={"enabled": False})
+    def test_upload_disabled(self, mock_us, mock_inst, mock_devs, client):
+        data = json.loads(client.get("/api/status").data)
+        assert data["upload"]["enabled"] is False
+
+
+class TestUploadSettings:
+    """Test that upload settings are parsed from form."""
+
+    def test_defaults_include_upload_keys(self):
+        assert "auto_upload_logs" in DEFAULTS
+        assert "upload_interval_hours" in DEFAULTS
+        assert DEFAULTS["auto_upload_logs"] is False
+        assert DEFAULTS["upload_interval_hours"] == 24
 
 
 class TestGetRamGb:
@@ -607,3 +807,126 @@ class TestGetRamGb:
         assert isinstance(result, str)
         # Should be either "X.X GB" or "unknown"
         assert "GB" in result or result == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Device-scoped route tests (Phase 1: per-device access control)
+# ---------------------------------------------------------------------------
+
+class TestDeviceScopedRoutes:
+    """Routes under /d/<dhash>/ require a valid device token."""
+
+    DEVICE = "127.0.0.1:9999"
+
+    @staticmethod
+    def _get_hash_and_token(device_id):
+        from startup import device_hash, generate_device_token
+        return device_hash(device_id), generate_device_token(device_id)
+
+    @patch("license.get_license_key", return_value="test-key-xyz")
+    @patch("web.dashboard.get_devices", return_value=["127.0.0.1:9999"])
+    @patch("web.dashboard.get_emulator_instances", return_value={"127.0.0.1:9999": "MuMu"})
+    def test_device_index_valid_token(self, _inst, _devs, _key, client):
+        dhash, token = self._get_hash_and_token(self.DEVICE)
+        resp = client.get(f"/d/{dhash}?token={token}")
+        assert resp.status_code == 200
+        assert b"MuMu" in resp.data
+
+    @patch("license.get_license_key", return_value="test-key-xyz")
+    @patch("web.dashboard.get_devices", return_value=["127.0.0.1:9999"])
+    @patch("web.dashboard.get_emulator_instances", return_value={"127.0.0.1:9999": "MuMu"})
+    def test_device_index_invalid_token(self, _inst, _devs, _key, client):
+        dhash, _ = self._get_hash_and_token(self.DEVICE)
+        resp = client.get(f"/d/{dhash}?token=0000000000000000")
+        assert resp.status_code == 403
+
+    @patch("license.get_license_key", return_value="test-key-xyz")
+    @patch("web.dashboard.get_devices", return_value=["127.0.0.1:9999"])
+    @patch("web.dashboard.get_emulator_instances", return_value={"127.0.0.1:9999": "MuMu"})
+    def test_device_index_missing_token(self, _inst, _devs, _key, client):
+        dhash, _ = self._get_hash_and_token(self.DEVICE)
+        resp = client.get(f"/d/{dhash}")
+        assert resp.status_code == 403
+
+    @patch("license.get_license_key", return_value="test-key-xyz")
+    @patch("web.dashboard.get_devices", return_value=["127.0.0.1:9999"])
+    @patch("web.dashboard.get_emulator_instances", return_value={"127.0.0.1:9999": "MuMu"})
+    def test_device_index_unknown_hash(self, _inst, _devs, _key, client):
+        resp = client.get("/d/deadbeef?token=0000000000000000")
+        assert resp.status_code == 404
+
+    @patch("license.get_license_key", return_value="test-key-xyz")
+    @patch("web.dashboard.get_devices", return_value=["127.0.0.1:9999"])
+    @patch("web.dashboard.get_emulator_instances", return_value={"127.0.0.1:9999": "MuMu"})
+    def test_device_index_hides_settings_nav(self, _inst, _devs, _key, client):
+        """Friend view should not show Settings or Restart."""
+        dhash, token = self._get_hash_and_token(self.DEVICE)
+        resp = client.get(f"/d/{dhash}?token={token}")
+        assert b"/settings" not in resp.data
+        assert b"Restart" not in resp.data
+
+    @patch("license.get_license_key", return_value="test-key-xyz")
+    @patch("web.dashboard.get_devices", return_value=["127.0.0.1:9999"])
+    @patch("web.dashboard.get_emulator_instances", return_value={"127.0.0.1:9999": "MuMu"})
+    def test_device_api_status_valid(self, _inst, _devs, _key, client):
+        dhash, token = self._get_hash_and_token(self.DEVICE)
+        resp = client.get(f"/d/{dhash}/api/status?token={token}")
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert "devices" in data
+        # Should only have the one scoped device
+        assert len(data["devices"]) == 1
+        assert data["devices"][0]["id"] == self.DEVICE
+
+    @patch("license.get_license_key", return_value="test-key-xyz")
+    @patch("web.dashboard.get_devices", return_value=["127.0.0.1:9999"])
+    @patch("web.dashboard.get_emulator_instances", return_value={"127.0.0.1:9999": "MuMu"})
+    def test_device_stop_all(self, _inst, _devs, _key, client):
+        dhash, token = self._get_hash_and_token(self.DEVICE)
+        resp = client.post(f"/d/{dhash}/tasks/stop-all?token={token}")
+        # Should redirect (302) after stopping
+        assert resp.status_code in (200, 302)
+
+    @patch("license.get_license_key", return_value="test-key-xyz")
+    @patch("web.dashboard.get_devices", return_value=["127.0.0.1:9999"])
+    @patch("web.dashboard.get_emulator_instances", return_value={"127.0.0.1:9999": "MuMu"})
+    def test_owner_index_has_share_button(self, _inst, _devs, _key, client):
+        """Owner view should show Share button on device cards."""
+        resp = client.get("/")
+        assert b"Share" in resp.data
+
+
+class TestDeviceSettingsRoutes:
+    """Device-specific settings pages."""
+
+    @patch("web.dashboard.get_devices", return_value=["127.0.0.1:9999"])
+    @patch("web.dashboard.get_emulator_instances", return_value={"127.0.0.1:9999": "MuMu"})
+    def test_device_settings_page_200(self, _inst, _devs, client):
+        resp = client.get("/settings/device/127.0.0.1:9999")
+        assert resp.status_code == 200
+        assert b"Override" in resp.data
+
+    @patch("web.dashboard.get_devices", return_value=["127.0.0.1:9999"])
+    @patch("web.dashboard.get_emulator_instances", return_value={"127.0.0.1:9999": "MuMu"})
+    def test_device_settings_save(self, _inst, _devs, client):
+        resp = client.post("/settings/device/127.0.0.1:9999", data={
+            "override_auto_heal": "on",
+            "auto_heal": "on",
+            "override_min_troops": "on",
+            "min_troops": "3",
+        })
+        assert resp.status_code == 302  # redirect back
+
+    @patch("web.dashboard.get_devices", return_value=["127.0.0.1:9999"])
+    @patch("web.dashboard.get_emulator_instances", return_value={"127.0.0.1:9999": "MuMu"})
+    def test_device_settings_reset(self, _inst, _devs, client):
+        resp = client.post("/settings/device/127.0.0.1:9999/reset")
+        assert resp.status_code == 302
+
+    @patch("web.dashboard.get_devices", return_value=["127.0.0.1:9999"])
+    @patch("web.dashboard.get_emulator_instances", return_value={"127.0.0.1:9999": "MuMu"})
+    def test_global_settings_has_device_tabs(self, _inst, _devs, client):
+        """Global settings page should show device tabs."""
+        resp = client.get("/settings")
+        assert resp.status_code == 200
+        assert b"settings-tab" in resp.data

@@ -20,7 +20,8 @@ from config import QuestType, Screen
 from botlog import get_logger, timed_action, stats
 from vision import (tap_image, wait_for_image_and_tap, timed_wait,
                     load_screenshot, find_image, get_template,
-                    logged_tap, save_failure_screenshot)
+                    logged_tap, save_failure_screenshot,
+                    tap_tower_until_attack_menu)
 from navigation import navigate, check_screen, DEBUG_DIR
 from troops import (troops_avail, heal_all, read_panel_statuses,
                     get_troop_status, TroopAction)
@@ -39,6 +40,7 @@ _quest_rallies_pending = {}   # e.g. {("127.0.0.1:5555", "titan"): 2}
 _quest_last_seen = {}         # e.g. {("127.0.0.1:5555", "titan"): 10}
 _quest_target = {}            # e.g. {("127.0.0.1:5555", "titan"): 20}
 _quest_pending_since = {}     # e.g. {("127.0.0.1:5555", "titan"): 1708123456.0}
+_quest_last_checked = {}      # {device: timestamp} — when check_quests last ran
 
 # Troop slot tracking — which troop slots are associated with pending rallies.
 # Set before depart, consumed by _record_rally_started.
@@ -49,6 +51,13 @@ PENDING_TIMEOUT_S = config.QUEST_PENDING_TIMEOUT
 # ---- Tower quest state ----
 # Tracks whether we have a troop defending a tower for quest purposes.
 _tower_quest_state = {}   # {device: {"deployed_at": float}}
+
+# ---- PVP quest state ----
+# Tracks when we last dispatched a PVP attack troop. The troop marches
+# several minutes to the enemy tower, attacks, and returns — we skip
+# PVP dispatch while the cooldown is active to avoid wasting troops.
+_pvp_last_dispatch = {}   # {device: timestamp}
+_PVP_COOLDOWN_S = 600     # 10 minutes
 
 
 def _track_quest_progress(device, quest_type, current, target=None):
@@ -149,6 +158,14 @@ def get_quest_tracking_state(device):
     return result
 
 
+def get_quest_last_checked(device):
+    """Return seconds since last check_quests run for device, or None."""
+    ts = _quest_last_checked.get(device)
+    if ts is None:
+        return None
+    return round(time.time() - ts)
+
+
 def reset_quest_tracking(device=None):
     """Clear rally tracking state. If device is given, clear only that device's state.
     If device is None, clear all state (backwards compatible)."""
@@ -160,6 +177,8 @@ def reset_quest_tracking(device=None):
         _quest_rally_slots.clear()
         _last_depart_slot.clear()
         _tower_quest_state.clear()
+        _pvp_last_dispatch.clear()
+        _quest_last_checked.clear()
     else:
         for d in list(_quest_rallies_pending):
             if d[0] == device:
@@ -178,6 +197,8 @@ def reset_quest_tracking(device=None):
                 del _quest_rally_slots[d]
         _last_depart_slot.pop(device, None)
         _tower_quest_state.pop(device, None)
+        _pvp_last_dispatch.pop(device, None)
+        _quest_last_checked.pop(device, None)
 
 
 # ---- Quest OCR helpers ----
@@ -229,11 +250,13 @@ def _ocr_quest_rows(device):
 
     # Parse quest entries matching "Quest Name(X/Y)" pattern.
     # OCR often reads '0' as 'o'/'O', so accept those in the digit positions.
+    # Allow spaces in numbers — EasyOCR splits large numbers (e.g. "100,000,000")
+    # across text blocks, producing "100,000, 000" or "0/ 100,000,000".
     quests = []
-    for match in re.finditer(r"(.+?)\(([oO\d][\doO,]*)/([oO\d][\doO,]*)\)", raw_text):
+    for match in re.finditer(r"(.+?)\(\s*([oO\d][\doO, ]*)/\s*([oO\d][\doO, ]*?)\s*\)", raw_text):
         name = match.group(1).strip()
-        raw_cur = match.group(2).replace(",", "")
-        raw_tgt = match.group(3).replace(",", "")
+        raw_cur = match.group(2).replace(",", "").replace(" ", "")
+        raw_tgt = match.group(3).replace(",", "").replace(" ", "")
         # Fix OCR o/O -> 0
         raw_cur = raw_cur.replace("o", "0").replace("O", "0")
         raw_tgt = raw_tgt.replace("o", "0").replace("O", "0")
@@ -249,6 +272,8 @@ def _ocr_quest_rows(device):
             target = 15
         elif quest_type == QuestType.EVIL_GUARD:
             target = 3
+        elif quest_type == QuestType.PVP:
+            target = 500000000
         elif quest_type == QuestType.GATHER:
             target = 1000000
 
@@ -281,7 +306,6 @@ def _check_quests_legacy(device, stop_check):
     from actions.rallies import join_rally
     from actions.titans import rally_titan
     from actions.evil_guard import rally_eg
-    from actions.combat import attack, target
     log = get_logger("actions", device)
     screen = load_screenshot(device)
     if screen is None:
@@ -329,14 +353,16 @@ def _check_quests_legacy(device, stop_check):
 
             if not joined:
                 if quest_img == "eg.png":
-                    if config.EG_RALLY_OWN_ENABLED:
-                        log.info("No rally to join, starting own EG rally")
-                        if navigate(Screen.MAP, device):
+                    if config.get_device_config(device, "eg_rally_own"):
+                        if navigate(Screen.MAP, device) and _eg_troops_available(device):
+                            log.info("No rally to join, starting own EG rally (2+ non-gathering/defending)")
                             rally_eg(device, stop_check=stop_check)
+                        else:
+                            log.info("EG rally needs 2 non-gathering/defending troops — not enough")
                     else:
                         log.info("No EG rally to join — own rally disabled, skipping")
                 else:
-                    if config.TITAN_RALLY_OWN_ENABLED:
+                    if config.get_device_config(device, "titan_rally_own"):
                         log.info("No rally to join, starting own Titan rally")
                         if navigate(Screen.MAP, device):
                             rally_titan(device)
@@ -344,11 +370,7 @@ def _check_quests_legacy(device, stop_check):
                         log.info("No Titan rally to join — own rally disabled, skipping")
             break
         elif quest_img == "pvp.png":
-            if navigate(Screen.MAP, device):
-                target(device)
-                if stop_check and stop_check():
-                    return
-                attack(device)
+            _attack_pvp_tower(device, stop_check)
             break
 
 
@@ -413,13 +435,34 @@ def _all_quests_visually_complete(device, quests):
             continue
         if qt in (QuestType.TOWER, QuestType.FORTRESS):
             # Tower is OK as long as a troop is defending
-            if _is_troop_defending(device):
+            if device in _tower_quest_state or _is_troop_defending_relaxed(device):
+                continue
+            return False
+        if qt == QuestType.PVP:
+            # PVP is OK if a troop was recently dispatched (on cooldown)
+            last = _pvp_last_dispatch.get(device, 0)
+            if time.time() - last < _PVP_COOLDOWN_S:
                 continue
             return False
         # For all other quests, check visual counter
         if q["current"] < q["target"]:
             return False
     return True
+
+
+def _eg_troops_available(device):
+    """Check if enough troops are free for EG rally (priests + boss).
+
+    Needs 2 troops not gathering or defending. Troops that are rallying,
+    marching, returning, etc. are considered available since they'll free up.
+    Falls back to troops_avail() if no snapshot available.
+    """
+    snapshot = get_troop_status(device)
+    if snapshot is None:
+        return troops_avail(device) >= 2
+    tied_up = (len(snapshot.troops_by_action(TroopAction.GATHERING)) +
+               len(snapshot.troops_by_action(TroopAction.DEFENDING)))
+    return len(snapshot.troops) - tied_up >= 2
 
 
 def _run_rally_loop(device, actionable, stop_check=None):
@@ -444,7 +487,7 @@ def _run_rally_loop(device, actionable, stop_check=None):
     navigate(Screen.MAP, device)
 
     # Heal once before the rally loop
-    if config.AUTO_HEAL_ENABLED:
+    if config.get_device_config(device, "auto_heal"):
         log.debug("Healing before rally loop...")
         heal_all(device)
 
@@ -482,7 +525,7 @@ def _run_rally_loop(device, actionable, stop_check=None):
         # No rally to join — start own rally
         started = False
         if titan_needed > 0:
-            if config.TITAN_RALLY_OWN_ENABLED:
+            if config.get_device_config(device, "titan_rally_own"):
                 log.info("No rally to join, starting own Titan rally")
                 config.set_device_status(device, "Rallying Titan...")
                 if navigate(Screen.MAP, device):
@@ -494,13 +537,15 @@ def _run_rally_loop(device, actionable, stop_check=None):
             if stop_check and stop_check():
                 return True
         elif eg_needed > 0:
-            if config.EG_RALLY_OWN_ENABLED:
-                log.info("No rally to join, starting own EG rally")
-                config.set_device_status(device, "Rallying Evil Guard...")
-                if navigate(Screen.MAP, device):
+            if config.get_device_config(device, "eg_rally_own"):
+                if navigate(Screen.MAP, device) and _eg_troops_available(device):
+                    log.info("Starting own EG rally (2+ non-gathering/defending)")
+                    config.set_device_status(device, "Rallying Evil Guard...")
                     if rally_eg(device, stop_check=stop_check):
                         _record_rally_started(device, QuestType.EVIL_GUARD)
                         started = True
+                else:
+                    log.info("EG rally needs 2 non-gathering/defending troops — not enough")
             else:
                 log.info("No EG rally to join — own rally disabled, skipping")
             if stop_check and stop_check():
@@ -588,16 +633,65 @@ def _wait_for_rallies(device, stop_check):
             initial_count = current_count
 
 
+def _recall_stray_stationed(device, stop_check=None):
+    """Recall any troop stuck in STATIONING status from a failed EG rally.
+
+    Taps the stationing icon on the troop panel to center the map,
+    then taps the stationed marker and hits return. Must be on MAP screen.
+    """
+    log = get_logger("actions", device)
+    snapshot = get_troop_status(device)
+    if snapshot is None or not snapshot.any_doing(TroopAction.STATIONING):
+        return
+
+    log.info("Stray stationed troop detected — recalling home")
+    config.set_device_status(device, "Recalling Stationed Troop...")
+
+    # Tap the stationing icon on troop panel to center map on the troop
+    if not tap_image("statuses/stationing.png", device):
+        log.warning("Stationed recall: stationing icon not found on panel")
+        return
+    time.sleep(1.5)
+
+    if stop_check and stop_check():
+        return
+
+    # Tap the stationed marker on the map
+    if not wait_for_image_and_tap("stationed.png", device, timeout=3):
+        log.warning("Stationed recall: stationed.png not found on map")
+        save_failure_screenshot(device, "stationed_recall_no_marker")
+        return
+    time.sleep(1)
+
+    # Tap return button
+    if wait_for_image_and_tap("return.png", device, timeout=3):
+        log.info("Stray stationed troop recalled successfully")
+    else:
+        log.warning("Stationed recall: return button not found")
+        save_failure_screenshot(device, "stationed_recall_no_return")
+
+
 @timed_action("check_quests")
 def check_quests(device, stop_check=None):
     """Check alliance/side quests using OCR counter reading, with PNG fallback.
     Reads quest counters (e.g. 'Defeat Titans(0/5)') to determine what needs work.
-    Priority: Join EG > Join Titan > Start own Titan > Start own EG > PvP.
+    Priority: Tower > PVP attack > Join EG/Titan > Start own rally > Gather Gold.
     stop_check: optional callable that returns True if we should abort immediately.
     """
-    from actions.combat import attack, target
     from actions.farming import gather_gold_loop
     log = get_logger("actions", device)
+    if stop_check and stop_check():
+        return True
+
+    # Priority 1: recall any troop stuck defending with no active tower quest.
+    # This runs BEFORE quest OCR so a stray defender gets freed immediately.
+    if navigate(Screen.MAP, device):
+        if device not in _tower_quest_state:
+            snapshot = read_panel_statuses(device)
+            if snapshot is not None and snapshot.any_doing(TroopAction.DEFENDING):
+                log.info("Stray defending troop detected (no tower quest active) — recalling first")
+                recall_tower_troop(device, stop_check)
+        _recall_stray_stationed(device, stop_check)
     if stop_check and stop_check():
         return True
 
@@ -616,6 +710,7 @@ def check_quests(device, stop_check=None):
 
     # Try OCR-based quest detection
     quests = _ocr_quest_rows(device)
+    _quest_last_checked[device] = time.time()
 
     if quests is not None:
         original_count = len(quests)
@@ -630,13 +725,13 @@ def check_quests(device, stop_check=None):
 
         actionable = _get_actionable_quests(device, quests)
 
-        if not actionable:
-            # Recall tower troop if all tower quests are done
-            if config.TOWER_QUEST_ENABLED:
-                _run_tower_quest(device, quests, stop_check)
+        # Always check tower quest state — recall stranded defending troops
+        # even when tower quests are no longer on screen.
+        _run_tower_quest(device, quests, stop_check)
 
+        if not actionable:
             # Gold fallback: use visual OCR counters, not pending rally tracking
-            if config.GATHER_ENABLED and _all_quests_visually_complete(device, quests):
+            if config.get_device_config(device, "gather_enabled") and _all_quests_visually_complete(device, quests):
                 log.info("All quests visually complete — gathering gold as fallback")
                 if navigate(Screen.MAP, device):
                     gather_gold_loop(device, stop_check)
@@ -663,12 +758,11 @@ def check_quests(device, stop_check=None):
         has_eg = QuestType.EVIL_GUARD in types_active
         has_titan = QuestType.TITAN in types_active
         has_pvp = QuestType.PVP in types_active
-        has_gather = QuestType.GATHER in types_active and config.GATHER_ENABLED
-        has_tower = (QuestType.TOWER in types_active or QuestType.FORTRESS in types_active) and config.TOWER_QUEST_ENABLED
+        has_gather = QuestType.GATHER in types_active and config.get_device_config(device, "gather_enabled")
 
-        # Handle tower quest first (low cost: 1 troop, no AP, quick deploy)
-        if has_tower:
-            _run_tower_quest(device, quests, stop_check)
+        # PVP attack first — send 1 troop, then continue other quests while it marches
+        if has_pvp:
+            _attack_pvp_tower(device, stop_check)
             if stop_check and stop_check():
                 return True
 
@@ -683,18 +777,6 @@ def check_quests(device, stop_check=None):
         if has_eg or has_titan:
             if _run_rally_loop(device, actionable, stop_check):
                 return True  # stop_check triggered
-            return True
-
-        elif has_pvp:
-            if navigate(Screen.MAP, device):
-                target(device)
-                if stop_check and stop_check():
-                    return True
-                attack(device)
-            # After PVP, deploy gather troops only if no rallies pending
-            if has_gather and not has_pending_rallies and not (stop_check and stop_check()):
-                if navigate(Screen.MAP, device):
-                    gather_gold_loop(device, stop_check)
             return True
 
         elif has_pending_rallies:
@@ -713,6 +795,12 @@ def check_quests(device, stop_check=None):
             return True
 
         elif has_gather:
+            # Don't mine gold if PVP quest is available but not yet dispatched
+            if has_pvp:
+                last = _pvp_last_dispatch.get(device, 0)
+                if time.time() - last >= _PVP_COOLDOWN_S:
+                    log.info("PVP quest available but not dispatched — skipping gold")
+                    return True
             if navigate(Screen.MAP, device):
                 gather_gold_loop(device, stop_check)
             return True
@@ -723,6 +811,75 @@ def check_quests(device, stop_check=None):
         log.warning("OCR failed, falling back to PNG quest detection")
         _check_quests_legacy(device, stop_check)
         return True
+
+# ============================================================
+# PVP QUEST — attack an enemy tower
+# ============================================================
+
+@timed_action("pvp_attack")
+def _attack_pvp_tower(device, stop_check=None):
+    """Send 1 troop to attack an enemy tower for PVP quest.
+
+    Uses target() to navigate to enemy tower via Enemy tab target marker,
+    then taps the tower to open attack menu, and departs.
+    Records dispatch time; caller should respect _PVP_COOLDOWN_S.
+    Returns True if troop dispatched, False otherwise.
+    """
+    from actions.combat import target
+    log = get_logger("actions", device)
+
+    # Check cooldown
+    last = _pvp_last_dispatch.get(device, 0)
+    elapsed = time.time() - last
+    if elapsed < _PVP_COOLDOWN_S:
+        remaining = int(_PVP_COOLDOWN_S - elapsed)
+        log.info("PVP on cooldown (%ds remaining), skipping", remaining)
+        return False
+
+    # Navigate to enemy tower via target menu (Enemy tab + target_marker).
+    # target() navigates to MAP first, so troop check happens after that.
+    config.set_device_status(device, "Attacking PVP Tower...")
+    result = target(device)
+    if result is not True:
+        reason = "no marker" if result == "no_marker" else "target failed"
+        log.warning("PVP: target() returned %s (%s)", result, reason)
+        save_failure_screenshot(device, "pvp_target_fail")
+        return False
+
+    if stop_check and stop_check():
+        return False
+
+    # Check troop availability (now on MAP screen after target())
+    avail = troops_avail(device)
+    if avail < 1:
+        log.info("PVP: no troops available (%d), skipping", avail)
+        return False
+
+    # Tap the tower to open attack menu
+    if not tap_tower_until_attack_menu(device, timeout=10):
+        log.warning("PVP: attack menu did not open")
+        save_failure_screenshot(device, "pvp_attack_menu_fail")
+        return False
+
+    if stop_check and stop_check():
+        return False
+
+    # Wait for troop deployment panel to animate in after attack button tap
+    time.sleep(2)
+
+    # Depart — try PVP-specific template first, fall back to rally template.
+    # Both panels show "DEPART" but render slightly differently.
+    if not (wait_for_image_and_tap("depart_pvp.png", device, timeout=3) or
+            wait_for_image_and_tap("depart.png", device, timeout=3)):
+        log.warning("PVP: depart button not found")
+        save_failure_screenshot(device, "pvp_depart_fail")
+        return False
+
+    time.sleep(1)
+    _pvp_last_dispatch[device] = time.time()
+    log.info("PVP: troop dispatched to enemy tower")
+    return True
+
 
 # ============================================================
 # TOWER QUEST — occupy a tower for alliance quest
@@ -741,9 +898,26 @@ def _is_troop_defending(device):
     return snapshot.any_doing(TroopAction.DEFENDING)
 
 
+def _is_troop_defending_relaxed(device):
+    """Like _is_troop_defending but accepts snapshots up to 120s old.
+
+    Quest OCR takes 60+ seconds, so by the time _run_tower_quest runs the
+    snapshot from check_quests start is stale for the 30s window but still
+    valid — defending status doesn't change that quickly.
+    """
+    snapshot = get_troop_status(device)
+    if snapshot is not None and snapshot.age_seconds < 120:
+        return snapshot.any_doing(TroopAction.DEFENDING)
+    # Snapshot too old — try fresh panel read (needs MAP screen)
+    snapshot = read_panel_statuses(device)
+    if snapshot is None:
+        return False
+    return snapshot.any_doing(TroopAction.DEFENDING)
+
+
 def _navigate_to_tower(device):
-    """Navigate to the tower marked with the in-game target marker.
-    Uses the same target menu flow as target() but without heal.
+    """Navigate to the tower marked with the in-game friend marker.
+    Opens target menu, taps Friend tab, finds friend_marker.png, centers map.
     Returns True if map is now centered on the tower, False on failure."""
     log = get_logger("actions", device)
 
@@ -757,22 +931,22 @@ def _navigate_to_tower(device):
         return False
     time.sleep(1)
 
-    # Tap the Enemy tab (tower marker is stored here)
-    logged_tap(device, 740, 330, "tower_target_enemy_tab")
+    # Tap the Friend tab (tower marker is stored here)
+    logged_tap(device, 540, 330, "tower_target_friend_tab")
     time.sleep(1)
 
-    # Check that a target marker exists
+    # Check that a friend marker exists
     marker_found = False
     start_time = time.time()
     while time.time() - start_time < 3:
         screen = load_screenshot(device)
-        if screen is not None and find_image(screen, "target_marker.png", threshold=0.7):
+        if screen is not None and find_image(screen, "friend_marker.png", threshold=0.7):
             marker_found = True
             break
         time.sleep(0.5)
 
     if not marker_found:
-        log.warning("Tower nav: no target marker found — is the tower marked?")
+        log.warning("Tower nav: no friend marker found — is the tower marked?")
         return False
 
     # Tap the target to center map on the tower
@@ -845,13 +1019,53 @@ def occupy_tower(device, stop_check=None):
         return False
 
 
+def _recall_tap_sequence(device, log, stop_check=None):
+    """Execute the tower recall tap sequence.
+
+    Steps: tap tower → Detail (image match) → Recall → Confirm → close.
+    Returns True if we completed the sequence (caller must verify outcome).
+    """
+    # Tap the tower (centered on screen after defending icon tap)
+    logged_tap(device, 540, 900, "recall_tower_tap")
+    time.sleep(1.5)
+
+    if stop_check and stop_check():
+        return False
+
+    # Detail button — image match (lower-left quadrant)
+    if not wait_for_image_and_tap("detail_button.png", device, timeout=3):
+        log.warning("Tower recall: detail_button.png not found after tower tap")
+        save_failure_screenshot(device, "recall_tower_no_detail")
+        return False
+    time.sleep(1)
+
+    if stop_check and stop_check():
+        return False
+
+    # Recall troops button
+    logged_tap(device, 180, 330, "recall_troops_btn")
+    time.sleep(1)
+
+    # Red Confirm button
+    logged_tap(device, 315, 1080, "recall_confirm")
+    time.sleep(0.5)
+
+    # Close dialogs
+    tap_image("close_x.png", device)
+    time.sleep(0.5)
+    logged_tap(device, 540, 900, "recall_dismiss")
+    time.sleep(1)
+    return True
+
+
 @timed_action("recall_tower")
 def recall_tower_troop(device, stop_check=None):
     """Recall a troop defending a tower.
 
-    7-step sequence: tap defending icon -> tap tower -> Detail ->
-    Recall troops -> Confirm -> close X -> dismiss.
-    Returns True on success, False on failure.
+    Tries two approaches with verification:
+    1. Tap defending panel icon to center map, then blind-tap sequence.
+    2. Navigate to tower via friend marker, then blind-tap sequence.
+    Returns True only when verified (troop no longer defending).
     """
     log = get_logger("actions", device)
 
@@ -864,41 +1078,51 @@ def recall_tower_troop(device, stop_check=None):
 
     config.set_device_status(device, "Recalling Tower Troop...")
 
-    # Step 1: Tap the defending icon on troop panel to center tower
-    if not tap_image("statuses/defending.png", device):
-        log.warning("Tower recall: no defending icon found on troop panel")
-        return False
-    time.sleep(1.5)
+    # --- Approach 1: center via defending panel icon ---
+    for attempt in range(2):
+        if stop_check and stop_check():
+            return False
 
-    # Step 2: Tap the tower (now centered on screen)
-    logged_tap(device, 540, 900, "recall_tower_tap")
-    time.sleep(1)
+        if attempt > 0:
+            navigate(Screen.MAP, device)
 
-    # Step 3: Tap Detail
-    logged_tap(device, 360, 1430, "recall_detail")
-    time.sleep(1)
+        if not tap_image("statuses/defending.png", device):
+            log.warning("Tower recall: no defending icon on panel")
+            return False
+        time.sleep(2)  # wait for map centering animation
 
+        _recall_tap_sequence(device, log, stop_check)
+
+        # Verify: is the troop still defending?
+        if not navigate(Screen.MAP, device):
+            continue
+        snapshot = read_panel_statuses(device)
+        if snapshot is not None and not snapshot.any_doing(TroopAction.DEFENDING):
+            _tower_quest_state.pop(device, None)
+            log.info("Tower troop recalled successfully")
+            return True
+        log.warning("Tower recall: troop still defending after panel-icon attempt %d", attempt + 1)
+        save_failure_screenshot(device, f"recall_tower_still_defending_a{attempt + 1}")
+
+    # --- Approach 2: navigate to tower via friend marker ---
     if stop_check and stop_check():
         return False
+    log.info("Tower recall: trying friend marker navigation")
+    if _navigate_to_tower(device):
+        time.sleep(1)
+        _recall_tap_sequence(device, log, stop_check)
 
-    # Step 4: Tap Recall troops
-    logged_tap(device, 180, 330, "recall_troops_btn")
-    time.sleep(1)
+        if navigate(Screen.MAP, device):
+            snapshot = read_panel_statuses(device)
+            if snapshot is not None and not snapshot.any_doing(TroopAction.DEFENDING):
+                _tower_quest_state.pop(device, None)
+                log.info("Tower troop recalled via friend marker")
+                return True
+            log.warning("Tower recall: troop still defending after friend-marker attempt")
+            save_failure_screenshot(device, "recall_tower_still_defending_friend")
 
-    # Step 5: Tap red Confirm
-    logged_tap(device, 315, 1080, "recall_confirm")
-    time.sleep(0.5)
-
-    # Step 6: Tap close X
-    tap_image("close_x.png", device)
-    time.sleep(0.5)
-
-    # Step 7: Tap to dismiss remaining menu
-    logged_tap(device, 540, 900, "recall_dismiss")
-
-    _tower_quest_state.pop(device, None)
-    log.info("Tower troop recalled")
-    return True
+    log.error("Tower recall FAILED — troop still defending after all attempts")
+    return False
 
 
 def _run_tower_quest(device, quests, stop_check=None):
@@ -913,6 +1137,11 @@ def _run_tower_quest(device, quests, stop_check=None):
     tower_quests = [q for q in quests
                     if q["quest_type"] in (QuestType.TOWER, QuestType.FORTRESS)]
     if not tower_quests:
+        # No tower quests on screen — but troop may still be defending from a
+        # previous quest. Recall it so it's not stuck indefinitely.
+        if device in _tower_quest_state or _is_troop_defending_relaxed(device):
+            log.info("No tower quests but troop still defending — recalling")
+            recall_tower_troop(device, stop_check)
         return
 
     active = [q for q in tower_quests if not q["completed"]]
@@ -920,15 +1149,14 @@ def _run_tower_quest(device, quests, stop_check=None):
 
     if all_done:
         # All tower quests completed — recall troop if defending
-        if _is_troop_defending(device):
+        if device in _tower_quest_state or _is_troop_defending_relaxed(device):
             log.info("Tower quests complete — recalling troop")
             recall_tower_troop(device, stop_check)
         return
 
     # Tower quest is active — check if already defending.
     # _tower_quest_state is set on successful deploy (reliable within session).
-    # _is_troop_defending reads the troop panel (requires MAP screen, may fail here).
-    if device in _tower_quest_state or _is_troop_defending(device):
+    if device in _tower_quest_state or _is_troop_defending_relaxed(device):
         log.info("Tower quest active, troop already defending — skipping")
         config.set_device_status(device, "Tower Quest: Defending...")
         return

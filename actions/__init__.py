@@ -1,4 +1,4 @@
-"""PACbot game actions package.
+"""9Bot game actions package.
 
 Re-exports all public action functions so that ``from actions import X``
 continues to work throughout the codebase.
@@ -15,7 +15,7 @@ Submodules:
 
 # -- quests --
 from actions.quests import (
-    check_quests, get_quest_tracking_state, reset_quest_tracking,
+    check_quests, get_quest_tracking_state, get_quest_last_checked, reset_quest_tracking,
     occupy_tower, recall_tower_troop,
     # State + internals (used by tests)
     _classify_quest_text, _deduplicate_quests, _get_actionable_quests,
@@ -23,8 +23,10 @@ from actions.quests import (
     _track_quest_progress, _record_rally_started, _effective_remaining,
     _quest_rallies_pending, _quest_last_seen, _quest_target,
     _quest_pending_since, _quest_rally_slots, _tower_quest_state,
-    _is_troop_defending, _navigate_to_tower, _run_tower_quest,
+    _is_troop_defending, _is_troop_defending_relaxed,
+    _navigate_to_tower, _run_tower_quest,
     _wait_for_rallies, _ocr_quest_rows, _claim_quest_rewards,
+    _eg_troops_available, _recall_stray_stationed,
     PENDING_TIMEOUT_S,
 )
 

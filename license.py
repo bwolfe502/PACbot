@@ -1,5 +1,5 @@
 """
-PACbot License Validation
+9Bot License Validation
 Validates license keys against a published Google Sheet (CSV).
 Keys are bound to the machine hardware so they can't be shared.
 """
@@ -105,6 +105,11 @@ def _compute_key_mac(key):
     ).hexdigest()
 
 
+def get_license_key():
+    """Return the saved license key, or None if not activated."""
+    return _load_saved_key()
+
+
 # ============================================================
 # REMOTE VALIDATION
 # ============================================================
@@ -195,7 +200,7 @@ def validate_license():
     # No saved key (or it was invalid) — prompt the user
     print()
     print("=" * 40)
-    print("  PACbot License Required")
+    print("  9Bot License Required")
     print("=" * 40)
     print()
     print("Don't have a key? Message Nine on Discord.")

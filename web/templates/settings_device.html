@@ -1,0 +1,408 @@
+{% extends "base.html" %}
+{% block title_suffix %} - {{ device_name }} Settings{% endblock %}
+
+{% block content %}
+<h1>{{ device_name }}</h1>
+
+<!-- Device Tabs -->
+<div class="settings-tabs">
+    <a href="/settings" class="settings-tab">Global</a>
+    {% for dev in all_devices %}
+    <a href="/settings/device/{{ dev.id }}"
+       class="settings-tab{% if dev.id == device_id %} active{% endif %}">{{ dev.name }}</a>
+    {% endfor %}
+</div>
+
+<p style="color:#667;font-size:12px;margin:8px 0 16px">
+    Toggle <strong style="color:#64d8ff">Override</strong> to set a device-specific value. Unset overrides use the global default.
+</p>
+
+<form method="post" action="/settings/device/{{ device_id }}">
+    <!-- General -->
+    <div class="card">
+        <h3>General</h3>
+        {% set val = overrides.get("auto_heal") %}
+        <div class="override-row">
+            <label class="override-toggle">
+                <input type="checkbox" name="override_auto_heal" class="override-cb"
+                       {% if val is not none %}checked{% endif %}
+                       onchange="toggleOverride(this)">
+                <span class="override-label">Override</span>
+            </label>
+            <label class="setting-row">
+                <input type="checkbox" name="auto_heal"
+                       {% if val is not none %}{% if val %}checked{% endif %}{% else %}disabled{% endif %}>
+                Auto Heal
+                {% if val is none %}<span class="global-hint">(global: {{ "on" if globals.auto_heal else "off" }})</span>{% endif %}
+            </label>
+        </div>
+    </div>
+
+    <!-- Auto Quest -->
+    <div class="card">
+        <h3>Auto Quest</h3>
+
+        {% set val = overrides.get("eg_rally_own") %}
+        <div class="override-row">
+            <label class="override-toggle">
+                <input type="checkbox" name="override_eg_rally_own" class="override-cb"
+                       {% if val is not none %}checked{% endif %}
+                       onchange="toggleOverride(this)">
+                <span class="override-label">Override</span>
+            </label>
+            <label class="setting-row">
+                <input type="checkbox" name="eg_rally_own"
+                       {% if val is not none %}{% if val %}checked{% endif %}{% else %}disabled{% endif %}>
+                Rally Own Evil Guard
+                {% if val is none %}<span class="global-hint">(global: {{ "on" if globals.eg_rally_own else "off" }})</span>{% endif %}
+            </label>
+        </div>
+
+        {% set val = overrides.get("titan_rally_own") %}
+        <div class="override-row">
+            <label class="override-toggle">
+                <input type="checkbox" name="override_titan_rally_own" class="override-cb"
+                       {% if val is not none %}checked{% endif %}
+                       onchange="toggleOverride(this)">
+                <span class="override-label">Override</span>
+            </label>
+            <label class="setting-row">
+                <input type="checkbox" name="titan_rally_own"
+                       {% if val is not none %}{% if val %}checked{% endif %}{% else %}disabled{% endif %}>
+                Rally Own Titans
+                {% if val is none %}<span class="global-hint">(global: {{ "on" if globals.titan_rally_own else "off" }})</span>{% endif %}
+            </label>
+        </div>
+
+        {% set val = overrides.get("gather_enabled") %}
+        <div class="override-row">
+            <label class="override-toggle">
+                <input type="checkbox" name="override_gather_enabled" class="override-cb"
+                       {% if val is not none %}checked{% endif %}
+                       onchange="toggleOverride(this)">
+                <span class="override-label">Override</span>
+            </label>
+            <label class="setting-row">
+                <input type="checkbox" name="gather_enabled"
+                       {% if val is not none %}{% if val %}checked{% endif %}{% else %}disabled{% endif %}>
+                Gather Gold
+                {% if val is none %}<span class="global-hint">(global: {{ "on" if globals.gather_enabled else "off" }})</span>{% endif %}
+            </label>
+        </div>
+
+        {% set val = overrides.get("gather_mine_level") %}
+        <div class="override-row">
+            <label class="override-toggle">
+                <input type="checkbox" name="override_gather_mine_level" class="override-cb"
+                       {% if val is not none %}checked{% endif %}
+                       onchange="toggleOverride(this)">
+                <span class="override-label">Override</span>
+            </label>
+            <div class="setting-row indent">
+                <label>Mine Level:
+                    <select name="gather_mine_level" class="select-sm"
+                            {% if val is none %}disabled{% endif %}>
+                        {% set cur = val if val is not none else globals.gather_mine_level %}
+                        {% for lv in [4, 5, 6] %}
+                        <option value="{{ lv }}" {% if cur == lv %}selected{% endif %}>{{ lv }}</option>
+                        {% endfor %}
+                    </select>
+                    {% if val is none %}<span class="global-hint">(global: {{ globals.gather_mine_level }})</span>{% endif %}
+                </label>
+            </div>
+        </div>
+
+        {% set val = overrides.get("gather_max_troops") %}
+        <div class="override-row">
+            <label class="override-toggle">
+                <input type="checkbox" name="override_gather_max_troops" class="override-cb"
+                       {% if val is not none %}checked{% endif %}
+                       onchange="toggleOverride(this)">
+                <span class="override-label">Override</span>
+            </label>
+            <div class="setting-row indent">
+                <label>Max Gather Troops:
+                    <select name="gather_max_troops" class="select-sm"
+                            {% if val is none %}disabled{% endif %}>
+                        {% set cur = val if val is not none else globals.gather_max_troops %}
+                        {% for n in [1, 2, 3, 4, 5] %}
+                        <option value="{{ n }}" {% if cur == n %}selected{% endif %}>{{ n }}</option>
+                        {% endfor %}
+                    </select>
+                    {% if val is none %}<span class="global-hint">(global: {{ globals.gather_max_troops }})</span>{% endif %}
+                </label>
+            </div>
+        </div>
+
+        {% set val = overrides.get("tower_quest_enabled") %}
+        <div class="override-row">
+            <label class="override-toggle">
+                <input type="checkbox" name="override_tower_quest_enabled" class="override-cb"
+                       {% if val is not none %}checked{% endif %}
+                       onchange="toggleOverride(this)">
+                <span class="override-label">Override</span>
+            </label>
+            <label class="setting-row">
+                <input type="checkbox" name="tower_quest_enabled"
+                       {% if val is not none %}{% if val %}checked{% endif %}{% else %}disabled{% endif %}>
+                Tower Quest
+                {% if val is none %}<span class="global-hint">(global: {{ "on" if globals.tower_quest_enabled else "off" }})</span>{% endif %}
+            </label>
+        </div>
+    </div>
+
+    <!-- AP Restoration -->
+    <div class="card">
+        <h3>AP Restoration</h3>
+
+        {% set val = overrides.get("auto_restore_ap") %}
+        <div class="override-row">
+            <label class="override-toggle">
+                <input type="checkbox" name="override_auto_restore_ap" class="override-cb"
+                       {% if val is not none %}checked{% endif %}
+                       onchange="toggleOverride(this)">
+                <span class="override-label">Override</span>
+            </label>
+            <label class="setting-row">
+                <input type="checkbox" name="auto_restore_ap"
+                       {% if val is not none %}{% if val %}checked{% endif %}{% else %}disabled{% endif %}>
+                Auto Restore AP
+                {% if val is none %}<span class="global-hint">(global: {{ "on" if globals.auto_restore_ap else "off" }})</span>{% endif %}
+            </label>
+        </div>
+
+        {% set val = overrides.get("ap_use_free") %}
+        <div class="override-row">
+            <label class="override-toggle">
+                <input type="checkbox" name="override_ap_use_free" class="override-cb"
+                       {% if val is not none %}checked{% endif %}
+                       onchange="toggleOverride(this)">
+                <span class="override-label">Override</span>
+            </label>
+            <label class="setting-row indent">
+                <input type="checkbox" name="ap_use_free"
+                       {% if val is not none %}{% if val %}checked{% endif %}{% else %}disabled{% endif %}>
+                Use Free Restores
+                {% if val is none %}<span class="global-hint">(global: {{ "on" if globals.ap_use_free else "off" }})</span>{% endif %}
+            </label>
+        </div>
+
+        {% set val = overrides.get("ap_use_potions") %}
+        <div class="override-row">
+            <label class="override-toggle">
+                <input type="checkbox" name="override_ap_use_potions" class="override-cb"
+                       {% if val is not none %}checked{% endif %}
+                       onchange="toggleOverride(this)">
+                <span class="override-label">Override</span>
+            </label>
+            <label class="setting-row indent">
+                <input type="checkbox" name="ap_use_potions"
+                       {% if val is not none %}{% if val %}checked{% endif %}{% else %}disabled{% endif %}>
+                Use Potions
+                {% if val is none %}<span class="global-hint">(global: {{ "on" if globals.ap_use_potions else "off" }})</span>{% endif %}
+            </label>
+        </div>
+
+        {% set val = overrides.get("ap_allow_large_potions") %}
+        <div class="override-row">
+            <label class="override-toggle">
+                <input type="checkbox" name="override_ap_allow_large_potions" class="override-cb"
+                       {% if val is not none %}checked{% endif %}
+                       onchange="toggleOverride(this)">
+                <span class="override-label">Override</span>
+            </label>
+            <label class="setting-row indent">
+                <input type="checkbox" name="ap_allow_large_potions"
+                       {% if val is not none %}{% if val %}checked{% endif %}{% else %}disabled{% endif %}>
+                Allow Large Potions
+                {% if val is none %}<span class="global-hint">(global: {{ "on" if globals.ap_allow_large_potions else "off" }})</span>{% endif %}
+            </label>
+        </div>
+
+        {% set val = overrides.get("ap_use_gems") %}
+        <div class="override-row">
+            <label class="override-toggle">
+                <input type="checkbox" name="override_ap_use_gems" class="override-cb"
+                       {% if val is not none %}checked{% endif %}
+                       onchange="toggleOverride(this)">
+                <span class="override-label">Override</span>
+            </label>
+            <label class="setting-row indent">
+                <input type="checkbox" name="ap_use_gems"
+                       {% if val is not none %}{% if val %}checked{% endif %}{% else %}disabled{% endif %}>
+                Use Gems
+                {% if val is none %}<span class="global-hint">(global: {{ "on" if globals.ap_use_gems else "off" }})</span>{% endif %}
+            </label>
+        </div>
+
+        {% set val = overrides.get("ap_gem_limit") %}
+        <div class="override-row">
+            <label class="override-toggle">
+                <input type="checkbox" name="override_ap_gem_limit" class="override-cb"
+                       {% if val is not none %}checked{% endif %}
+                       onchange="toggleOverride(this)">
+                <span class="override-label">Override</span>
+            </label>
+            <div class="setting-row indent">
+                <label>Gem Limit:
+                    <input type="number" name="ap_gem_limit"
+                           value="{{ val if val is not none else globals.ap_gem_limit }}"
+                           min="0" max="3500" class="input-sm"
+                           {% if val is none %}disabled{% endif %}>
+                    {% if val is none %}<span class="global-hint">(global: {{ globals.ap_gem_limit }})</span>{% endif %}
+                </label>
+            </div>
+        </div>
+    </div>
+
+    <!-- Troops & Timing -->
+    <div class="card">
+        <h3>Troops & Timing</h3>
+
+        {% set val = overrides.get("min_troops") %}
+        <div class="override-row">
+            <label class="override-toggle">
+                <input type="checkbox" name="override_min_troops" class="override-cb"
+                       {% if val is not none %}checked{% endif %}
+                       onchange="toggleOverride(this)">
+                <span class="override-label">Override</span>
+            </label>
+            <div class="setting-row">
+                <label>Min Troops:
+                    <input type="number" name="min_troops"
+                           value="{{ val if val is not none else globals.min_troops }}"
+                           min="0" max="5" class="input-sm"
+                           {% if val is none %}disabled{% endif %}>
+                    {% if val is none %}<span class="global-hint">(global: {{ globals.min_troops }})</span>{% endif %}
+                </label>
+            </div>
+        </div>
+
+        {% set val = overrides.get("mithril_interval") %}
+        <div class="override-row">
+            <label class="override-toggle">
+                <input type="checkbox" name="override_mithril_interval" class="override-cb"
+                       {% if val is not none %}checked{% endif %}
+                       onchange="toggleOverride(this)">
+                <span class="override-label">Override</span>
+            </label>
+            <div class="setting-row">
+                <label>Mithril Interval:
+                    <input type="number" name="mithril_interval"
+                           value="{{ val if val is not none else globals.mithril_interval }}"
+                           min="1" class="input-sm"
+                           {% if val is none %}disabled{% endif %}>
+                    <span class="unit">min</span>
+                    {% if val is none %}<span class="global-hint">(global: {{ globals.mithril_interval }})</span>{% endif %}
+                </label>
+            </div>
+        </div>
+    </div>
+
+    <!-- Team -->
+    <div class="card">
+        <h3>Team</h3>
+
+        {% set val = overrides.get("my_team") %}
+        <div class="override-row">
+            <label class="override-toggle">
+                <input type="checkbox" name="override_my_team" class="override-cb"
+                       {% if val is not none %}checked{% endif %}
+                       onchange="toggleOverride(this)">
+                <span class="override-label">Override</span>
+            </label>
+            <div class="setting-row">
+                <label>My Team:
+                    <select name="my_team" class="select-sm"
+                            {% if val is none %}disabled{% endif %}>
+                        {% set cur = val if val is not none else globals.my_team %}
+                        {% for color in ['yellow', 'red', 'blue', 'green'] %}
+                        <option value="{{ color }}" {% if cur == color %}selected{% endif %}>{{ color|capitalize }}</option>
+                        {% endfor %}
+                    </select>
+                    {% if val is none %}<span class="global-hint">(global: {{ globals.my_team|capitalize }})</span>{% endif %}
+                </label>
+            </div>
+        </div>
+    </div>
+
+    <!-- Shared User Permissions -->
+    <div class="card">
+        <h3>Shared Permissions</h3>
+        <p style="color:#667;font-size:12px;margin:0 0 10px">
+            Control what the shared user can do. Uncheck to hide from their dashboard.
+        </p>
+
+        {% set has_perms = overrides.get("shared_modes") is not none %}
+        <label class="setting-row" style="margin-bottom:10px">
+            <input type="checkbox" name="permissions_enabled"
+                   {% if has_perms %}checked{% endif %}
+                   onchange="togglePermissions(this)">
+            Restrict permissions <span class="global-hint">(unchecked = allow everything)</span>
+        </label>
+
+        <div id="permissions-detail" style="{% if not has_perms %}display:none{% endif %}">
+            {% set allowed_modes = overrides.get("shared_modes", []) %}
+            <div class="section-label" style="margin-top:8px">Auto Modes</div>
+            {% for group in auto_groups %}
+            <div style="margin-bottom:6px">
+                <span style="color:#556;font-size:11px;font-weight:700;text-transform:uppercase">{{ group.group }}</span>
+                {% for mode in group.modes %}
+                <label class="setting-row indent perm-item">
+                    <input type="checkbox" name="perm_mode_{{ mode.key }}"
+                           {% if not has_perms or mode.key in allowed_modes %}checked{% endif %}
+                           {% if not has_perms %}disabled{% endif %}>
+                    {{ mode.label }}
+                </label>
+                {% endfor %}
+            </div>
+            {% endfor %}
+
+            {% set allowed_actions = overrides.get("shared_actions", []) %}
+            <div class="section-label" style="margin-top:12px">One-Shot Actions</div>
+            {% for name in all_actions %}
+            <label class="setting-row indent perm-item">
+                <input type="checkbox" name="perm_action_{{ name.replace(' ', '_') }}"
+                       {% if not has_perms or name in allowed_actions %}checked{% endif %}
+                       {% if not has_perms %}disabled{% endif %}>
+                {{ name }}
+            </label>
+            {% endfor %}
+        </div>
+    </div>
+
+    <button type="submit" class="btn btn-primary btn-full">Save Device Settings</button>
+</form>
+
+<form method="post" action="/settings/device/{{ device_id }}/reset" style="margin-top:8px">
+    <button type="submit" class="btn btn-full"
+            style="background:#2a2a4a;color:#ff6b6b;border:1px solid rgba(255,107,107,0.2)"
+            onclick="return confirm('Reset all overrides for this device to global defaults?')">
+        Reset All Overrides
+    </button>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function toggleOverride(cb) {
+    var row = cb.closest('.override-row');
+    var inputs = row.querySelectorAll('.setting-row input, .setting-row select');
+    inputs.forEach(function(el) {
+        el.disabled = !cb.checked;
+    });
+    var hints = row.querySelectorAll('.global-hint');
+    hints.forEach(function(h) {
+        h.style.display = cb.checked ? 'none' : '';
+    });
+}
+function togglePermissions(cb) {
+    var detail = document.getElementById('permissions-detail');
+    detail.style.display = cb.checked ? '' : 'none';
+    var inputs = detail.querySelectorAll('.perm-item input');
+    inputs.forEach(function(el) {
+        el.disabled = !cb.checked;
+    });
+}
+</script>
+{% endblock %}

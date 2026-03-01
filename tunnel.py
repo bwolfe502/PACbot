@@ -1,5 +1,5 @@
 """
-PACbot WebSocket Tunnel Client
+9Bot WebSocket Tunnel Client
 
 Connects to a relay server and forwards proxied HTTP requests to the local
 Flask dashboard at localhost:8080.  Runs in a daemon thread with its own
@@ -21,8 +21,6 @@ import http.client
 import json
 import logging
 import threading
-import urllib.request
-import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 
 _log = logging.getLogger("tunnel")
@@ -35,11 +33,17 @@ _stop_event = threading.Event()
 _status = "disabled"          # disabled | connecting | connected | disconnected
 _status_lock = threading.Lock()
 
+# Active streams: {request_id: (cancel_event, http_connection)}
+_active_streams: dict[str, tuple[threading.Event, http.client.HTTPConnection | None]] = {}
+_streams_lock = threading.Lock()
+
 RECONNECT_BASE = 5            # initial backoff seconds
 RECONNECT_MAX = 60            # cap
 LOCAL_URL = "http://127.0.0.1:8080"
 EXECUTOR_WORKERS = 4
 LOCAL_TIMEOUT = 25            # per-request timeout for local forwarding
+STREAM_TIMEOUT = 300          # long timeout for streaming connections
+STREAM_CHUNK_SIZE = 65536     # 64KB chunks for streaming
 
 # ---------------------------------------------------------------------------
 # Local HTTP forwarding (runs in thread pool)
@@ -96,11 +100,111 @@ def _forward_to_local(msg: dict) -> dict:
             pass
 
 # ---------------------------------------------------------------------------
+# Streaming support (MJPEG etc.)
+# ---------------------------------------------------------------------------
+
+def _is_streaming_path(path: str) -> bool:
+    """Check if a request path targets a streaming endpoint."""
+    # Strip query string for matching
+    clean = path.split("?")[0]
+    return clean.endswith("/api/stream")
+
+
+def _cancel_stream(req_id: str) -> None:
+    """Cancel an active stream by setting its cancel event and closing connection."""
+    with _streams_lock:
+        entry = _active_streams.pop(req_id, None)
+    if entry:
+        cancel_evt, conn = entry
+        cancel_evt.set()
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        _log.debug("Cancelled stream %s", req_id)
+
+
+async def _handle_streaming_request(ws, msg: dict) -> None:
+    """Handle a streaming request by forwarding chunks via WebSocket."""
+    req_id = msg["id"]
+    cancel = threading.Event()
+    queue: asyncio.Queue = asyncio.Queue()
+    loop = asyncio.get_event_loop()
+
+    def _blocking_stream():
+        conn = None
+        try:
+            path = msg.get("path", "/")
+            method = msg.get("method", "GET")
+            headers = {k: v for k, v in msg.get("headers", {}).items()
+                       if k.lower() not in ("host", "transfer-encoding", "connection")}
+
+            conn = http.client.HTTPConnection("127.0.0.1", 8080,
+                                               timeout=STREAM_TIMEOUT)
+            with _streams_lock:
+                _active_streams[req_id] = (cancel, conn)
+
+            conn.request(method, path, headers=headers)
+            resp = conn.getresponse()
+            resp_headers = {k: v for k, v in resp.getheaders()
+                           if k.lower() not in ("transfer-encoding", "connection")}
+
+            # Send stream_start
+            loop.call_soon_threadsafe(queue.put_nowait, {
+                "id": req_id, "stream": "start",
+                "status": resp.status, "headers": resp_headers,
+            })
+
+            # Read and forward chunks
+            while not cancel.is_set():
+                chunk = resp.read(STREAM_CHUNK_SIZE)
+                if not chunk:
+                    break
+                loop.call_soon_threadsafe(queue.put_nowait, {
+                    "id": req_id, "stream": "chunk",
+                    "body_b64": base64.b64encode(chunk).decode("ascii"),
+                })
+        except Exception as e:
+            if not cancel.is_set():
+                _log.debug("Stream read error for %s: %s", req_id, e)
+        finally:
+            with _streams_lock:
+                _active_streams.pop(req_id, None)
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            loop.call_soon_threadsafe(queue.put_nowait, {
+                "id": req_id, "stream": "end",
+            })
+
+    thread = threading.Thread(target=_blocking_stream, daemon=True,
+                               name=f"stream-{req_id[:8]}")
+    thread.start()
+
+    # Forward queued messages via WebSocket
+    try:
+        while True:
+            chunk_msg = await queue.get()
+            await ws.send(json.dumps(chunk_msg))
+            if chunk_msg.get("stream") == "end":
+                break
+    except Exception:
+        _cancel_stream(req_id)
+
+
+# ---------------------------------------------------------------------------
 # Async tunnel loop
 # ---------------------------------------------------------------------------
 
 async def _handle_request(ws, msg: dict, executor: ThreadPoolExecutor) -> None:
     """Process one proxied request and send the response back."""
+    path = msg.get("path", "/")
+    if _is_streaming_path(path):
+        await _handle_streaming_request(ws, msg)
+        return
     loop = asyncio.get_event_loop()
     try:
         response = await loop.run_in_executor(executor, _forward_to_local, msg)
@@ -122,7 +226,7 @@ async def _run_tunnel(relay_url: str, relay_secret: str, bot_name: str) -> None:
     executor = ThreadPoolExecutor(max_workers=EXECUTOR_WORKERS)
     backoff = RECONNECT_BASE
 
-    ws_url = f"{relay_url}?secret={relay_secret}&bot={bot_name}"
+    ws_url = f"{relay_url}?bot={bot_name}"
 
     while not _stop_event.is_set():
         with _status_lock:
@@ -134,6 +238,7 @@ async def _run_tunnel(relay_url: str, relay_secret: str, bot_name: str) -> None:
                 ping_interval=30,
                 ping_timeout=10,
                 close_timeout=5,
+                additional_headers={"Authorization": f"Bearer {relay_secret}"},
             ) as ws:
                 with _status_lock:
                     _status = "connected"
@@ -147,6 +252,10 @@ async def _run_tunnel(relay_url: str, relay_secret: str, bot_name: str) -> None:
                         msg = json.loads(raw_msg)
                     except json.JSONDecodeError:
                         _log.warning("Malformed message from relay, skipping")
+                        continue
+                    # Handle stream cancellation from relay
+                    if "cancel_stream" in msg:
+                        _cancel_stream(msg["cancel_stream"])
                         continue
                     asyncio.ensure_future(_handle_request(ws, msg, executor))
 

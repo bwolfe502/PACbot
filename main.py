@@ -5,7 +5,6 @@ import queue
 import time
 import os
 import sys
-import random
 import json
 import logging
 import platform
@@ -20,21 +19,21 @@ from config import (set_min_troops, set_auto_heal, set_auto_restore_ap,
                      set_titan_rally_own, set_gather_options, set_tower_quest_enabled,
                      running_tasks, QuestType, RallyType, Screen)
 from devices import get_devices, get_emulator_instances, auto_connect_emulators
-from navigation import check_screen, navigate
-from vision import adb_tap, tap_image, load_screenshot, find_image, wait_for_image_and_tap, read_ap, warmup_ocr
+from navigation import check_screen
+from vision import adb_tap, tap_image, load_screenshot, find_image, wait_for_image_and_tap, read_ap
 from troops import troops_avail, heal_all, read_panel_statuses, get_troop_status, TroopAction
 from actions import (attack, phantom_clash_attack, reinforce_throne, target, check_quests, teleport,
                      teleport_benchmark,
                      rally_titan, rally_eg, search_eg_reset, join_rally,
                      join_war_rallies, reset_quest_tracking, reset_rally_blacklist,
-                     test_eg_positions, mine_mithril, mine_mithril_if_due,
-                     gather_gold, gather_gold_loop, occupy_tower,
+                     test_eg_positions, mine_mithril,
+                     gather_gold, occupy_tower,
                      get_quest_tracking_state)
 from territory import (attack_territory, auto_occupy_loop,
                        open_territory_manager, diagnose_grid)
 from botlog import get_logger
 from settings import SETTINGS_FILE, DEFAULTS, load_settings, save_settings
-from runners import (sleep_interval, run_auto_quest, run_auto_titan, run_auto_groot,
+from runners import (run_auto_quest, run_auto_titan, run_auto_groot,
                      run_auto_pass, run_auto_occupy, run_auto_reinforce,
                      run_auto_mithril, run_auto_gold, run_repeat, run_once,
                      launch_task, stop_task, stop_all_tasks_matching)
@@ -137,7 +136,7 @@ def create_gui():
     # Set app ID before creating window so taskbar shows our icon
     try:
         import ctypes
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("pacbot.app")
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("9bot.app")
     except:
         pass
 
@@ -145,7 +144,7 @@ def create_gui():
     ctk.set_default_color_theme("dark-blue")
 
     window = ctk.CTk()
-    window.title(f"PACbot v{version}")
+    window.title(f"9Bot v{version}")
     window.resizable(False, True)
     window.configure(fg_color=THEME["bg_deep"])
 
@@ -200,7 +199,7 @@ def create_gui():
     # ── Title ──
     title_frame = tk.Frame(window, bg=THEME["bg_deep"])
     title_frame.pack(fill=tk.X, pady=(10, 4))
-    ctk.CTkLabel(title_frame, text=f"PACbot v{version}",
+    ctk.CTkLabel(title_frame, text=f"9Bot v{version}",
                  font=ctk.CTkFont(family=_FONT_FAMILY, size=18, weight="bold"),
                  text_color=THEME["accent_cyan"]).pack()
     ctk.CTkLabel(title_frame, text="Made by Nine",
@@ -449,7 +448,7 @@ def create_gui():
             log.info("Stopping Reinforce Throne on all devices")
 
     def _stop_mithril():
-        config.MITHRIL_ENABLED = False
+        config.MITHRIL_ENABLED_DEVICES.clear()
         config.MITHRIL_DEPLOY_TIME.clear()
         if auto_mithril_var.get():
             auto_mithril_var.set(False)
@@ -616,7 +615,7 @@ def create_gui():
 
     def toggle_auto_mithril():
         if auto_mithril_var.get():
-            config.MITHRIL_ENABLED = True
+            config.MITHRIL_ENABLED_DEVICES.update(get_active_devices())
             config.MITHRIL_INTERVAL = int(mithril_interval_var.get())
             for device in get_active_devices():
                 task_key = f"{device}_auto_mithril"
@@ -790,7 +789,7 @@ def create_gui():
                                            capture_output=True, timeout=120)
                             messagebox.showinfo("Installed",
                                 "Flask installed successfully!\n\n"
-                                "Restart PACbot to start the dashboard.")
+                                "Restart 9Bot to start the dashboard.")
                         except Exception as ex:
                             messagebox.showerror("Error", f"Failed to install Flask:\n{ex}")
                     threading.Thread(target=_install, daemon=True).start()
@@ -1444,7 +1443,7 @@ def create_gui():
         log = get_logger("main")
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        default_name = f"pacbot_bugreport_{timestamp}.zip"
+        default_name = f"9bot_bugreport_{timestamp}.zip"
 
         save_path = filedialog.asksaveasfilename(
             defaultextension=".zip",
@@ -1459,9 +1458,9 @@ def create_gui():
             with zipfile.ZipFile(save_path, "w", zipfile.ZIP_DEFLATED) as zf:
                 # Logs (current + rotated backups)
                 for suffix in ["", ".1", ".2", ".3"]:
-                    logfile = os.path.join(LOG_DIR, f"pacbot.log{suffix}")
+                    logfile = os.path.join(LOG_DIR, f"9bot.log{suffix}")
                     if os.path.isfile(logfile):
-                        zf.write(logfile, f"logs/pacbot.log{suffix}")
+                        zf.write(logfile, f"logs/9bot.log{suffix}")
 
                 # Failure screenshots
                 failures_dir = os.path.join(SCRIPT_DIR, "debug", "failures")
@@ -1494,7 +1493,7 @@ def create_gui():
                 ram_gb = _get_ram_gb()
 
                 info_lines = [
-                    f"PACbot Bug Report",
+                    f"9Bot Bug Report",
                     f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
                     f"",
                     f"=== System ===",
@@ -1532,7 +1531,9 @@ def create_gui():
     def cleanup_dead_tasks():
         """Check for finished threads and clean up."""
         for key in list(running_tasks.keys()):
-            info = running_tasks[key]
+            info = running_tasks.get(key)
+            if info is None:
+                continue
             if not isinstance(info, dict):
                 continue
             thread = info.get("thread")
@@ -1554,7 +1555,7 @@ def create_gui():
             auto_reinforce_var.set(False)
         if auto_mithril_var.get() and not any(k.endswith("_auto_mithril") for k in running_tasks):
             auto_mithril_var.set(False)
-            config.MITHRIL_ENABLED = False
+            config.MITHRIL_ENABLED_DEVICES.clear()
             config.MITHRIL_DEPLOY_TIME.clear()
         if auto_gold_var.get() and not any(k.endswith("_auto_gold") for k in running_tasks):
             auto_gold_var.set(False)
@@ -1768,27 +1769,24 @@ def create_gui():
             log.warning("Failed to start web dashboard: %s", e)
 
     # ============================================================
-    # RELAY TUNNEL (opt-in, connects to remote relay server)
+    # RELAY TUNNEL (auto-configured from license key)
     # ============================================================
 
-    if settings.get("relay_enabled", False):
-        _relay_url = settings.get("relay_url", "")
-        _relay_secret = settings.get("relay_secret", "")
-        _relay_bot = settings.get("relay_bot_name", "")
-        if _relay_url and _relay_secret and _relay_bot:
-            try:
-                from tunnel import start_tunnel, tunnel_status
-                start_tunnel(_relay_url, _relay_secret, _relay_bot)
-                # Override Web App link to point to the relay
-                _relay_host = _relay_url.replace("ws://", "").replace("wss://", "")
-                _relay_host = _relay_host.split("/")[0]  # just host:port
-                _web_open_url[0] = f"http://{_relay_host}/{_relay_bot}/"
-                web_link_btn.configure(text="Remote Dashboard")
-            except ImportError:
-                log.info("Relay tunnel enabled but 'websockets' not installed. "
-                         "Install with: pip install websockets")
-            except Exception as e:
-                log.warning("Failed to start relay tunnel: %s", e)
+    from startup import get_relay_config
+    relay_cfg = get_relay_config(settings)
+    if relay_cfg:
+        _relay_url, _relay_secret, _relay_bot = relay_cfg
+        try:
+            from tunnel import start_tunnel
+            start_tunnel(_relay_url, _relay_secret, _relay_bot)
+            _relay_host = _relay_url.replace("ws://", "").replace("wss://", "")
+            _relay_host = _relay_host.split("/")[0]
+            _web_open_url[0] = f"http://{_relay_host}/{_relay_bot}/"
+            web_link_btn.configure(text="Remote Dashboard")
+        except ImportError:
+            log.info("Remote access unavailable ('websockets' not installed)")
+        except Exception as e:
+            log.warning("Failed to start relay tunnel: %s", e)
 
     _resize_window()
 

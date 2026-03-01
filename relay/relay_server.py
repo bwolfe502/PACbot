@@ -1,9 +1,15 @@
 """
-PACbot WebSocket Relay Server
+9Bot WebSocket Relay Server
 
 Standalone aiohttp server deployed on a DigitalOcean Droplet (or any VPS).
-Accepts WebSocket connections from PACbot instances and proxies HTTP requests
+Accepts WebSocket connections from 9Bot instances and proxies HTTP requests
 from browsers to the appropriate bot.
+
+Supports streaming responses (MJPEG) via stream_start/stream_chunk/stream_end
+protocol messages.
+
+Bug report uploads are accepted via POST /_upload and stored on disk.
+Admin interface at GET /_admin for browsing/downloading/deleting uploads.
 
 Usage:
     RELAY_SECRET=your-secret python relay_server.py
@@ -12,6 +18,7 @@ Usage:
 Environment variables:
     RELAY_SECRET  — shared secret for authenticating bot connections (required)
     RELAY_PORT    — HTTP port to listen on (default: 80)
+    UPLOAD_DIR    — directory for bug report uploads (default: /opt/9bot-relay/uploads)
 """
 
 import asyncio
@@ -20,6 +27,7 @@ import json
 import logging
 import os
 import uuid
+from datetime import datetime, timezone
 
 from aiohttp import web, WSMsgType
 
@@ -32,15 +40,21 @@ log = logging.getLogger("relay")
 
 SHARED_SECRET = os.environ.get("RELAY_SECRET", "")
 RELAY_PORT = int(os.environ.get("RELAY_PORT", "80"))
+UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "/opt/9bot-relay/uploads")
 REQUEST_TIMEOUT = 30  # seconds
+STREAM_CHUNK_TIMEOUT = 10  # seconds between stream chunks before giving up
+MAX_UPLOAD_SIZE = 150 * 1024 * 1024  # 150 MB
+MAX_UPLOADS_PER_BOT = 10  # keep last N per bot
 
 # ---------------------------------------------------------------------------
 # State
 # ---------------------------------------------------------------------------
 # {bot_name: websocket}
 _bots: dict[str, web.WebSocketResponse] = {}
-# {request_id: asyncio.Future}  — per-bot pending requests
+# {bot_name: {request_id: asyncio.Future}}  — per-bot pending requests
 _pending: dict[str, dict[str, asyncio.Future]] = {}
+# {bot_name: {request_id: asyncio.Queue}}  — per-bot active streams
+_streams: dict[str, dict[str, asyncio.Queue]] = {}
 
 # ---------------------------------------------------------------------------
 # HTML pages (inline, no external files needed)
@@ -64,23 +78,13 @@ h1 { font-size: 1.6em; margin-bottom: 0.3em; }
 
 
 def _landing_page() -> str:
-    bots_html = ""
-    if _bots:
-        items = []
-        for name in sorted(_bots.keys()):
-            items.append(
-                f'<li><a href="/{name}/">'
-                f'<span class="dot online"></span> {name}</a></li>'
-            )
-        bots_html = f'<ul class="bot-list">{"".join(items)}</ul>'
-    else:
-        bots_html = '<p class="muted">No bots connected.</p>'
     return (
         f"<!DOCTYPE html><html><head><meta charset='utf-8'>"
         f"<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        f"<title>PACbot Relay</title><style>{_STYLE}</style>"
-        f"<meta http-equiv='refresh' content='5'>"
-        f"</head><body><h1>PACbot Relay</h1>{bots_html}</body></html>"
+        f"<title>9Bot Relay</title><style>{_STYLE}</style>"
+        f"</head><body><h1>9Bot Relay</h1>"
+        f'<p class="muted">Use your 9Bot dashboard to find your remote URL.</p>'
+        f"</body></html>"
     )
 
 
@@ -103,7 +107,12 @@ def _offline_page(bot_name: str) -> str:
 # ---------------------------------------------------------------------------
 
 async def handle_ws(request: web.Request) -> web.WebSocketResponse:
-    secret = request.query.get("secret", "")
+    # Accept secret from Authorization header (preferred) or query param (legacy)
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        secret = auth_header[7:]
+    else:
+        secret = request.query.get("secret", "")
     bot_name = request.query.get("bot", "").strip()
 
     if not SHARED_SECRET:
@@ -127,9 +136,11 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
         log.info("Replacing existing connection for bot '%s'", bot_name)
         await old_ws.close()
     _cancel_pending(bot_name, "Bot reconnected")
+    _cancel_all_streams(bot_name)
 
     _bots[bot_name] = ws
     _pending[bot_name] = {}
+    _streams[bot_name] = {}
     log.info("Bot '%s' connected from %s", bot_name, request.remote)
 
     try:
@@ -140,8 +151,31 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
                 except json.JSONDecodeError:
                     log.warning("Malformed JSON from bot '%s'", bot_name)
                     continue
+
                 req_id = data.get("id")
-                if req_id and req_id in _pending.get(bot_name, {}):
+                stream_type = data.get("stream")
+
+                if stream_type:
+                    # Streaming protocol message
+                    if stream_type == "start":
+                        # Create stream queue and resolve pending future
+                        queue: asyncio.Queue = asyncio.Queue()
+                        _streams.setdefault(bot_name, {})[req_id] = queue
+                        fut = _pending.get(bot_name, {}).get(req_id)
+                        if fut and not fut.done():
+                            fut.set_result(data)
+                    elif stream_type == "chunk":
+                        queue = _streams.get(bot_name, {}).get(req_id)
+                        if queue:
+                            body = base64.b64decode(data.get("body_b64", ""))
+                            await queue.put(body)
+                    elif stream_type == "end":
+                        queue = _streams.get(bot_name, {}).get(req_id)
+                        if queue:
+                            await queue.put(None)  # sentinel
+                        _streams.get(bot_name, {}).pop(req_id, None)
+                elif req_id and req_id in _pending.get(bot_name, {}):
+                    # Normal request-response
                     _pending[bot_name][req_id].set_result(data)
             elif msg.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
                 break
@@ -149,6 +183,7 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
         if _bots.get(bot_name) is ws:
             del _bots[bot_name]
         _cancel_pending(bot_name, "Bot disconnected")
+        _cancel_all_streams(bot_name)
         log.info("Bot '%s' disconnected", bot_name)
 
     return ws
@@ -163,6 +198,33 @@ def _cancel_pending(bot_name: str, reason: str) -> None:
                 "headers": {"Content-Type": "text/plain"},
                 "body_b64": base64.b64encode(reason.encode()).decode("ascii"),
             })
+
+
+def _cancel_all_streams(bot_name: str) -> None:
+    """Cancel all active streams for a bot (push end sentinels)."""
+    streams = _streams.pop(bot_name, {})
+    for queue in streams.values():
+        try:
+            queue.put_nowait(None)
+        except Exception:
+            pass
+
+
+async def _send_cancel_stream(bot_name: str, req_id: str) -> None:
+    """Tell the bot to stop a stream."""
+    ws = _bots.get(bot_name)
+    if ws and not ws.closed:
+        try:
+            await ws.send_json({"cancel_stream": req_id})
+        except Exception:
+            pass
+    # Clean up stream queue
+    queue = _streams.get(bot_name, {}).pop(req_id, None)
+    if queue:
+        try:
+            queue.put_nowait(None)
+        except Exception:
+            pass
 
 # ---------------------------------------------------------------------------
 # HTTP handler (browser requests)
@@ -224,7 +286,11 @@ async def handle_http(request: web.Request) -> web.StreamResponse:
     finally:
         _pending.get(bot_name, {}).pop(req_id, None)
 
-    # Build response
+    # Check if this is a streaming response
+    if result.get("stream") == "start":
+        return await _handle_stream_response(request, bot_name, req_id, result)
+
+    # Build normal response
     resp_body = base64.b64decode(result.get("body_b64", ""))
     resp_headers = result.get("headers", {})
     # Filter headers that aiohttp manages itself
@@ -269,6 +335,334 @@ async def handle_http(request: web.Request) -> web.StreamResponse:
         headers=resp_headers,
     )
 
+
+async def _handle_stream_response(
+    request: web.Request,
+    bot_name: str,
+    req_id: str,
+    start_msg: dict,
+) -> web.StreamResponse:
+    """Forward a streaming response (MJPEG) from bot to browser."""
+    resp_headers = start_msg.get("headers", {})
+    # Filter managed headers
+    for h in ("Transfer-Encoding", "Content-Length", "Content-Encoding"):
+        resp_headers.pop(h, None)
+        resp_headers.pop(h.lower(), None)
+
+    resp = web.StreamResponse(status=start_msg.get("status", 200))
+    for k, v in resp_headers.items():
+        resp.headers[k] = v
+    await resp.prepare(request)
+
+    queue = _streams.get(bot_name, {}).get(req_id)
+    if not queue:
+        return resp
+
+    try:
+        while True:
+            try:
+                chunk = await asyncio.wait_for(queue.get(),
+                                                timeout=STREAM_CHUNK_TIMEOUT)
+            except asyncio.TimeoutError:
+                break
+            if chunk is None:  # end sentinel
+                break
+            await resp.write(chunk)
+    except (ConnectionResetError, ConnectionAbortedError, asyncio.CancelledError):
+        pass
+    finally:
+        # Browser disconnected or stream ended — tell bot to stop
+        await _send_cancel_stream(bot_name, req_id)
+
+    try:
+        await resp.write_eof()
+    except Exception:
+        pass
+    return resp
+
+# ---------------------------------------------------------------------------
+# Bug report upload + admin
+# ---------------------------------------------------------------------------
+
+def _check_secret(request: web.Request) -> None:
+    """Validate Bearer token or query-param secret. Raises 403 on failure."""
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        secret = auth_header[7:]
+    else:
+        secret = request.query.get("secret", "")
+    if not SHARED_SECRET or secret != SHARED_SECRET:
+        raise web.HTTPForbidden(text="Invalid secret")
+
+
+def _safe_bot_name(name: str) -> str:
+    """Validate and return a sanitized bot name. Raises 400 on invalid."""
+    name = name.strip()
+    if not name or "/" in name or "\\" in name or ".." in name:
+        raise web.HTTPBadRequest(text="Invalid bot name")
+    return name
+
+
+def _format_size(size_bytes: int) -> str:
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    if size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    return f"{size_bytes / (1024 * 1024):.1f} MB"
+
+
+def _prune_uploads(bot_dir: str) -> None:
+    """Keep only the newest MAX_UPLOADS_PER_BOT zip files in a bot directory."""
+    try:
+        zips = [f for f in os.listdir(bot_dir)
+                if f.endswith(".zip") and os.path.isfile(os.path.join(bot_dir, f))]
+    except OSError:
+        return
+    if len(zips) <= MAX_UPLOADS_PER_BOT:
+        return
+    zips.sort(key=lambda f: os.path.getmtime(os.path.join(bot_dir, f)))
+    for old in zips[: len(zips) - MAX_UPLOADS_PER_BOT]:
+        try:
+            os.remove(os.path.join(bot_dir, old))
+            log.info("Pruned old upload: %s/%s", os.path.basename(bot_dir), old)
+        except OSError:
+            pass
+
+
+async def handle_upload(request: web.Request) -> web.Response:
+    """Accept a bug report zip upload from a bot."""
+    _check_secret(request)
+    bot_name = _safe_bot_name(request.query.get("bot", ""))
+
+    reader = await request.multipart()
+    field = await reader.next()
+    if field is None or field.name != "file":
+        raise web.HTTPBadRequest(text="Missing 'file' field")
+
+    bot_dir = os.path.join(UPLOAD_DIR, bot_name)
+    os.makedirs(bot_dir, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    dest = os.path.join(bot_dir, f"bugreport_{timestamp}.zip")
+
+    size = 0
+    try:
+        with open(dest, "wb") as f:
+            while True:
+                chunk = await field.read_chunk(65536)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > MAX_UPLOAD_SIZE:
+                    raise web.HTTPRequestEntityTooLarge(
+                        text=f"Upload exceeds {MAX_UPLOAD_SIZE // (1024*1024)} MB limit")
+                f.write(chunk)
+    except web.HTTPRequestEntityTooLarge:
+        try:
+            os.remove(dest)
+        except OSError:
+            pass
+        raise
+
+    _prune_uploads(bot_dir)
+    log.info("Upload from '%s': %s (%s)", bot_name,
+             os.path.basename(dest), _format_size(size))
+    return web.json_response({"status": "ok", "size": size,
+                              "file": os.path.basename(dest)})
+
+
+# ---------------------------------------------------------------------------
+# Admin interface — browse / download / delete uploads
+# ---------------------------------------------------------------------------
+
+def _admin_page(body_html: str, title: str = "9Bot Admin") -> str:
+    return (
+        f"<!DOCTYPE html><html><head><meta charset='utf-8'>"
+        f"<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        f"<title>{title}</title><style>{_STYLE}"
+        f".card {{ background:#1a1a2e; border-radius:12px; padding:16px 20px;"
+        f" margin:10px 0; width:100%; max-width:600px; }}"
+        f".file-row {{ display:flex; align-items:center; justify-content:space-between;"
+        f" padding:8px 0; border-bottom:1px solid #252545; gap:10px; }}"
+        f".file-row:last-child {{ border-bottom:none; }}"
+        f".file-info {{ flex:1; min-width:0; }}"
+        f".file-name {{ font-size:0.95em; word-break:break-all; }}"
+        f".file-meta {{ color:#667; font-size:0.8em; }}"
+        f".btn {{ padding:6px 14px; border-radius:8px; border:none; cursor:pointer;"
+        f" font-size:0.85em; text-decoration:none; display:inline-block; }}"
+        f".btn-dl {{ background:#2a4a6e; color:#e0e0f0; }}"
+        f".btn-dl:hover {{ background:#3a5a8e; }}"
+        f".btn-del {{ background:#5a2a2a; color:#e0e0f0; }}"
+        f".btn-del:hover {{ background:#7a3a3a; }}"
+        f".btn-back {{ background:#252545; color:#e0e0f0; margin-bottom:12px; }}"
+        f".btn-back:hover {{ background:#353565; }}"
+        f".total {{ color:#667; font-size:0.85em; margin-top:4px; }}"
+        f"</style></head><body style='justify-content:flex-start;padding-top:40px'>"
+        f"<h1>{title}</h1>{body_html}</body></html>"
+    )
+
+
+async def handle_admin(request: web.Request) -> web.Response:
+    """Admin landing — list all bots with uploads."""
+    _check_secret(request)
+    secret_q = f"?secret={request.query.get('secret', '')}"
+
+    if not os.path.isdir(UPLOAD_DIR):
+        return web.Response(text=_admin_page(
+            '<p class="muted">No uploads yet.</p>'), content_type="text/html")
+
+    bots = []
+    total_size = 0
+    for name in sorted(os.listdir(UPLOAD_DIR)):
+        bot_dir = os.path.join(UPLOAD_DIR, name)
+        if not os.path.isdir(bot_dir):
+            continue
+        zips = [f for f in os.listdir(bot_dir) if f.endswith(".zip")]
+        if not zips:
+            continue
+        dir_size = sum(os.path.getsize(os.path.join(bot_dir, f)) for f in zips)
+        total_size += dir_size
+        online = name in _bots and not _bots[name].closed
+        bots.append((name, len(zips), dir_size, online))
+
+    if not bots:
+        return web.Response(text=_admin_page(
+            '<p class="muted">No uploads yet.</p>'), content_type="text/html")
+
+    rows = []
+    for name, count, size, online in bots:
+        dot = "online" if online else "offline"
+        rows.append(
+            f'<a href="/_admin/uploads/{name}{secret_q}">'
+            f'<span class="dot {dot}"></span>'
+            f'{name} &mdash; {count} file{"s" if count != 1 else ""}, '
+            f'{_format_size(size)}</a>'
+        )
+
+    html = (
+        f'<ul class="bot-list">{"".join(f"<li>{r}</li>" for r in rows)}</ul>'
+        f'<p class="total">Total: {_format_size(total_size)}</p>'
+    )
+    return web.Response(text=_admin_page(html), content_type="text/html")
+
+
+async def handle_admin_bot(request: web.Request) -> web.Response:
+    """List uploads for a specific bot."""
+    _check_secret(request)
+    bot_name = _safe_bot_name(request.match_info["bot_name"])
+    secret_q = f"?secret={request.query.get('secret', '')}"
+
+    bot_dir = os.path.join(UPLOAD_DIR, bot_name)
+    if not os.path.isdir(bot_dir):
+        raise web.HTTPNotFound(text="No uploads for this bot")
+
+    zips = [f for f in os.listdir(bot_dir)
+            if f.endswith(".zip") and os.path.isfile(os.path.join(bot_dir, f))]
+    zips.sort(key=lambda f: os.path.getmtime(os.path.join(bot_dir, f)), reverse=True)
+
+    if not zips:
+        raise web.HTTPNotFound(text="No uploads for this bot")
+
+    rows = []
+    for fname in zips:
+        fpath = os.path.join(bot_dir, fname)
+        size = os.path.getsize(fpath)
+        mtime = datetime.fromtimestamp(os.path.getmtime(fpath), tz=timezone.utc)
+        age = datetime.now(timezone.utc) - mtime
+        if age.days > 0:
+            age_str = f"{age.days}d ago"
+        elif age.seconds >= 3600:
+            age_str = f"{age.seconds // 3600}h ago"
+        else:
+            age_str = f"{max(1, age.seconds // 60)}m ago"
+
+        dl_url = f"/_admin/uploads/{bot_name}/{fname}{secret_q}"
+        del_url = dl_url
+        rows.append(
+            f'<div class="file-row">'
+            f'<div class="file-info">'
+            f'<div class="file-name">{fname}</div>'
+            f'<div class="file-meta">{_format_size(size)} &middot; {age_str}</div>'
+            f'</div>'
+            f'<a class="btn btn-dl" href="{dl_url}">Download</a>'
+            f'<button class="btn btn-del" onclick="del_file(this,\'{fname}\')">'
+            f'Delete</button></div>'
+        )
+
+    del_all_js = (
+        f"function del_file(btn,f){{if(!confirm('Delete '+f+'?'))return;"
+        f"fetch('/_admin/uploads/{bot_name}/'+f+'{secret_q}',"
+        f"{{method:'DELETE'}}).then(r=>{{if(r.ok)btn.closest('.file-row').remove();"
+        f"else alert('Delete failed: '+r.status)}}).catch(e=>alert(e))}}"
+        f"function del_all(){{if(!confirm('Delete ALL uploads for {bot_name}?'))return;"
+        f"fetch('/_admin/uploads/{bot_name}{secret_q}',"
+        f"{{method:'DELETE'}}).then(r=>{{if(r.ok)location.href='/_admin{secret_q}';"
+        f"else alert('Failed: '+r.status)}}).catch(e=>alert(e))}}"
+    )
+
+    html = (
+        f'<a class="btn btn-back" href="/_admin{secret_q}">&larr; All bots</a>'
+        f'<div class="card"><h3 style="margin:0 0 10px">{bot_name}</h3>'
+        f'{"".join(rows)}'
+        f'<div style="margin-top:12px;text-align:right">'
+        f'<button class="btn btn-del" onclick="del_all()">Delete All</button>'
+        f'</div></div>'
+        f'<script>{del_all_js}</script>'
+    )
+    return web.Response(text=_admin_page(html, f"{bot_name} — Uploads"),
+                        content_type="text/html")
+
+
+async def handle_admin_file(request: web.Request) -> web.Response:
+    """Download or delete a specific upload."""
+    _check_secret(request)
+    bot_name = _safe_bot_name(request.match_info["bot_name"])
+    filename = request.match_info["filename"]
+
+    # Sanitize filename
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise web.HTTPBadRequest(text="Invalid filename")
+    if not filename.endswith(".zip"):
+        raise web.HTTPBadRequest(text="Only .zip files")
+
+    fpath = os.path.join(UPLOAD_DIR, bot_name, filename)
+    if not os.path.isfile(fpath):
+        raise web.HTTPNotFound(text="File not found")
+
+    if request.method == "DELETE":
+        os.remove(fpath)
+        log.info("Admin deleted: %s/%s", bot_name, filename)
+        return web.json_response({"status": "ok", "deleted": filename})
+
+    # GET — download
+    return web.FileResponse(fpath, headers={
+        "Content-Disposition": f'attachment; filename="{filename}"',
+    })
+
+
+async def handle_admin_delete_bot(request: web.Request) -> web.Response:
+    """Delete all uploads for a bot."""
+    _check_secret(request)
+    bot_name = _safe_bot_name(request.match_info["bot_name"])
+    bot_dir = os.path.join(UPLOAD_DIR, bot_name)
+
+    if not os.path.isdir(bot_dir):
+        raise web.HTTPNotFound(text="No uploads for this bot")
+
+    count = 0
+    for f in os.listdir(bot_dir):
+        fpath = os.path.join(bot_dir, f)
+        if os.path.isfile(fpath) and f.endswith(".zip"):
+            os.remove(fpath)
+            count += 1
+    try:
+        os.rmdir(bot_dir)
+    except OSError:
+        pass
+
+    log.info("Admin deleted all uploads for '%s' (%d files)", bot_name, count)
+    return web.json_response({"status": "ok", "deleted": count})
+
+
 # ---------------------------------------------------------------------------
 # App setup
 # ---------------------------------------------------------------------------
@@ -276,6 +670,14 @@ async def handle_http(request: web.Request) -> web.StreamResponse:
 def create_app() -> web.Application:
     app = web.Application()
     app.router.add_get("/ws/tunnel", handle_ws)
+    # Upload + admin routes (before catch-all)
+    app.router.add_post("/_upload", handle_upload)
+    app.router.add_get("/_admin", handle_admin)
+    app.router.add_get("/_admin/uploads/{bot_name}/{filename}", handle_admin_file)
+    app.router.add_delete("/_admin/uploads/{bot_name}/{filename}", handle_admin_file)
+    app.router.add_get("/_admin/uploads/{bot_name}", handle_admin_bot)
+    app.router.add_delete("/_admin/uploads/{bot_name}", handle_admin_delete_bot)
+    app.router.add_get("/_admin/uploads", handle_admin)
     app.router.add_route("*", "/{path_info:.*}", handle_http)
     return app
 

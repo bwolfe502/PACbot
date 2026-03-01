@@ -41,7 +41,7 @@ def attack(device):
     """Heal all troops first (if auto heal enabled), then check troops and attack"""
     log = get_logger("actions", device)
     clear_click_trail()
-    if config.AUTO_HEAL_ENABLED:
+    if config.get_device_config(device, "auto_heal"):
         heal_all(device)
 
     if check_screen(device) != Screen.MAP:
@@ -51,8 +51,9 @@ def attack(device):
             return
 
     troops = troops_avail(device)
+    min_troops = config.get_device_config(device, "min_troops")
 
-    if troops > config.MIN_TROOPS_AVAILABLE:
+    if troops > min_troops:
         logged_tap(device, 560, 675, "attack_selection")
         wait_for_image_and_tap("attack_button.png", device, timeout=5)
         time.sleep(1)  # Wait for attack dialog
@@ -61,14 +62,14 @@ def attack(device):
         else:
             log.warning("Depart button not found after attack sequence")
     else:
-        log.warning("Not enough troops available (have %d, need more than %d)", troops, config.MIN_TROOPS_AVAILABLE)
+        log.warning("Not enough troops available (have %d, need more than %d)", troops, min_troops)
 
 @timed_action("phantom_clash_attack")
 def phantom_clash_attack(device, stop_check=None):
     """Heal all troops first (if auto heal enabled), then attack in Phantom Clash mode"""
     log = get_logger("actions", device)
     clear_click_trail()
-    if config.AUTO_HEAL_ENABLED:
+    if config.get_device_config(device, "auto_heal"):
         heal_all(device)
 
     if stop_check and stop_check():
@@ -161,7 +162,7 @@ def reinforce_throne(device):
     """Heal all troops first (if auto heal enabled), then check troops and reinforce throne"""
     log = get_logger("actions", device)
     clear_click_trail()
-    if config.AUTO_HEAL_ENABLED:
+    if config.get_device_config(device, "auto_heal"):
         heal_all(device)
 
     if check_screen(device) != Screen.MAP:
@@ -171,14 +172,15 @@ def reinforce_throne(device):
             return
 
     troops = troops_avail(device)
+    min_troops = config.get_device_config(device, "min_troops")
 
-    if troops > config.MIN_TROOPS_AVAILABLE:
+    if troops > min_troops:
         logged_tap(device, 560, 675, "throne_selection")
         wait_for_image_and_tap("throne_reinforce.png", device, timeout=5)
         time.sleep(1)
         tap_image("depart.png", device)
     else:
-        log.warning("Not enough troops available (have %d, need more than %d)", troops, config.MIN_TROOPS_AVAILABLE)
+        log.warning("Not enough troops available (have %d, need more than %d)", troops, min_troops)
 
 @timed_action("target")
 def target(device):
@@ -186,7 +188,7 @@ def target(device):
     Returns True on success, False on general failure, 'no_marker' if target marker not found.
     """
     log = get_logger("actions", device)
-    if config.AUTO_HEAL_ENABLED:
+    if config.get_device_config(device, "auto_heal"):
         heal_all(device)
 
     if check_screen(device) != Screen.MAP:
@@ -368,7 +370,7 @@ def teleport(device, dry_run=False):
         if not all_troops_home(device):
             log.warning("Troops are not home! Cannot teleport. Aborting.")
             return False
-        if config.AUTO_HEAL_ENABLED:
+        if config.get_device_config(device, "auto_heal"):
             heal_all(device)
     else:
         log.info("Teleport DRY RUN — skipping troop check and heal")

@@ -71,7 +71,7 @@ def _get_border_color(image, row, col):
     return (0, 0, 0)
 
 
-def _classify_square_team(bgr):
+def _classify_square_team(bgr, device=None):
     """Determine team based on border color — find closest Euclidean match.
 
     Thresholds:
@@ -82,6 +82,9 @@ def _classify_square_team(bgr):
     - Fallback own team: <= 95 (last resort)
     """
     b, g, r = bgr
+
+    my_team = config.get_device_config(device, "my_team") if device else config.MY_TEAM_COLOR
+    enemy_teams = config.get_device_enemy_teams(device) if device else config.ENEMY_TEAMS
 
     min_distance = float('inf')
     best_team = "unknown"
@@ -97,15 +100,15 @@ def _classify_square_team(bgr):
 
     if best_team == "green" and min_distance <= 70:
         return "green"
-    elif best_team in config.ENEMY_TEAMS and min_distance <= 70:
+    elif best_team in enemy_teams and min_distance <= 70:
         return best_team
-    elif best_team == config.MY_TEAM_COLOR and min_distance <= 90:
+    elif best_team == my_team and min_distance <= 90:
         return best_team
     elif min_distance <= 55:
         return best_team
 
-    if best_team == "unknown" and config.MY_TEAM_COLOR in distances and distances[config.MY_TEAM_COLOR] <= 95:
-        return config.MY_TEAM_COLOR
+    if best_team == "unknown" and my_team in distances and distances[my_team] <= 95:
+        return my_team
 
     return "unknown"
 
@@ -128,8 +131,9 @@ def _has_flag(image, row, col):
     return red_pixels > 15
 
 
-def _is_adjacent_to_my_territory(image, row, col):
+def _is_adjacent_to_my_territory(image, row, col, device=None):
     """Check if square is DIRECTLY next to own territory."""
+    my_team = config.get_device_config(device, "my_team") if device else config.MY_TEAM_COLOR
     neighbors = [
         (row-1, col),
         (row+1, col),
@@ -144,9 +148,9 @@ def _is_adjacent_to_my_territory(image, row, col):
             continue
 
         border_color = _get_border_color(image, r, c)
-        team = _classify_square_team(border_color)
+        team = _classify_square_team(border_color, device=device)
 
-        if team == config.MY_TEAM_COLOR:
+        if team == my_team:
             return True
 
     return False
@@ -403,7 +407,9 @@ def attack_territory(device, debug=False):
 
     # Build list of valid targets
     log.info("Scanning grid for targets...")
-    log.debug("My team: %s, Attacking: %s", config.MY_TEAM_COLOR, config.ENEMY_TEAMS)
+    my_team = config.get_device_config(device, "my_team")
+    enemy_teams = config.get_device_enemy_teams(device)
+    log.debug("My team: %s, Attacking: %s", my_team, enemy_teams)
 
     targets = []
     enemy_squares = []
@@ -416,12 +422,12 @@ def attack_territory(device, debug=False):
                 continue
 
             border_color = _get_border_color(image, row, col)
-            team = _classify_square_team(border_color)
+            team = _classify_square_team(border_color, device=device)
 
-            if team in config.ENEMY_TEAMS:
+            if team in enemy_teams:
                 enemy_squares.append((row, col))
 
-                if _is_adjacent_to_my_territory(image, row, col):
+                if _is_adjacent_to_my_territory(image, row, col, device=device):
                     adjacent_enemies.append((row, col))
 
                     if not _has_flag(image, row, col):
@@ -597,17 +603,18 @@ def auto_occupy_loop(device):
             time.sleep(1)
             log.info("Step 4: Attacking...")
 
-            if config.AUTO_HEAL_ENABLED:
+            if config.get_device_config(device, "auto_heal"):
                 heal_all(device)
 
             troops = troops_avail(device)
+            min_troops = config.get_device_config(device, "min_troops")
 
-            if troops > config.MIN_TROOPS_AVAILABLE:
+            if troops > min_troops:
                 tap_image("depart.png", device)
                 time.sleep(1)
                 tap_image("depart.png", device)
             else:
-                log.warning("Not enough troops available (have %d, need more than %d)", troops, config.MIN_TROOPS_AVAILABLE)
+                log.warning("Not enough troops available (have %d, need more than %d)", troops, min_troops)
 
             time.sleep(2)
 
@@ -676,7 +683,7 @@ def diagnose_grid(device):
                 continue
 
             bgr = _get_border_color(image, row, col)
-            team = _classify_square_team(bgr)
+            team = _classify_square_team(bgr, device=device)
             team_counts[team] = team_counts.get(team, 0) + 1
             row_chars.append(TEAM_CHAR.get(team, "?"))
 
@@ -702,7 +709,7 @@ def diagnose_grid(device):
         grid_map.append("".join(row_chars))
 
     # --- Flag & adjacency stats (enemy squares only) -----------------------------
-    enemy_teams = set(config.ENEMY_TEAMS)
+    enemy_teams = set(config.get_device_enemy_teams(device))
     enemy_count = sum(v for k, v in team_counts.items() if k in enemy_teams)
     flagged = 0
     adjacent = 0
@@ -712,9 +719,9 @@ def diagnose_grid(device):
             if (row, col) in THRONE_SQUARES:
                 continue
             bgr = _get_border_color(image, row, col)
-            team = _classify_square_team(bgr)
+            team = _classify_square_team(bgr, device=device)
             if team in enemy_teams:
-                is_adj = _is_adjacent_to_my_territory(image, row, col)
+                is_adj = _is_adjacent_to_my_territory(image, row, col, device=device)
                 has_flg = _has_flag(image, row, col)
                 if is_adj:
                     adjacent += 1
@@ -738,7 +745,7 @@ def diagnose_grid(device):
 
     # --- Log results -------------------------------------------------------------
     log.info("=== TERRITORY GRID DIAGNOSTIC ===")
-    log.info("Team config: my_team=%s, enemies=%s", config.MY_TEAM_COLOR, config.ENEMY_TEAMS)
+    log.info("Team config: my_team=%s, enemies=%s", config.get_device_config(device, "my_team"), config.get_device_enemy_teams(device))
     log.info("Classification counts: %s", dict(sorted(team_counts.items())))
     log.info("Enemy: %d total, %d adjacent, %d flagged, %d valid targets",
              enemy_count, adjacent, flagged, valid_targets)
@@ -874,10 +881,13 @@ def scan_territory_coordinates(device, squares=None, save_screenshots=True):
             failed += 1
 
     # Save database
-    os.makedirs(os.path.dirname(_COORD_DB_PATH), exist_ok=True)
-    import json
-    with open(_COORD_DB_PATH, "w") as f:
-        json.dump(coord_db, f, indent=2, sort_keys=True)
+    try:
+        os.makedirs(os.path.dirname(_COORD_DB_PATH), exist_ok=True)
+        import json
+        with open(_COORD_DB_PATH, "w") as f:
+            json.dump(coord_db, f, indent=2, sort_keys=True)
+    except OSError as e:
+        log.error("Failed to save coordinate database: %s", e)
 
     log.info("Scan complete: %d succeeded, %d failed", scanned, failed)
     log.info("Database saved to %s (%d total entries)", _COORD_DB_PATH, len(coord_db))

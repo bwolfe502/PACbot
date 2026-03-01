@@ -1,4 +1,4 @@
-"""Shared settings persistence for PACbot.
+"""Shared settings persistence for 9Bot.
 
 Provides load/save for settings.json with validation and defaults.
 Used by both main.py (GUI) and web/dashboard.py (Flask).
@@ -12,11 +12,20 @@ Key exports:
 
 import json
 import os
+import tempfile
 
 from botlog import get_logger
 from config import validate_settings
 
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
+
+# Keys that can be overridden per device via device_settings.
+DEVICE_OVERRIDABLE_KEYS = {
+    "auto_heal", "auto_restore_ap", "ap_use_free", "ap_use_potions",
+    "ap_allow_large_potions", "ap_use_gems", "ap_gem_limit", "min_troops",
+    "my_team", "gather_enabled", "gather_mine_level", "gather_max_troops",
+    "tower_quest_enabled", "eg_rally_own", "titan_rally_own", "mithril_interval",
+}
 
 DEFAULTS = {
     "auto_heal": True,
@@ -44,10 +53,9 @@ DEFAULTS = {
     "gather_mine_level": 4,
     "gather_max_troops": 3,
     "tower_quest_enabled": False,
-    "relay_enabled": False,
-    "relay_url": "",
-    "relay_secret": "",
-    "relay_bot_name": "",
+    "remote_access": True,
+    "auto_upload_logs": False,
+    "upload_interval_hours": 24,
 }
 
 
@@ -75,8 +83,12 @@ def save_settings(settings):
     """Write settings dict to settings.json."""
     _log = get_logger("settings")
     try:
-        with open(SETTINGS_FILE, "w") as f:
-            json.dump(settings, f, indent=2)
+        dir_name = os.path.dirname(SETTINGS_FILE)
+        with tempfile.NamedTemporaryFile("w", dir=dir_name, suffix=".tmp",
+                                         delete=False) as tmp:
+            json.dump(settings, tmp, indent=2)
+            tmp_path = tmp.name
+        os.replace(tmp_path, SETTINGS_FILE)
         _log.debug("Settings saved (%d keys)", len(settings))
     except Exception as e:
         _log.error("Failed to save settings: %s", e)

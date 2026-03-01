@@ -6,8 +6,8 @@ import pytest
 
 from config import QuestType, Screen
 from actions.quests import (
-    _is_troop_defending, _navigate_to_tower, occupy_tower,
-    recall_tower_troop, _run_tower_quest, _tower_quest_state,
+    _is_troop_defending, _is_troop_defending_relaxed, _navigate_to_tower,
+    occupy_tower, recall_tower_troop, _run_tower_quest, _tower_quest_state,
 )
 from troops import TroopAction, TroopStatus, DeviceTroopSnapshot
 
@@ -70,17 +70,21 @@ class TestIsTroopDefending:
 # ---------------------------------------------------------------------------
 
 class TestNavigateToTower:
-    def test_success(self, mock_device):
+    def test_success_uses_friend_tab_and_marker(self, mock_device):
         screen = MagicMock()
         with patch("actions.quests.check_screen", return_value=Screen.MAP), \
              patch("actions.quests.tap_image", return_value=True), \
-             patch("actions.quests.logged_tap"), \
+             patch("actions.quests.logged_tap") as mock_tap, \
              patch("actions.quests.load_screenshot", return_value=screen), \
-             patch("actions.quests.find_image", return_value=(0.9, (100, 100), 50, 50)), \
+             patch("actions.quests.find_image", return_value=(0.9, (100, 100), 50, 50)) as mock_find, \
              patch("actions.quests.time.sleep"):
             assert _navigate_to_tower(mock_device) is True
+            # Should tap Friend tab at (540, 330)
+            mock_tap.assert_any_call(mock_device, 540, 330, "tower_target_friend_tab")
+            # Should look for friend_marker.png
+            mock_find.assert_called_with(screen, "friend_marker.png", threshold=0.7)
 
-    def test_no_target_marker(self, mock_device):
+    def test_no_friend_marker(self, mock_device):
         t = [0.0]
         def fake_time():
             t[0] += 0.5
@@ -191,15 +195,56 @@ class TestOccupyTower:
 
 class TestRecallTowerTroop:
     def test_full_recall_sequence(self, mock_device):
+        """Recall succeeds when panel shows no defending troop after sequence."""
         _tower_quest_state[mock_device] = {"deployed_at": time.time()}
+        no_defend = _make_snapshot(mock_device, [TroopAction.HOME] * 4)
         with patch("actions.quests.navigate", return_value=True), \
              patch("actions.quests.tap_image", return_value=True), \
+             patch("actions.quests.wait_for_image_and_tap", return_value=True), \
              patch("actions.quests.logged_tap"), \
+             patch("actions.quests.read_panel_statuses", return_value=no_defend), \
              patch("actions.quests.config") as mock_config, \
              patch("actions.quests.time.sleep"):
             mock_config.set_device_status = MagicMock()
             assert recall_tower_troop(mock_device) is True
             assert mock_device not in _tower_quest_state
+
+    def test_recall_fails_when_detail_not_found(self, mock_device):
+        """Recall returns False when detail_button.png is not found."""
+        _tower_quest_state[mock_device] = {"deployed_at": time.time()}
+        still_defending = _make_snapshot(mock_device,
+                                        [TroopAction.DEFENDING, TroopAction.HOME,
+                                         TroopAction.HOME, TroopAction.HOME])
+        with patch("actions.quests.navigate", return_value=True), \
+             patch("actions.quests.tap_image", return_value=True), \
+             patch("actions.quests.wait_for_image_and_tap", return_value=False), \
+             patch("actions.quests.logged_tap"), \
+             patch("actions.quests.read_panel_statuses", return_value=still_defending), \
+             patch("actions.quests.save_failure_screenshot"), \
+             patch("actions.quests._navigate_to_tower", return_value=False), \
+             patch("actions.quests.config") as mock_config, \
+             patch("actions.quests.time.sleep"):
+            mock_config.set_device_status = MagicMock()
+            assert recall_tower_troop(mock_device) is False
+
+    def test_recall_fails_when_still_defending(self, mock_device):
+        """Recall returns False when troop is still defending after all attempts."""
+        _tower_quest_state[mock_device] = {"deployed_at": time.time()}
+        still_defending = _make_snapshot(mock_device,
+                                        [TroopAction.DEFENDING, TroopAction.HOME,
+                                         TroopAction.HOME, TroopAction.HOME])
+        with patch("actions.quests.navigate", return_value=True), \
+             patch("actions.quests.tap_image", return_value=True), \
+             patch("actions.quests.wait_for_image_and_tap", return_value=True), \
+             patch("actions.quests.logged_tap"), \
+             patch("actions.quests.read_panel_statuses", return_value=still_defending), \
+             patch("actions.quests.save_failure_screenshot"), \
+             patch("actions.quests._navigate_to_tower", return_value=False), \
+             patch("actions.quests.config") as mock_config, \
+             patch("actions.quests.time.sleep"):
+            mock_config.set_device_status = MagicMock()
+            assert recall_tower_troop(mock_device) is False
+            assert mock_device in _tower_quest_state  # not cleared on failure
 
     def test_fails_if_no_defending_icon(self, mock_device):
         with patch("actions.quests.navigate", return_value=True), \
@@ -216,6 +261,7 @@ class TestRecallTowerTroop:
         stop = MagicMock(side_effect=[False, True])
         with patch("actions.quests.navigate", return_value=True), \
              patch("actions.quests.tap_image", return_value=True), \
+             patch("actions.quests.wait_for_image_and_tap", return_value=True), \
              patch("actions.quests.logged_tap"), \
              patch("actions.quests.config") as mock_config, \
              patch("actions.quests.time.sleep"):
@@ -233,7 +279,7 @@ class TestRunTowerQuest:
         quests = [
             {"quest_type": QuestType.TOWER, "current": 0, "target": 30, "completed": False},
         ]
-        with patch("actions.quests._is_troop_defending", return_value=False), \
+        with patch("actions.quests._is_troop_defending_relaxed", return_value=False), \
              patch("actions.quests.occupy_tower", return_value=True) as mock_occ, \
              patch("actions.quests.config") as mock_config:
             mock_config.set_device_status = MagicMock()
@@ -244,7 +290,7 @@ class TestRunTowerQuest:
         quests = [
             {"quest_type": QuestType.FORTRESS, "current": 10, "target": 30, "completed": False},
         ]
-        with patch("actions.quests._is_troop_defending", return_value=True), \
+        with patch("actions.quests._is_troop_defending_relaxed", return_value=True), \
              patch("actions.quests.occupy_tower") as mock_occ, \
              patch("actions.quests.config") as mock_config:
             mock_config.set_device_status = MagicMock()
@@ -255,7 +301,7 @@ class TestRunTowerQuest:
         quests = [
             {"quest_type": QuestType.TOWER, "current": 30, "target": 30, "completed": True},
         ]
-        with patch("actions.quests._is_troop_defending", return_value=True), \
+        with patch("actions.quests._is_troop_defending_relaxed", return_value=True), \
              patch("actions.quests.recall_tower_troop") as mock_recall:
             _run_tower_quest(mock_device, quests)
             mock_recall.assert_called_once()
@@ -264,7 +310,7 @@ class TestRunTowerQuest:
         quests = [
             {"quest_type": QuestType.TOWER, "current": 30, "target": 30, "completed": True},
         ]
-        with patch("actions.quests._is_troop_defending", return_value=False), \
+        with patch("actions.quests._is_troop_defending_relaxed", return_value=False), \
              patch("actions.quests.recall_tower_troop") as mock_recall:
             _run_tower_quest(mock_device, quests)
             mock_recall.assert_not_called()
@@ -274,21 +320,32 @@ class TestRunTowerQuest:
             {"quest_type": QuestType.TOWER, "current": 5, "target": 30, "completed": False},
             {"quest_type": QuestType.FORTRESS, "current": 0, "target": 30, "completed": False},
         ]
-        with patch("actions.quests._is_troop_defending", return_value=False), \
+        with patch("actions.quests._is_troop_defending_relaxed", return_value=False), \
              patch("actions.quests.occupy_tower", return_value=True) as mock_occ, \
              patch("actions.quests.config") as mock_config:
             mock_config.set_device_status = MagicMock()
             _run_tower_quest(mock_device, quests)
             mock_occ.assert_called_once()
 
-    def test_no_tower_quests_does_nothing(self, mock_device):
+    def test_no_tower_quests_no_defending_does_nothing(self, mock_device):
         quests = [
             {"quest_type": QuestType.TITAN, "current": 0, "target": 15, "completed": False},
         ]
-        with patch("actions.quests._is_troop_defending") as mock_def, \
+        with patch("actions.quests._is_troop_defending_relaxed", return_value=False), \
              patch("actions.quests.occupy_tower") as mock_occ, \
              patch("actions.quests.recall_tower_troop") as mock_recall:
             _run_tower_quest(mock_device, quests)
-            mock_def.assert_not_called()
             mock_occ.assert_not_called()
             mock_recall.assert_not_called()
+
+    def test_no_tower_quests_recalls_stranded_troop(self, mock_device):
+        """If no tower quests exist but a troop is still defending, recall it."""
+        quests = [
+            {"quest_type": QuestType.TITAN, "current": 0, "target": 15, "completed": False},
+        ]
+        with patch("actions.quests._is_troop_defending_relaxed", return_value=True), \
+             patch("actions.quests.occupy_tower") as mock_occ, \
+             patch("actions.quests.recall_tower_troop") as mock_recall:
+            _run_tower_quest(mock_device, quests)
+            mock_occ.assert_not_called()
+            mock_recall.assert_called_once_with(mock_device, None)

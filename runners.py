@@ -1,4 +1,4 @@
-"""Shared task runners for PACbot.
+"""Shared task runners for 9Bot.
 
 All auto-mode loop functions live here — used by both the tkinter GUI (main.py)
 and the Flask web dashboard (web/dashboard.py). This eliminates the previous
@@ -17,10 +17,12 @@ Key exports:
     run_repeat            — Generic repeating task wrapper
     run_once              — Generic one-shot task wrapper
     launch_task           — Spawn a daemon thread for a task
-    stop_task             — Signal a task to stop
+    stop_task             — Signal a task to stop + set "Stopping ..." status
+    force_stop_all        — Force-kill all task threads immediately
     stop_all_tasks_matching — Stop all tasks with a given suffix
 """
 
+import ctypes
 import threading
 import time
 import random
@@ -31,7 +33,7 @@ from botlog import get_logger
 from navigation import check_screen, navigate
 from vision import (adb_tap, load_screenshot, find_image, tap_image,
                     wait_for_image_and_tap)
-from troops import troops_avail, heal_all, read_panel_statuses
+from troops import troops_avail, heal_all, read_panel_statuses, get_troop_status, TroopAction
 from actions import (attack, reinforce_throne, target, check_quests,
                      rally_titan, search_eg_reset, join_rally,
                      join_war_rallies, reset_quest_tracking, reset_rally_blacklist,
@@ -53,6 +55,26 @@ def sleep_interval(base, variation, stop_check):
         if stop_check():
             break
         time.sleep(1)
+
+
+def _deployed_status(device):
+    """Build a status string from deployed troop actions (e.g. 'Gathering/Defending...')."""
+    snapshot = get_troop_status(device)
+    if not snapshot:
+        return "Waiting for Troops..."
+    actions = set()
+    for t in snapshot.troops:
+        if t.action != TroopAction.HOME:
+            actions.add(t.action.value)
+    if not actions:
+        return "Waiting for Troops..."
+    # Title Case, joined by /
+    return "/".join(sorted(actions)) + "..."
+
+
+# Track last check_quests time per device for periodic re-checks
+_last_quest_check = {}   # {device: timestamp}
+_QUEST_CHECK_INTERVAL = 60  # seconds
 
 
 def _smart_wait_for_troops(device, stop_check, dlog, max_wait=120):
@@ -105,20 +127,28 @@ def run_auto_quest(device, stop_event):
                     continue
                 read_panel_statuses(device)
                 troops = troops_avail(device)
-                if troops > config.MIN_TROOPS_AVAILABLE:
+                if troops > config.get_device_config(device, "min_troops"):
                     config.set_device_status(device, "Checking Quests...")
                     check_quests(device, stop_check=stop_check)
+                    _last_quest_check[device] = time.time()
                 else:
-                    dlog.warning("Not enough troops for quests")
-                    config.set_device_status(device, "Waiting for Troops...")
+                    # Still run check_quests periodically to keep
+                    # dashboard quest tracking up to date
+                    since_check = time.time() - _last_quest_check.get(device, 0)
+                    if since_check >= _QUEST_CHECK_INTERVAL:
+                        config.set_device_status(device, "Checking Quests...")
+                        check_quests(device, stop_check=stop_check)
+                        _last_quest_check[device] = time.time()
+                    else:
+                        config.set_device_status(device, _deployed_status(device))
                     if _smart_wait_for_troops(device, stop_check, dlog):
                         continue  # Troop freed up — retry immediately
             if stop_check():
                 break
-            # Show "Waiting for troops" if troops are low, otherwise "Idle"
+            # Show deployed status if troops are low, otherwise "Idle"
             troops = troops_avail(device) if check_screen(device) == Screen.MAP else 0
-            if troops <= config.MIN_TROOPS_AVAILABLE:
-                config.set_device_status(device, "Waiting for Troops...")
+            if troops <= config.get_device_config(device, "min_troops"):
+                config.set_device_status(device, _deployed_status(device))
             else:
                 config.set_device_status(device, "Idle")
             for _ in range(10):
@@ -145,7 +175,7 @@ def run_auto_titan(device, stop_event, interval, variation):
                 mine_mithril_if_due(device, stop_check=stop_check)
                 if stop_check():
                     break
-                if config.AUTO_HEAL_ENABLED:
+                if config.get_device_config(device, "auto_heal"):
                     heal_all(device)
                 if not navigate(Screen.MAP, device):
                     dlog.warning("Cannot reach map screen — retrying")
@@ -156,7 +186,7 @@ def run_auto_titan(device, stop_event, interval, variation):
                         time.sleep(1)
                     continue
                 troops = troops_avail(device)
-                if troops > config.MIN_TROOPS_AVAILABLE:
+                if troops > config.get_device_config(device, "min_troops"):
                     # Reset titan distance every 5 rallies by searching for EG
                     if rally_count > 0 and rally_count % 5 == 0:
                         search_eg_reset(device)
@@ -192,7 +222,7 @@ def run_auto_groot(device, stop_event, interval, variation):
                 mine_mithril_if_due(device, stop_check=stop_check)
                 if stop_check():
                     break
-                if config.AUTO_HEAL_ENABLED:
+                if config.get_device_config(device, "auto_heal"):
                     heal_all(device)
                 if not navigate(Screen.MAP, device):
                     dlog.warning("Cannot reach map screen — retrying")
@@ -203,7 +233,7 @@ def run_auto_groot(device, stop_event, interval, variation):
                         time.sleep(1)
                     continue
                 troops = troops_avail(device)
-                if troops > config.MIN_TROOPS_AVAILABLE:
+                if troops > config.get_device_config(device, "min_troops"):
                     config.set_device_status(device, "Joining Groot Rally...")
                     join_rally(RallyType.GROOT, device)
                 else:
@@ -226,10 +256,10 @@ def run_auto_pass(device, stop_event, pass_mode, pass_interval, variation):
     stop_check = stop_event.is_set
 
     def _pass_attack(device):
-        if config.AUTO_HEAL_ENABLED:
+        if config.get_device_config(device, "auto_heal"):
             heal_all(device)
         troops = troops_avail(device)
-        if troops <= config.MIN_TROOPS_AVAILABLE:
+        if troops <= config.get_device_config(device, "min_troops"):
             dlog.warning("Not enough troops for pass battle")
             return False
 
@@ -305,7 +335,7 @@ def run_auto_pass(device, stop_event, pass_mode, pass_interval, variation):
                 while not stop_check():
                     with lock:
                         troops = troops_avail(device)
-                        if troops <= config.MIN_TROOPS_AVAILABLE:
+                        if troops <= config.get_device_config(device, "min_troops"):
                             dlog.warning("Not enough troops, waiting...")
                             time.sleep(5)
                             continue
@@ -366,7 +396,7 @@ def run_auto_mithril(device, stop_event):
     """Standalone mithril mining loop — checks every 60s if mining is due.
     Also useful as fallback when no other auto tasks are running."""
     dlog = get_logger("runner", device)
-    dlog.info("Auto Mithril started (interval: %d min)", config.MITHRIL_INTERVAL)
+    dlog.info("Auto Mithril started (interval: %d min)", config.get_device_config(device, "mithril_interval"))
     stop_check = stop_event.is_set
     lock = config.get_device_lock(device)
     try:
@@ -461,13 +491,72 @@ def launch_task(device, task_name, target_func, stop_event, args=()):
     get_logger("runner", device).info("Started %s", task_name)
 
 
+# Human-readable labels for auto-mode keys (used in "Stopping ..." status)
+_MODE_LABELS = {
+    "auto_quest":     "Auto Quest",
+    "auto_titan":     "Rally Titans",
+    "auto_groot":     "Join Groot",
+    "auto_pass":      "Pass Battle",
+    "auto_occupy":    "Occupy Towers",
+    "auto_reinforce": "Reinforce Throne",
+    "auto_mithril":   "Mine Mithril",
+    "auto_gold":      "Gather Gold",
+}
+
+
 def stop_task(task_key):
-    """Signal a task to stop via its threading.Event."""
+    """Signal a task to stop via its threading.Event and set Stopping status."""
     if task_key in running_tasks:
         info = running_tasks[task_key]
         if isinstance(info, dict) and "stop_event" in info:
             info["stop_event"].set()
             get_logger("runner").debug("Stop signal sent for %s", task_key)
+        # Show "Stopping ..." in the device status
+        parts = task_key.split("_", 1)
+        if len(parts) == 2:
+            device, mode_key = parts
+            label = _MODE_LABELS.get(mode_key, mode_key)
+            config.set_device_status(device, f"Stopping {label}...")
+
+
+def _force_kill_thread(thread):
+    """Force-kill a thread by injecting SystemExit at the next bytecode."""
+    if not thread.is_alive():
+        return
+    tid = thread.ident
+    if tid is None:
+        return
+    res = ctypes.pythonapi.PyThreadState_SetAsyncExc(
+        ctypes.c_ulong(tid), ctypes.py_object(SystemExit))
+    if res > 1:
+        # Revert — something went wrong
+        ctypes.pythonapi.PyThreadState_SetAsyncExc(
+            ctypes.c_ulong(tid), None)
+
+
+def force_stop_all():
+    """Force-kill every running task thread immediately."""
+    _log = get_logger("runner")
+    config.auto_occupy_running = False
+    config.MITHRIL_ENABLED_DEVICES.clear()
+    config.MITHRIL_DEPLOY_TIME.clear()
+    for key in list(running_tasks.keys()):
+        info = running_tasks.get(key)
+        if not isinstance(info, dict):
+            continue
+        # Set stop event first (cooperative)
+        stop_ev = info.get("stop_event")
+        if stop_ev:
+            stop_ev.set()
+        # Force-kill the thread
+        thread = info.get("thread")
+        if thread:
+            _force_kill_thread(thread)
+    # Give threads a moment to actually die, then clean up
+    time.sleep(0.1)
+    running_tasks.clear()
+    config.DEVICE_STATUS.clear()
+    _log.info("=== ALL TASKS FORCE-KILLED ===")
 
 
 def stop_all_tasks_matching(suffix):

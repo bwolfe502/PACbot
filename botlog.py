@@ -1,5 +1,5 @@
 """
-PACbot Logging, Metrics, and Action Timing
+9Bot Logging, Metrics, and Action Timing
 
 Single module for all observability infrastructure:
 - setup_logging()    — configure Python logging (call once at startup)
@@ -89,6 +89,16 @@ def setup_logging(verbose=False):
 
     os.makedirs(LOG_DIR, exist_ok=True)
 
+    # Legacy migration: rename pacbot.log → 9bot.log (one-time)
+    for suffix in ["", ".1", ".2", ".3"]:
+        old = os.path.join(LOG_DIR, f"pacbot.log{suffix}")
+        new = os.path.join(LOG_DIR, f"9bot.log{suffix}")
+        if os.path.isfile(old) and not os.path.isfile(new):
+            try:
+                os.rename(old, new)
+            except OSError:
+                pass
+
     root = logging.getLogger()
     root.setLevel(logging.DEBUG)
 
@@ -107,7 +117,7 @@ def setup_logging(verbose=False):
     root.addHandler(_console_handler)
 
     # Rotating file handler — rich format for AI/human post-mortem analysis
-    log_file = os.path.join(LOG_DIR, "pacbot.log")
+    log_file = os.path.join(LOG_DIR, "9bot.log")
     file_handler = logging.handlers.RotatingFileHandler(
         log_file, maxBytes=5 * 1024 * 1024, backupCount=3,
         encoding="utf-8"
@@ -237,6 +247,9 @@ class StatsTracker:
         def _tick():
             try:
                 self.save()
+                # Reclaim any reference-cycled PyTorch tensors
+                import gc
+                gc.collect()
                 mem = _update_peak()
                 _log = logging.getLogger("botlog")
                 _log.info("Memory checkpoint: %.0f MB (peak: %.0f MB)", mem, _peak_memory_mb)

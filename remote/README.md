@@ -1,12 +1,12 @@
-# PACbot Remote Server — Run PACbot in the Cloud
+# 9Bot Remote Server — Run 9Bot in the Cloud
 
-Run PACbot + an Android emulator on a cloud server. Control everything from your phone using the web dashboard. No home PC required.
+Run 9Bot + an Android emulator on a cloud server. Control everything from your phone using the web dashboard. No home PC required.
 
 ## What You'll Have
 
 - A cloud server running 24/7 with an Android emulator
 - Kingdom Guard (or any game) running in the emulator
-- PACbot controlling the game automatically
+- 9Bot controlling the game automatically
 - A web dashboard on your phone to start/stop tasks and change settings
 - A browser-based game viewer to see what's happening on screen
 
@@ -48,14 +48,14 @@ Run PACbot + an Android emulator on a cloud server. Control everything from your
 2. Add a new host with your server's IP, username `root`, and password
 3. Connect
 
-### Step 3: Install PACbot
+### Step 3: Install 9Bot
 
 Run these commands on your server (copy and paste each line):
 
 ```bash
-# Download PACbot
-git clone https://github.com/YOUR_USERNAME/PACbot.git
-cd PACbot
+# Download 9Bot
+git clone https://github.com/YOUR_USERNAME/9Bot.git
+cd 9Bot
 
 # Run the setup script (installs Docker, Python, ADB, everything)
 sudo bash remote/setup.sh
@@ -85,18 +85,18 @@ You need the game's APK file. You can download it from APKPure, APKCombo, or sim
 ```bash
 # Transfer the APK to your server (from your PC):
 # Open a new terminal/PowerShell window and run:
-scp /path/to/kingdom-guard.apk root@YOUR_SERVER_IP:/root/PACbot/
+scp /path/to/kingdom-guard.apk root@YOUR_SERVER_IP:/root/9Bot/
 
 # Then on the server, install it:
-bash scripts/install-apk.sh /root/PACbot/kingdom-guard.apk
+bash scripts/install-apk.sh /root/9Bot/kingdom-guard.apk
 ```
 
 Open `http://YOUR_SERVER_IP:6080` to see the game running!
 
-### Step 6: Start PACbot with Web Dashboard
+### Step 6: Start 9Bot with Web Dashboard
 
 ```bash
-cd /root/PACbot
+cd /root/9Bot
 source .venv/bin/activate
 
 # Enable web dashboard
@@ -111,7 +111,7 @@ with open('settings.json', 'w') as f: json.dump(s, f, indent=2)
 print('Web dashboard enabled')
 "
 
-# Start PACbot (headless — no GUI needed on server)
+# Start 9Bot (headless — no GUI needed on server)
 python3 main.py
 ```
 
@@ -120,27 +120,27 @@ Open your phone browser and go to:
 http://YOUR_SERVER_IP:5000
 ```
 
-You should see the PACbot web dashboard!
+You should see the 9Bot web dashboard!
 
-### Step 7: Keep PACbot Running (Optional)
+### Step 7: Keep 9Bot Running (Optional)
 
-To keep PACbot running after you disconnect from SSH, use `screen`:
+To keep 9Bot running after you disconnect from SSH, use `screen`:
 
 ```bash
 # Install screen (one time)
 sudo apt install -y screen
 
 # Start a screen session
-screen -S pacbot
+screen -S 9bot
 
-# Start PACbot
-cd /root/PACbot && source .venv/bin/activate && python3 main.py
+# Start 9Bot
+cd /root/9Bot && source .venv/bin/activate && python3 main.py
 
 # Detach from screen: press Ctrl+A, then D
-# PACbot keeps running in the background!
+# 9Bot keeps running in the background!
 
 # To reconnect later:
-screen -r pacbot
+screen -r 9bot
 ```
 
 ## Security
@@ -178,7 +178,7 @@ Cloud servers charge by the hour. To save money when you're not playing:
 
 **Stop the emulator (saves resources):**
 ```bash
-cd /root/PACbot/remote
+cd /root/9Bot/remote
 bash stop.sh
 ```
 
@@ -200,7 +200,7 @@ bash start.sh
 - Make sure the APK is for the right architecture (x86 or universal)
 
 ### Web dashboard not loading
-- Make sure PACbot is running
+- Make sure 9Bot is running
 - Check firewall: `sudo ufw status`
 - Try: `curl http://localhost:5000` from the server itself
 

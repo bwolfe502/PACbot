@@ -44,8 +44,11 @@ _USE_APPLE_VISION = platform.system() == "Darwin"
 # --- BACKEND: EasyOCR (Windows) ---
 # EasyOCR reader is initialized lazily and cached globally.
 # Thread-safe via double-checked locking.
+# _ocr_infer_lock serializes readtext() calls across device threads to prevent
+# per-thread MKL/MKLDNN scratch buffer accumulation (PyTorch issue #64412).
 _ocr_reader = None
 _ocr_lock = threading.Lock()
+_ocr_infer_lock = threading.Lock()
 
 def _get_ocr_reader():
     """Get the EasyOCR reader instance (Windows only).
@@ -57,14 +60,30 @@ def _get_ocr_reader():
     if _ocr_reader is None:
         with _ocr_lock:
             if _ocr_reader is None:
+                # Cap oneDNN/MKLDNN primitive cache BEFORE importing torch.
+                # Default is 1024 entries — each unique input shape compiles a
+                # new kernel (~MB each). EasyOCR feeds variable-size crops, so
+                # the cache fills with stale kernels and bloats to multi-GB.
+                import os as _os
+                _os.environ.setdefault("ONEDNN_PRIMITIVE_CACHE_CAPACITY", "8")
+                # Legacy name (PyTorch < 1.8)
+                _os.environ.setdefault("LRU_CACHE_CAPACITY", "8")
+
                 import warnings
                 warnings.filterwarnings("ignore", message=".*pin_memory.*")
                 warnings.filterwarnings("ignore", message=".*GPU.*")
+                import torch
                 import easyocr
+
+                # Limit PyTorch intra-op parallelism. Multiple device threads
+                # already provide inter-op parallelism; letting each also spawn
+                # N_cores intra-op threads causes oversubscription and bloat.
+                torch.set_num_threads(2)
+
                 _log = get_logger("vision")
                 _log.info("Initializing EasyOCR (first run may download models)...")
                 _ocr_reader = easyocr.Reader(['en'], gpu=False, verbose=False)
-                _log.info("EasyOCR ready.")
+                _log.info("EasyOCR ready (MKLDNN cache cap=8, threads=2).")
     return _ocr_reader
 
 # --- BACKEND: Apple Vision (macOS) ---
@@ -163,11 +182,14 @@ def ocr_read(image, allowlist=None, detail=0):
             return [(None, text, conf) for text, conf in results]
     else:
         # --- BACKEND: EasyOCR (Windows) ---
+        # Serialize inference to prevent concurrent MKL thread-local state
+        # accumulation across device threads (PyTorch issue #64412).
         reader = _get_ocr_reader()
-        if detail == 0:
-            return reader.readtext(image, allowlist=allowlist, detail=0)
-        else:
-            return reader.readtext(image, allowlist=allowlist, detail=1)
+        with _ocr_infer_lock:
+            if detail == 0:
+                return reader.readtext(image, allowlist=allowlist, detail=0)
+            else:
+                return reader.readtext(image, allowlist=allowlist, detail=1)
 
 # ============================================================
 # CLICK TRAIL (debug tap logging)
@@ -634,6 +656,9 @@ IMAGE_REGIONS = {
     "statuses/returning.png":     (0, 0, 360, 1920),       # left third
     "stationed.png":              (0, 0, 360, 1920),       # left third
     "defending.png":              (0, 0, 360, 1920),       # left third
+
+    # Tower popup
+    "detail_button.png":          (0, 960, 540, 1920),        # lower-left quadrant
 
     # Deploy screen
     "depart.png":                 (0, 800, 1080, 1650),       # mid-to-lower; hits at y:873-1586
