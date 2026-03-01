@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title_suffix %} - Debug{% endblock %}
+
+{% block content %}
+
+<div class="section-header">Debug Actions</div>
+<div class="action-grid">
+{% for name in debug_actions %}
+<form method="post" action="/tasks/start" class="device-form">
+    <input type="hidden" name="device" value="{% if devices %}{{ devices[0].id }}{% endif %}">
+    <input type="hidden" name="task_name" value="{{ name }}">
+    <input type="hidden" name="task_type" value="oneshot">
+    <button type="submit" class="action-chip action-chip-debug">{{ name }}</button>
+</form>
+{% endfor %}
+</div>
+
+<!-- Running Tasks -->
+{% if tasks %}
+<div class="section-header" style="margin-top:24px">Running</div>
+<div class="running-list">
+{% for task in tasks %}
+<div class="running-row">
+    <span class="running-name">{{ task }}</span>
+    <form method="post" action="/tasks/stop" class="inline-form">
+        <input type="hidden" name="task_key" value="{{ task }}">
+        <button type="submit" class="running-stop">&times;</button>
+    </form>
+</div>
+{% endfor %}
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+function updateDeviceForms() {
+    var checkboxes = document.querySelectorAll('input[name="device_select"]:checked');
+    var devices;
+    if (checkboxes.length > 0) {
+        devices = Array.prototype.map.call(checkboxes, function(cb) { return cb.value; });
+    } else {
+        var input = document.querySelector('.device-form input[name="device"]');
+        devices = input ? [input.value] : [];
+    }
+    var val = devices.join(',');
+    document.querySelectorAll('.device-form').forEach(function(form) {
+        var input = form.querySelector('input[name="device"]');
+        if (input) input.value = val;
+    });
+}
+document.addEventListener('DOMContentLoaded', updateDeviceForms);
+</script>
+{% endblock %}

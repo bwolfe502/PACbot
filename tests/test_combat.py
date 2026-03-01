@@ -66,80 +66,64 @@ class TestCheckDead:
 # ============================================================
 
 class TestFindGreenPixel:
-    def test_returns_true_when_green_present(self):
-        """Screen with green pixels in the detection region should return truthy."""
-        screen = np.zeros((1920, 1080, 3), dtype=np.uint8)
-        # Place pure green pixels in the detection box (centered at 521, 674)
-        # Box covers y=624..724, x=471..571
-        screen[650:660, 500:510] = [0, 255, 0]  # BGR green
+    """Tests for _find_green_pixel — scans y:100-800, x:50-1000 for the green
+    teleport circle.  Requires >= 20 matching pixels (stride-5 sampled) to
+    avoid false positives from small green UI elements.
+    """
 
-        target_color = (0, 255, 0)
-        result = _find_green_pixel(screen, target_color)
-        assert result  # np.True_ is truthy
+    def test_returns_true_when_green_circle_present(self):
+        """Large green arc in the scan region should be detected."""
+        screen = np.zeros((1920, 1080, 3), dtype=np.uint8)
+        # Simulate a section of the green circle — 30x200 px arc
+        screen[350:380, 200:400] = [0, 255, 0]
+
+        assert _find_green_pixel(screen, (0, 255, 0))
 
     def test_returns_false_when_no_green(self):
-        """All-black screen should return falsy."""
+        """All-black screen should not match."""
         screen = np.zeros((1920, 1080, 3), dtype=np.uint8)
-        target_color = (0, 255, 0)
-        result = _find_green_pixel(screen, target_color)
-        assert not result  # np.False_ is falsy
+        assert not _find_green_pixel(screen, (0, 255, 0))
 
     def test_returns_true_with_tolerance(self):
         """Near-green pixels within tolerance should still match."""
         screen = np.zeros((1920, 1080, 3), dtype=np.uint8)
-        # Close to (0, 255, 0) but not exact — within tolerance=20
-        screen[660:670, 510:520] = [10, 240, 15]
+        # Close to (0, 255, 0) but not exact — within default tolerance=20
+        screen[300:330, 300:500] = [10, 240, 15]
 
-        result = _find_green_pixel(screen, (0, 255, 0), tolerance=20)
-        assert result
+        assert _find_green_pixel(screen, (0, 255, 0), tolerance=20)
 
     def test_returns_false_outside_tolerance(self):
         """Pixels too far from target color should not match."""
         screen = np.zeros((1920, 1080, 3), dtype=np.uint8)
-        # Red pixels — very far from green
-        screen[660:670, 510:520] = [0, 0, 255]
+        screen[300:330, 300:500] = [0, 0, 255]  # red, not green
 
-        result = _find_green_pixel(screen, (0, 255, 0), tolerance=20)
-        assert not result
+        assert not _find_green_pixel(screen, (0, 255, 0), tolerance=20)
 
-    def test_custom_center_and_box_size(self):
-        """Custom center + box_size should look in the right region."""
+    def test_ignores_green_outside_scan_region(self):
+        """Green pixels below y=800 (UI area) should not trigger detection."""
         screen = np.zeros((1920, 1080, 3), dtype=np.uint8)
-        # Place green at custom center (200, 300)
-        screen[295:305, 195:205] = [0, 255, 0]
+        # Place large green block in the bottom UI area (below scan region)
+        screen[900:1000, 200:400] = [0, 255, 0]
 
-        result = _find_green_pixel(screen, (0, 255, 0),
-                                   center_x=200, center_y=300, box_size=50)
-        assert result
+        assert not _find_green_pixel(screen, (0, 255, 0))
 
-    def test_does_not_detect_outside_region(self):
-        """Green pixels outside the detection box should not match."""
+    def test_requires_minimum_pixel_count(self):
+        """A few scattered green pixels should not trigger (< 20 threshold)."""
         screen = np.zeros((1920, 1080, 3), dtype=np.uint8)
-        # Place green far from default center (521, 674)
-        screen[100:110, 100:110] = [0, 255, 0]
+        # Place only 3 green pixels on the stride-5 grid — well under 20
+        screen[100, 50] = [0, 255, 0]
+        screen[200, 100] = [0, 255, 0]
+        screen[300, 150] = [0, 255, 0]
 
-        result = _find_green_pixel(screen, (0, 255, 0))
-        assert not result
+        assert not _find_green_pixel(screen, (0, 255, 0))
 
-    def test_stride_5_sampling(self):
-        """Verify stride-5 subsampling — a single green pixel might be missed."""
-        screen = np.zeros((1920, 1080, 3), dtype=np.uint8)
-        # Place a single green pixel at a position that falls on stride-5 grid
-        # Region: y=624..724, x=471..571, stride-5 means y[624, 629, 634,...]
-        screen[624, 471] = [0, 255, 0]  # Should be on the grid
-
-        result = _find_green_pixel(screen, (0, 255, 0))
-        assert result
-
-    def test_edge_clipping_near_screen_boundary(self):
-        """Center near screen edge should clip without crashing."""
-        screen = np.zeros((1920, 1080, 3), dtype=np.uint8)
-        screen[0:10, 0:10] = [0, 255, 0]
-
-        # Center at (5, 5) with box_size=100 — will clip to (0,0)
-        result = _find_green_pixel(screen, (0, 255, 0),
-                                   center_x=5, center_y=5, box_size=100)
-        assert result
+    def test_detects_circle_at_various_positions(self):
+        """Green circle anywhere in the scan region should be detected."""
+        for y_start in [150, 400, 650]:
+            screen = np.zeros((1920, 1080, 3), dtype=np.uint8)
+            screen[y_start:y_start+30, 100:300] = [0, 255, 0]
+            assert _find_green_pixel(screen, (0, 255, 0)), \
+                f"Failed to detect circle at y={y_start}"
 
 
 # ============================================================
@@ -445,7 +429,6 @@ class TestTeleport:
         mock_find.return_value = cancel_match
 
         # Step=0.5 so the inner green-check loop (3s budget) actually runs
-        # and produces a non-None screen for the cancel check afterward.
         mock_time.side_effect = _make_time_counter(step=0.5)
 
         result = teleport(mock_device)

@@ -42,7 +42,7 @@ from actions import (attack, phantom_clash_attack, reinforce_throne, target,
                      mine_mithril, mine_mithril_if_due,
                      gather_gold, gather_gold_loop,
                      get_quest_tracking_state, occupy_tower)
-from territory import attack_territory, sample_specific_squares
+from territory import attack_territory, diagnose_grid, scan_test_squares
 from botlog import get_logger
 
 _log = get_logger("web")
@@ -68,7 +68,9 @@ TASK_FUNCTIONS = {
     "Check Quests": check_quests,
     "Check Troops": troops_avail,
     "Check Screen": check_screen,
-    "Sample Specific Squares": sample_specific_squares,
+    "Diagnose Grid": diagnose_grid,
+    "Scan Corner Coords": scan_test_squares,
+    "Test Teleport": lambda dev: teleport(dev, dry_run=True),
     "Mine Mithril": mine_mithril,
     "Gather Gold": gather_gold,
     "Reinforce Tower": occupy_tower,
@@ -110,6 +112,8 @@ ONESHOT_FARM = ["Rally Evil Guard", "Join Titan Rally", "Join Evil Guard Rally",
                 "Join Groot Rally", "Heal All"]
 ONESHOT_WAR = ["Target", "Attack", "Phantom Clash Attack", "Reinforce Throne",
                "UP UP UP!", "Teleport", "Attack Territory"]
+ONESHOT_DEBUG = ["Check Screen", "Check Troops", "Diagnose Grid",
+                 "Scan Corner Coords", "Test Teleport"]
 
 # ---------------------------------------------------------------------------
 # Task runners (shared module — no more duplication)
@@ -177,8 +181,7 @@ def _apply_settings(settings):
     set_min_troops(settings.get("min_troops", 0))
     set_eg_rally_own(settings.get("eg_rally_own", True))
     set_titan_rally_own(settings.get("titan_rally_own", True))
-    set_territory_config(settings.get("my_team", "yellow"),
-                         [settings.get("enemy_team", "green")])
+    set_territory_config(settings.get("my_team", "yellow"))
     config.MITHRIL_INTERVAL = settings.get("mithril_interval", 19)
     from botlog import set_console_verbose
     set_console_verbose(settings.get("verbose_logging", False))
@@ -333,6 +336,20 @@ def create_app():
                 device_troops[dev] = count
         return render_template("settings.html", settings=settings,
                                device_troops=device_troops)
+
+    @app.route("/debug")
+    def debug_page():
+        detected, _ = _cached_devices()
+        device_info = [{"id": d, "name": d.split(":")[-1]} for d in detected]
+        active_tasks = []
+        for key, info in list(running_tasks.items()):
+            thread = info.get("thread")
+            if thread and thread.is_alive():
+                active_tasks.append(key)
+        return render_template("debug.html",
+                               devices=device_info,
+                               tasks=active_tasks,
+                               debug_actions=ONESHOT_DEBUG)
 
     @app.route("/logs")
     def logs_page():
@@ -496,7 +513,7 @@ def create_app():
             if val.isdigit():
                 settings[key] = int(val)
 
-        for key in ["pass_mode", "my_team", "enemy_team", "mode",
+        for key in ["pass_mode", "my_team", "mode",
                      "relay_url", "relay_secret", "relay_bot_name"]:
             val = request.form.get(key)
             if val is not None:

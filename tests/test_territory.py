@@ -2,7 +2,7 @@
 
 Covers: _classify_square_team, _get_border_color, _has_flag,
 _is_adjacent_to_my_territory, _get_square_center, attack_territory,
-auto_occupy_loop.
+auto_occupy_loop, diagnose_grid, set_territory_config.
 
 Focus on the red team vs yellow enemy color pair (current game config).
 All ADB and vision calls are mocked — no emulator needed.
@@ -16,11 +16,12 @@ import config
 from config import (
     Screen, SQUARE_SIZE, GRID_OFFSET_X, GRID_OFFSET_Y,
     GRID_WIDTH, GRID_HEIGHT, THRONE_SQUARES, BORDER_COLORS,
+    ALL_TEAMS, set_territory_config,
 )
 from territory import (
     _classify_square_team, _get_border_color, _has_flag,
     _is_adjacent_to_my_territory, _get_square_center,
-    attack_territory, auto_occupy_loop,
+    attack_territory, auto_occupy_loop, diagnose_grid,
 )
 
 
@@ -113,7 +114,7 @@ class TestClassifySquareTeam:
       yellow: (107, 223, 239)
       green:  (115, 219, 132)
       red:    (49, 85, 247)
-      blue:   (214, 154, 132)
+      blue:   (148, 145, 165) — recalibrated 2026-02-28
     """
 
     # --- Exact color matches ---
@@ -221,7 +222,7 @@ class TestClassifySquareTeam:
         # yellow (107,223,239): d=sqrt(107^2+223^2+111^2)≈269
         # green  (115,219,132): d=sqrt(115^2+219^2+4^2)≈247
         # red    (49,85,247):   d=sqrt(49^2+85^2+119^2)≈155
-        # blue   (214,154,132): d=sqrt(214^2+154^2+4^2)≈264
+        # blue   (148,145,165): d=sqrt(148^2+145^2+37^2)≈212
         assert _classify_square_team((0, 0, 128)) == "unknown"
 
     # --- Different team configurations ---
@@ -286,11 +287,11 @@ class TestGetBorderColor:
 
     def test_normal_row_samples_top_and_left_edges(self):
         """Rows >= 2 sample from top edge and left edge of the square."""
-        image = _make_territory_image({(10, 10): (214, 154, 132)})
+        image = _make_territory_image({(10, 10): (148, 145, 165)})
         color = _get_border_color(image, 10, 10)
-        assert abs(color[0] - 214) < 2
-        assert abs(color[1] - 154) < 2
-        assert abs(color[2] - 132) < 2
+        assert abs(color[0] - 148) < 2
+        assert abs(color[1] - 145) < 2
+        assert abs(color[2] - 165) < 2
 
     def test_black_square_returns_black(self):
         """Unset square → (0, 0, 0)."""
@@ -775,3 +776,380 @@ class TestAutoOccupyLoop:
         config.auto_occupy_running = False
         auto_occupy_loop(mock_device)
         # No crash, just returns
+
+
+# ============================================================
+# Blue calibration — observed BGR values from live diagnostic
+# ============================================================
+
+class TestBlueCalibration:
+    """Test _classify_square_team with real blue BGR values from the 2026-02-28
+    diagnostic run.  Blue reference was recalibrated to (148, 145, 165).
+
+    All tests use auto-derived enemies (set_territory_config) so blue is always
+    in ENEMY_TEAMS when my_team != blue.
+    """
+
+    def setup_method(self):
+        """Set enemies to all-but-red so blue is an enemy team."""
+        config.MY_TEAM_COLOR = "red"
+        config.ENEMY_TEAMS = ["yellow", "green", "blue"]
+
+    @pytest.mark.parametrize("bgr, expected_team", [
+        # Exact reference color
+        ((148, 145, 165), "blue"),
+        # Typical blue border — close range (distance ~11)
+        ((156, 142, 158), "blue"),
+        # Farther variant still well within 70 threshold (distance ~12)
+        ((140, 148, 173), "blue"),
+    ])
+    def test_observed_blue_values_classify_correctly(self, bgr, expected_team):
+        """Real blue border BGR values from diagnostic → 'blue'."""
+        assert _classify_square_team(bgr) == expected_team
+
+    def test_dark_building_not_classified_as_blue(self):
+        """BGR=(66, 73, 66) is a dark building/decoration — too far from any team."""
+        # Distance to blue: sqrt((66-148)^2 + (73-145)^2 + (66-165)^2)
+        #                  = sqrt(6724 + 5184 + 9801) = sqrt(21709) ≈ 147.3
+        assert _classify_square_team((66, 73, 66)) == "unknown"
+
+    def test_blue_at_distance_55_still_classified(self):
+        """Blue variant at distance ~55 — within enemy threshold (70)."""
+        # Shift all channels by ~32 from (148, 145, 165): d ≈ sqrt(32^2*3) ≈ 55
+        bgr = (148 + 32, 145 + 32, 165 + 32)  # (180, 177, 197)
+        assert _classify_square_team(bgr) == "blue"
+
+    def test_blue_at_distance_69_borderline_enemy(self):
+        """Blue variant at distance ~69 — just under enemy threshold (70)."""
+        # Shift B by 69: (148+69, 145, 165) = (217, 145, 165)
+        # Distance to blue = sqrt(69^2) = 69
+        bgr = (217, 145, 165)
+        assert _classify_square_team(bgr) == "blue"
+
+    def test_blue_at_distance_72_fails_enemy_threshold(self):
+        """Blue variant at distance ~72 — outside enemy threshold (70)."""
+        # Shift B by 72: (148+72, 145, 165) = (220, 145, 165)
+        # Distance to blue = 72 > 70
+        bgr = (220, 145, 165)
+        # Not enemy (> 70), not own team (blue != red), not within 55
+        assert _classify_square_team(bgr) == "unknown"
+
+    def test_blue_own_team_gets_lenient_threshold(self):
+        """When blue IS my_team, the 90 threshold applies instead of 70."""
+        config.MY_TEAM_COLOR = "blue"
+        config.ENEMY_TEAMS = ["yellow", "green", "red"]
+
+        # Distance 85 from blue: shift B by 85 → (233, 145, 165)
+        bgr = (233, 145, 165)
+        assert _classify_square_team(bgr) == "blue"
+
+
+# ============================================================
+# Auto-derived enemy teams — set_territory_config
+# ============================================================
+
+class TestSetTerritoryConfig:
+    """Test that set_territory_config correctly derives ENEMY_TEAMS from my_team."""
+
+    @pytest.mark.parametrize("my_team, expected_enemies", [
+        ("yellow", ["green", "red", "blue"]),
+        ("red",    ["yellow", "green", "blue"]),
+        ("green",  ["yellow", "red", "blue"]),
+        ("blue",   ["yellow", "green", "red"]),
+    ])
+    def test_auto_derives_enemies(self, my_team, expected_enemies):
+        """set_territory_config(X) → ENEMY_TEAMS = all teams except X."""
+        set_territory_config(my_team)
+        assert config.MY_TEAM_COLOR == my_team
+        assert config.ENEMY_TEAMS == expected_enemies
+
+    def test_enemies_excludes_only_my_team(self):
+        """Exactly 3 enemies for any valid team."""
+        for team in ALL_TEAMS:
+            set_territory_config(team)
+            assert len(config.ENEMY_TEAMS) == 3
+            assert team not in config.ENEMY_TEAMS
+            assert set(config.ENEMY_TEAMS) | {team} == set(ALL_TEAMS)
+
+    def test_classification_changes_with_config(self):
+        """Switching my_team changes which colors get lenient thresholds.
+
+        A value at distance 85 from red only classifies when red is own team
+        (threshold 90), not when red is enemy (threshold 70).
+        """
+        # Distance 85 from red: (49, 85, 247-85) = (49, 85, 162)
+        bgr_near_red = (49, 85, 162)
+
+        # Red as own team → recognized (distance 85 < 90)
+        set_territory_config("red")
+        assert _classify_square_team(bgr_near_red) == "red"
+
+        # Red as enemy (my_team=yellow) → unknown (distance 85 > 70)
+        set_territory_config("yellow")
+        assert _classify_square_team(bgr_near_red) == "unknown"
+
+    def test_all_exact_colors_classified_with_all_enemies(self):
+        """With set_territory_config, all 4 exact border colors are recognized."""
+        for my_team in ALL_TEAMS:
+            set_territory_config(my_team)
+            for team_name, bgr in BORDER_COLORS.items():
+                result = _classify_square_team(bgr)
+                assert result == team_name, (
+                    f"my_team={my_team}: expected {team_name} for BGR={bgr}, "
+                    f"got {result}"
+                )
+
+
+# ============================================================
+# Red edge cases — observed values near threshold
+# ============================================================
+
+class TestRedEdgeCases:
+    """Test _classify_square_team with real red BGR values from the diagnostic
+    that were near the classification threshold.
+
+    Red reference: (49, 85, 247).
+    """
+
+    def test_red_distance_58_classifies_as_own_team(self):
+        """BGR=(50, 83, 189) at distance ~58 from red.
+
+        When red is own team (threshold 90): 58 < 90 → 'red'.
+        """
+        config.MY_TEAM_COLOR = "red"
+        config.ENEMY_TEAMS = ["yellow", "green", "blue"]
+        assert _classify_square_team((50, 83, 189)) == "red"
+
+    def test_red_distance_58_classifies_as_enemy(self):
+        """BGR=(50, 83, 189) at distance ~58 from red.
+
+        When red is enemy (threshold 70): 58 < 70 → 'red'.
+        """
+        config.MY_TEAM_COLOR = "yellow"
+        config.ENEMY_TEAMS = ["green", "red", "blue"]
+        assert _classify_square_team((50, 83, 189)) == "red"
+
+    def test_red_distance_88_classifies_as_own_team(self):
+        """BGR=(45, 83, 159) at distance ~88 from red.
+
+        When red is own team (threshold 90): 88 < 90 → 'red'.
+        """
+        config.MY_TEAM_COLOR = "red"
+        config.ENEMY_TEAMS = ["yellow", "green", "blue"]
+        assert _classify_square_team((45, 83, 159)) == "red"
+
+    def test_red_distance_88_fails_as_enemy(self):
+        """BGR=(45, 83, 159) at distance ~88 from red.
+
+        When red is enemy (threshold 70): 88 > 70 → 'unknown'.
+        This is a known classification gap: squares that are visually
+        red but dimmed or partially obscured get lost when red is enemy.
+        """
+        config.MY_TEAM_COLOR = "yellow"
+        config.ENEMY_TEAMS = ["green", "red", "blue"]
+        # Nearest team is red at ~88, but 88 > 70 (enemy threshold)
+        # and 88 > 55 (tight fallback), so it falls through to unknown
+        assert _classify_square_team((45, 83, 159)) == "unknown"
+
+    def test_red_distance_98_always_unknown(self):
+        """BGR=(43, 58, 153) at distance ~98 from red.
+
+        Distance 98 exceeds both own-team threshold (90) and enemy
+        threshold (70) → always 'unknown' regardless of config.
+        """
+        # As own team
+        config.MY_TEAM_COLOR = "red"
+        config.ENEMY_TEAMS = ["yellow", "green", "blue"]
+        assert _classify_square_team((43, 58, 153)) == "unknown"
+
+        # As enemy
+        config.MY_TEAM_COLOR = "yellow"
+        config.ENEMY_TEAMS = ["green", "red", "blue"]
+        assert _classify_square_team((43, 58, 153)) == "unknown"
+
+    @pytest.mark.parametrize("bgr, expected", [
+        # Solid red territory — distance 0
+        ((49, 85, 247), "red"),
+        # Slight variation — distance ~8
+        ((45, 80, 250), "red"),
+        # Moderate variation — distance ~30
+        ((49, 85, 217), "red"),
+        # Approaching enemy threshold — distance ~58
+        ((50, 83, 189), "red"),
+    ])
+    def test_red_gradient_as_enemy(self, bgr, expected):
+        """Red at various distances all within enemy threshold (70)."""
+        config.MY_TEAM_COLOR = "yellow"
+        config.ENEMY_TEAMS = ["green", "red", "blue"]
+        assert _classify_square_team(bgr) == expected
+
+
+# ============================================================
+# Clock overlay tolerance (row 0) — known classification gap
+# ============================================================
+
+class TestClockOverlayRow0:
+    """Test classification of dimmed colors from row 0 where the device
+    clock overlay reduces brightness.
+
+    These document known gaps in the current threshold system.
+    """
+
+    def test_dimmed_yellow_row0_is_unknown(self):
+        """BGR=(82, 175, 181) — dimmed yellow from row 0.
+
+        Nearest is green at ~73.7, yellow at ~79.3.  Both exceed the 70
+        threshold for enemies.  This is a KNOWN GAP — the clock overlay
+        dims colors enough to push them past classification thresholds.
+        """
+        config.MY_TEAM_COLOR = "red"
+        config.ENEMY_TEAMS = ["yellow", "green", "blue"]
+        # Currently classifies as unknown because nearest (green) is at ~73.7 > 70
+        assert _classify_square_team((82, 175, 181)) == "unknown"
+
+    def test_dimmed_yellow_row0_not_misclassified(self):
+        """Dimmed yellow should never be classified as green or blue.
+
+        Even though green is the nearest team at ~73.7, the threshold
+        prevents misclassification — better to be unknown than wrong.
+        """
+        config.MY_TEAM_COLOR = "red"
+        config.ENEMY_TEAMS = ["yellow", "green", "blue"]
+        result = _classify_square_team((82, 175, 181))
+        assert result != "green", "Dimmed yellow must not be misclassified as green"
+        assert result != "blue", "Dimmed yellow must not be misclassified as blue"
+
+    def test_row0_less_dimmed_yellow_still_classifies(self):
+        """BGR=(100, 210, 225) — mildly dimmed yellow at distance ~17.
+
+        Squares not directly under the clock are less affected and
+        should still classify correctly.
+        """
+        config.MY_TEAM_COLOR = "red"
+        config.ENEMY_TEAMS = ["yellow", "green", "blue"]
+        assert _classify_square_team((100, 210, 225)) == "yellow"
+
+    def test_row0_moderate_dim_at_yellow_threshold_boundary(self):
+        """BGR=(90, 195, 210) — moderately dimmed yellow.
+
+        Distance to yellow: sqrt((90-107)^2 + (195-223)^2 + (210-239)^2)
+                          = sqrt(289 + 784 + 841) = sqrt(1914) ≈ 43.7
+        Within enemy threshold (70) → should classify as yellow.
+        """
+        config.MY_TEAM_COLOR = "red"
+        config.ENEMY_TEAMS = ["yellow", "green", "blue"]
+        assert _classify_square_team((90, 195, 210)) == "yellow"
+
+
+# ============================================================
+# diagnose_grid — smoke test (mock-based)
+# ============================================================
+
+class TestDiagnoseGrid:
+    """Smoke test for diagnose_grid: verifies the function calls the right
+    dependencies in the right order without crashing.
+
+    All external I/O (ADB, vision, navigation) is mocked.
+    """
+
+    @patch("territory.navigate")
+    def test_aborts_on_navigation_failure(self, mock_nav, mock_device):
+        """If navigate to TERRITORY fails, diagnose_grid returns early."""
+        mock_nav.return_value = False
+
+        diagnose_grid(mock_device)
+
+        mock_nav.assert_called_once_with(Screen.TERRITORY, mock_device)
+
+    @patch("territory.navigate", return_value=True)
+    @patch("territory.load_screenshot", return_value=None)
+    @patch("territory.time.sleep")
+    def test_aborts_on_screenshot_failure(
+        self, mock_sleep, mock_screenshot, mock_nav, mock_device
+    ):
+        """If load_screenshot returns None, diagnose_grid returns early."""
+        diagnose_grid(mock_device)
+
+        mock_screenshot.assert_called_once_with(mock_device)
+
+    @patch("territory.cv2.imwrite")
+    @patch("territory.os.makedirs")
+    @patch("territory.navigate")
+    @patch("territory.load_screenshot")
+    @patch("territory.time.sleep")
+    def test_full_pipeline_runs(
+        self, mock_sleep, mock_screenshot, mock_nav, mock_makedirs,
+        mock_imwrite, mock_device
+    ):
+        """Happy path: navigate, screenshot, classify, save debug image, nav back."""
+        mock_nav.return_value = True
+
+        # Build a small test image with some known squares
+        image = _make_territory_image({
+            (5, 5): BORDER_COLORS["red"],
+            (5, 6): BORDER_COLORS["yellow"],
+            (10, 10): BORDER_COLORS["green"],
+        })
+        mock_screenshot.return_value = image
+
+        config.MY_TEAM_COLOR = "red"
+        config.ENEMY_TEAMS = ["yellow", "green", "blue"]
+
+        diagnose_grid(mock_device)
+
+        # Verify navigation: first to TERRITORY, then back to MAP
+        assert mock_nav.call_count == 2
+        mock_nav.assert_any_call(Screen.TERRITORY, mock_device)
+        mock_nav.assert_any_call(Screen.MAP, mock_device)
+
+        # Verify debug image was saved
+        mock_makedirs.assert_called_once_with("debug", exist_ok=True)
+        assert mock_imwrite.call_count == 1
+        saved_path = mock_imwrite.call_args[0][0]
+        assert "territory_diag_" in saved_path
+        assert saved_path.endswith(".png")
+
+    @patch("territory.cv2.imwrite")
+    @patch("territory.os.makedirs")
+    @patch("territory.navigate", return_value=True)
+    @patch("territory.load_screenshot")
+    @patch("territory.time.sleep")
+    def test_classifies_all_576_squares(
+        self, mock_sleep, mock_screenshot, mock_nav, mock_makedirs,
+        mock_imwrite, mock_device
+    ):
+        """diagnose_grid iterates all 24x24 = 576 squares (minus 4 throne)."""
+        # All-black image — every square should be unknown
+        image = _make_territory_image()
+        mock_screenshot.return_value = image
+
+        config.MY_TEAM_COLOR = "red"
+        config.ENEMY_TEAMS = ["yellow", "green", "blue"]
+
+        # diagnose_grid doesn't return data, but we can verify it doesn't crash
+        # on a full 576-square scan with an empty grid
+        diagnose_grid(mock_device)
+
+        # Should still save debug image and nav back
+        assert mock_imwrite.call_count == 1
+        assert mock_nav.call_count == 2
+
+    @patch("territory.cv2.imwrite")
+    @patch("territory.os.makedirs")
+    @patch("territory.navigate", return_value=True)
+    @patch("territory.load_screenshot")
+    @patch("territory.time.sleep")
+    def test_device_id_sanitized_in_filename(
+        self, mock_sleep, mock_screenshot, mock_nav, mock_makedirs,
+        mock_imwrite, mock_device
+    ):
+        """Device ID colons and dots are replaced with underscores in filename."""
+        image = _make_territory_image()
+        mock_screenshot.return_value = image
+
+        diagnose_grid(mock_device)
+
+        saved_path = mock_imwrite.call_args[0][0]
+        # mock_device is "127.0.0.1:9999" → "127_0_0_1_9999"
+        assert ":" not in saved_path
+        assert "127_0_0_1_9999" in saved_path

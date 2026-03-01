@@ -509,6 +509,31 @@ h3 { font-size: 15px; margin-bottom: 12px; color: #64d8ff; }
     color: #e0c0c0;
 }
 
+.action-chip-debug {
+    border-color: rgba(180,130,255,0.15);
+}
+
+.action-chip-debug:active {
+    background: rgba(180,130,255,0.08);
+    border-color: rgba(180,130,255,0.25);
+    color: #d8c8f0;
+}
+
+/* Debug page */
+.debug-result {
+    margin-top: 16px;
+    padding: 12px 16px;
+    background: rgba(180,130,255,0.04);
+    border: 1px solid rgba(180,130,255,0.1);
+    border-radius: 10px;
+    font-size: 12px;
+    color: #aab;
+    white-space: pre-wrap;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
 /* Bottom bar */
 .bottom-bar {
     display: flex;

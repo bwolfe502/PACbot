@@ -30,7 +30,7 @@ from actions import (attack, phantom_clash_attack, reinforce_throne, target, che
                      gather_gold, gather_gold_loop, occupy_tower,
                      get_quest_tracking_state)
 from territory import (attack_territory, auto_occupy_loop,
-                       open_territory_manager, sample_specific_squares)
+                       open_territory_manager, diagnose_grid)
 from botlog import get_logger
 from settings import SETTINGS_FILE, DEFAULTS, load_settings, save_settings
 from runners import (sleep_interval, run_auto_quest, run_auto_titan, run_auto_groot,
@@ -59,7 +59,7 @@ TASK_FUNCTIONS = {
     "Check Quests": check_quests,
     "Check Troops": troops_avail,
     "Check Screen": check_screen,
-    "Sample Specific Squares": sample_specific_squares,
+    "Diagnose Grid": diagnose_grid,
     "Mine Mithril": mine_mithril,
     "Gather Gold": gather_gold,
     "Reinforce Tower": occupy_tower,
@@ -1077,20 +1077,12 @@ def create_gui():
     ctk.CTkOptionMenu(teams_row, variable=my_team_var,
                       values=["yellow", "red", "blue", "green"],
                       command=lambda _: update_territory_config(),
-                      width=80, **_om_kw).pack(side=tk.LEFT, padx=(4, 12))
-    ctk.CTkLabel(teams_row, text="Attack:",
-                 font=ctk.CTkFont(family=_FONT_FAMILY, size=12),
-                 text_color=THEME["text_primary"]).pack(side=tk.LEFT)
-    enemy_var = tk.StringVar(value=settings["enemy_team"])
-    ctk.CTkOptionMenu(teams_row, variable=enemy_var,
-                      values=["green", "red", "blue", "yellow"],
-                      command=lambda _: update_territory_config(),
                       width=80, **_om_kw).pack(side=tk.LEFT, padx=(4, 6))
 
-    set_territory_config(settings["my_team"], [settings["enemy_team"]])
+    set_territory_config(settings["my_team"])
 
     def update_territory_config():
-        set_territory_config(my_team_var.get(), [enemy_var.get()])
+        set_territory_config(my_team_var.get())
         save_current_settings()
 
     def open_territory_mgr():
@@ -1138,7 +1130,6 @@ def create_gui():
             "pass_interval": int(pass_interval_var.get()) if pass_interval_var.get().isdigit() else 30,
             "pass_mode": pass_mode_var.get(),
             "my_team": my_team_var.get(),
-            "enemy_team": enemy_var.get(),
             "mode": mode_var.get(),
             "verbose_logging": verbose_var.get(),
             "eg_rally_own": eg_rally_own_var.get(),
@@ -1321,7 +1312,7 @@ def create_gui():
     add_debug_button(debug_tab, "Check Screen", check_screen)
     add_debug_button(debug_tab, "Test EG Positions", test_eg_positions)
     add_debug_button(debug_tab, "Attack Territory (Debug)", lambda dev: attack_territory(dev, debug=True))
-    add_debug_button(debug_tab, "Sample Specific Squares", sample_specific_squares)
+    add_debug_button(debug_tab, "Diagnose Grid", diagnose_grid)
     add_debug_button(debug_tab, "Mine Mithril", mine_mithril)
 
     ctk.CTkFrame(debug_tab, height=1, fg_color=THEME["border_subtle"]).pack(fill=tk.X, pady=6)
@@ -1677,7 +1668,6 @@ def create_gui():
                 pass_interval_var.set(str(s["pass_interval"]))
                 pass_mode_var.set(s["pass_mode"])
                 my_team_var.set(s["my_team"])
-                enemy_var.set(s["enemy_team"])
                 verbose_var.set(s.get("verbose_logging", False))
                 eg_rally_own_var.set(s.get("eg_rally_own", True))
                 titan_rally_own_var.set(s.get("titan_rally_own", True))

@@ -241,17 +241,17 @@ def _check_dead(screen, dead_img, device):
         return True
     return False
 
-def _find_green_pixel(screen, target_color, center_x=521, center_y=674, box_size=100, tolerance=20):
-    """Check a region for green pixels using numpy vectorization. Returns True if found."""
-    start_x = max(center_x - box_size // 2, 0)
-    end_x = min(center_x + box_size // 2, screen.shape[1])
-    start_y = max(center_y - box_size // 2, 0)
-    end_y = min(center_y + box_size // 2, screen.shape[0])
+def _find_green_pixel(screen, target_color, tolerance=20):
+    """Check the center of the screen for the green teleport circle.
 
-    region = screen[start_y:end_y:5, start_x:end_x:5].astype(np.int16)
+    Scans a large region (x:50-1000, y:100-800) to catch the circle regardless
+    of camera position.  Samples every 5th pixel for speed and requires at least
+    20 matching pixels to avoid false positives from small green UI elements.
+    """
+    region = screen[100:800:5, 50:1000:5].astype(np.int16)
     diff = np.abs(region - np.array(target_color))
     matches = np.all(diff < tolerance, axis=2)
-    return np.any(matches)
+    return int(np.sum(matches)) >= 20
 
 # Player name colors (BGR) for detecting other players at Evil Guards
 _PLAYER_NAME_BLUE = (255, 150, 66)    # #4296FF
@@ -281,21 +281,26 @@ def _detect_player_at_eg(screen, x, y, box_size=200, tolerance=25):
     return blue_matches >= 5 and gold_matches >= 3
 
 @timed_action("teleport")
-def teleport(device):
+def teleport(device, dry_run=False):
     """Teleport to a random location on the map.
 
     Pans camera randomly, long-presses to open context menu, taps TELEPORT,
     then checks for a green boundary circle (valid location). Repeats up to
     15 attempts or 90 seconds.
+
+    If dry_run=True, finds a valid green spot but does NOT tap USE — saves a
+    screenshot and cancels instead.  Use for testing without consuming a teleport.
     """
     log = get_logger("actions", device)
-    log.debug("Checking if all troops are home before teleporting...")
-    if not all_troops_home(device):
-        log.warning("Troops are not home! Cannot teleport. Aborting.")
-        return False
-
-    if config.AUTO_HEAL_ENABLED:
-        heal_all(device)
+    if not dry_run:
+        log.debug("Checking if all troops are home before teleporting...")
+        if not all_troops_home(device):
+            log.warning("Troops are not home! Cannot teleport. Aborting.")
+            return False
+        if config.AUTO_HEAL_ENABLED:
+            heal_all(device)
+    else:
+        log.info("Teleport DRY RUN — skipping troop check and heal")
 
     if check_screen(device) != Screen.MAP:
         log.warning("Not on map_screen, can't teleport")
@@ -335,15 +340,16 @@ def teleport(device):
         attempt_count += 1
         attempt_start = time.time()
 
-        # Pan camera randomly
+        # Pan camera randomly (horizontal + vertical)
         distance = random.randint(200, 400)
-        direction = random.choice([-1, 1])
-        end_x = max(100, min(980, 540 + distance * direction))
-        pan_dir = "right" if direction == 1 else "left"
-        log.debug("Attempt #%d/%d — pan %s %dpx (end_x=%d)",
-                  attempt_count, max_attempts, pan_dir, distance, end_x)
+        dir_x = random.choice([-1, 1])
+        dir_y = random.choice([-1, 0, 1])
+        end_x = max(100, min(980, 540 + distance * dir_x))
+        end_y = max(500, min(1400, 960 + distance * dir_y))
+        log.debug("Attempt #%d/%d — pan to (%d, %d)",
+                  attempt_count, max_attempts, end_x, end_y)
 
-        adb_swipe(device, 540, 960, end_x, 960, 300)
+        adb_swipe(device, 540, 960, end_x, end_y, 300)
         time.sleep(1)
 
         # Long press to open context menu
@@ -374,12 +380,19 @@ def teleport(device):
                 found_green = True
                 attempt_elapsed = time.time() - attempt_start
                 total_elapsed = time.time() - start_time
+                save_failure_screenshot(device, "teleport_success")
+
+                if dry_run:
+                    log.info("GREEN CIRCLE FOUND (dry run) on attempt #%d "
+                             "(%d checks, %.1fs). NOT confirming — canceling.",
+                             attempt_count, green_checks, total_elapsed)
+                    tap_image("cancel.png", device)
+                    return True
+
                 log.info("Green circle found on attempt #%d (%d checks, "
                          "attempt %.1fs, total %.1fs). Confirming...",
                          attempt_count, green_checks, attempt_elapsed,
                          total_elapsed)
-                # Save success screenshot for calibration data
-                save_failure_screenshot(device, "teleport_success")
                 logged_tap(device, 760, 1700, "tp_confirm")
                 time.sleep(2)
                 log.info("Teleport confirmed after %d attempt(s), %.1fs total",

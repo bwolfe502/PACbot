@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+import os
 import time
 import random
 
@@ -628,48 +629,269 @@ def auto_occupy_loop(device):
 # DEBUG FUNCTIONS
 # ============================================================
 
-def sample_specific_squares(device):
-    """Sample specific squares to understand current colors"""
+def diagnose_grid(device):
+    """Full grid diagnostic — classifies all 576 squares, saves debug image and report.
+
+    Navigates to territory screen, screenshots, then runs the same border-color
+    classification pipeline as attack_territory.  Outputs:
+      - Per-team counts and grid map to INFO log
+      - Unknown squares with BGR values to DEBUG log
+      - Color-coded debug image to debug/territory_diag_{device}.png
+    """
     log = get_logger("territory", device)
+
+    # Navigate to territory screen
+    if not navigate(Screen.TERRITORY, device):
+        log.warning("diagnose_grid: failed to navigate to territory screen")
+        return
+
+    time.sleep(1)
     image = load_screenshot(device)
+    if image is None:
+        log.error("diagnose_grid: failed to load screenshot")
+        return
 
-    def get_square_color(row, col):
-        x = int(GRID_OFFSET_X + col * SQUARE_SIZE + SQUARE_SIZE / 4)
-        y = int(GRID_OFFSET_Y + row * SQUARE_SIZE + SQUARE_SIZE / 4)
-        w = int(SQUARE_SIZE / 2)
-        h = int(SQUARE_SIZE / 2)
+    debug_img = image.copy()
 
-        square_sample = image[y:y+h, x:x+w]
-        avg_color = cv2.mean(square_sample)[:3]
+    # --- Classify every square ---------------------------------------------------
+    team_counts = {}          # team_name -> count
+    unknown_details = []      # (row, col, bgr_tuple, best_team, distance)
+    grid_map = []             # list of 24 strings, each 24 chars
 
-        return avg_color
+    # Dot colors for the debug image (BGR)
+    DOT_COLORS = {
+        "yellow": (0, 220, 255),
+        "green":  (0, 200, 0),
+        "red":    (0, 0, 255),
+        "blue":   (255, 150, 100),
+        "unknown": (128, 128, 128),
+    }
+    TEAM_CHAR = {"yellow": "Y", "green": "G", "red": "R", "blue": "B", "unknown": "?"}
 
-    log.debug("=== SAMPLING KNOWN SQUARES ===")
+    for row in range(GRID_HEIGHT):
+        row_chars = []
+        for col in range(GRID_WIDTH):
+            if (row, col) in THRONE_SQUARES:
+                row_chars.append("T")
+                continue
 
-    log.debug("Known YELLOW squares:")
-    yellow_samples = [(0,0), (0,5), (5,5), (10,10)]
-    for r, c in yellow_samples:
-        color = get_square_color(r, c)
-        b, g, red = [int(x) for x in color]
-        log.debug("  (%d,%d): B=%d G=%d R=%d", r, c, b, g, red)
+            bgr = _get_border_color(image, row, col)
+            team = _classify_square_team(bgr)
+            team_counts[team] = team_counts.get(team, 0) + 1
+            row_chars.append(TEAM_CHAR.get(team, "?"))
 
-    log.debug("Known GREEN squares:")
-    green_samples = [(0,12), (0,18), (5,20), (10,23)]
-    for r, c in green_samples:
-        color = get_square_color(r, c)
-        b, g, red = [int(x) for x in color]
-        log.debug("  (%d,%d): B=%d G=%d R=%d", r, c, b, g, red)
+            # Collect unknown details for threshold tuning
+            if team == "unknown":
+                # Compute closest known color distance
+                best_team = "unknown"
+                best_dist = float("inf")
+                for t, (tb, tg, tr) in BORDER_COLORS.items():
+                    d = ((bgr[0]-tb)**2 + (bgr[1]-tg)**2 + (bgr[2]-tr)**2)**0.5
+                    if d < best_dist:
+                        best_dist = d
+                        best_team = t
+                unknown_details.append((row, col, tuple(int(v) for v in bgr),
+                                        best_team, round(best_dist, 1)))
 
-    log.debug("Known RED squares:")
-    red_samples = [(12,0), (15,5), (20,10), (23,5)]
-    for r, c in red_samples:
-        color = get_square_color(r, c)
-        b, g, red = [int(x) for x in color]
-        log.debug("  (%d,%d): B=%d G=%d R=%d", r, c, b, g, red)
+            # Draw colored dot on debug image
+            cx, cy = _get_square_center(row, col)
+            color = DOT_COLORS.get(team, DOT_COLORS["unknown"])
+            cv2.circle(debug_img, (cx, cy), 6, color, -1)
+            cv2.circle(debug_img, (cx, cy), 6, (0, 0, 0), 1)  # outline
 
-    log.debug("Known BLUE squares:")
-    blue_samples = [(12,13), (18,18), (20,20), (23,20)]
-    for r, c in blue_samples:
-        color = get_square_color(r, c)
-        b, g, red = [int(x) for x in color]
-        log.debug("  (%d,%d): B=%d G=%d R=%d", r, c, b, g, red)
+        grid_map.append("".join(row_chars))
+
+    # --- Flag & adjacency stats (enemy squares only) -----------------------------
+    enemy_teams = set(config.ENEMY_TEAMS)
+    enemy_count = sum(v for k, v in team_counts.items() if k in enemy_teams)
+    flagged = 0
+    adjacent = 0
+    valid_targets = 0
+    for row in range(GRID_HEIGHT):
+        for col in range(GRID_WIDTH):
+            if (row, col) in THRONE_SQUARES:
+                continue
+            bgr = _get_border_color(image, row, col)
+            team = _classify_square_team(bgr)
+            if team in enemy_teams:
+                is_adj = _is_adjacent_to_my_territory(image, row, col)
+                has_flg = _has_flag(image, row, col)
+                if is_adj:
+                    adjacent += 1
+                    if has_flg:
+                        flagged += 1
+                        # Mark flagged on debug image
+                        cx, cy = _get_square_center(row, col)
+                        cv2.line(debug_img, (cx-7, cy-7), (cx+7, cy+7), (0, 0, 200), 2)
+                        cv2.line(debug_img, (cx-7, cy+7), (cx+7, cy-7), (0, 0, 200), 2)
+                    else:
+                        valid_targets += 1
+                        # Mark valid targets on debug image
+                        cx, cy = _get_square_center(row, col)
+                        cv2.circle(debug_img, (cx, cy), 9, (0, 255, 0), 2)
+
+    # --- Save debug image --------------------------------------------------------
+    safe_device = device.replace(":", "_").replace(".", "_")
+    debug_path = os.path.join("debug", f"territory_diag_{safe_device}.png")
+    os.makedirs("debug", exist_ok=True)
+    cv2.imwrite(debug_path, debug_img)
+
+    # --- Log results -------------------------------------------------------------
+    log.info("=== TERRITORY GRID DIAGNOSTIC ===")
+    log.info("Team config: my_team=%s, enemies=%s", config.MY_TEAM_COLOR, config.ENEMY_TEAMS)
+    log.info("Classification counts: %s", dict(sorted(team_counts.items())))
+    log.info("Enemy: %d total, %d adjacent, %d flagged, %d valid targets",
+             enemy_count, adjacent, flagged, valid_targets)
+    log.info("Grid map (Y=yellow G=green R=red B=blue ?=unknown T=throne):")
+    for i, row_str in enumerate(grid_map):
+        log.info("  row %2d: %s", i, row_str)
+
+    if unknown_details:
+        log.info("Unknown squares (%d) — nearest color & distance:", len(unknown_details))
+        for row, col, bgr, nearest, dist in sorted(unknown_details, key=lambda x: x[4]):
+            log.info("  (%2d,%2d) BGR=%-18s nearest=%-7s dist=%.1f",
+                     row, col, bgr, nearest, dist)
+    else:
+        log.info("No unknown squares — all 576 classified!")
+
+    log.info("Debug image saved: %s", debug_path)
+    log.info("=== END DIAGNOSTIC ===")
+
+    # Return to map screen
+    navigate(Screen.MAP, device)
+
+
+# Backwards-compatible alias
+sample_specific_squares = diagnose_grid
+
+
+# ============================================================
+# TERRITORY COORDINATE SCANNER
+# ============================================================
+
+# Region where world coordinates appear on MAP screen (bottom area)
+# Initial broad region — will narrow after first calibration run
+_COORD_OCR_REGION = (0, 1750, 1080, 1870)
+
+_COORD_DB_PATH = os.path.join("data", "territory_coordinates.json")
+
+
+def _parse_coordinates(text):
+    """Extract (x, y) world coordinates from OCR text like 'x:150, y:7050'.
+
+    Handles common OCR artifacts: 'X' vs 'x', missing colons, extra spaces.
+    Returns (x, y) tuple or None if parsing fails.
+    """
+    import re
+    # Normalize common OCR issues
+    text = text.replace(" ", "").lower()
+    match = re.search(r"x[:\.]?(\d+)[,\s]*y[:\.]?(\d+)", text)
+    if match:
+        return int(match.group(1)), int(match.group(2))
+    return None
+
+
+def scan_territory_coordinates(device, squares=None, save_screenshots=True):
+    """Scan territory squares to map grid positions to world coordinates.
+
+    Clicks each territory square, which teleports to the tower's map location,
+    then OCR-reads the world coordinates from the MAP screen.
+
+    Args:
+        device: ADB device ID
+        squares: List of (row, col) tuples to scan. None = all non-throne squares.
+        save_screenshots: Save a screenshot per square for calibration/debugging.
+
+    Results are saved to data/territory_coordinates.json.
+    """
+    from vision import load_screenshot, read_text
+
+    log = get_logger("territory", device)
+    log.info("=== TERRITORY COORDINATE SCAN ===")
+
+    # Load existing database if any
+    coord_db = {}
+    if os.path.isfile(_COORD_DB_PATH):
+        try:
+            with open(_COORD_DB_PATH, "r") as f:
+                import json
+                coord_db = json.load(f)
+        except Exception:
+            pass
+
+    if squares is None:
+        squares = [(r, c) for r in range(GRID_HEIGHT) for c in range(GRID_WIDTH)
+                    if (r, c) not in THRONE_SQUARES]
+
+    log.info("Scanning %d squares...", len(squares))
+    scanned = 0
+    failed = 0
+
+    for row, col in squares:
+        # Navigate to territory screen
+        if not navigate(Screen.TERRITORY, device):
+            log.warning("Failed to navigate to territory, aborting scan")
+            break
+
+        time.sleep(0.5)
+
+        # Click the square
+        cx, cy = _get_square_center(row, col)
+        log.debug("Clicking square (%d, %d) at pixel (%d, %d)", row, col, cx, cy)
+        adb_tap(device, cx, cy)
+
+        # Wait for MAP transition
+        time.sleep(2)
+
+        # Take screenshot
+        screen = load_screenshot(device)
+        if screen is None:
+            log.warning("Screenshot failed for square (%d, %d)", row, col)
+            failed += 1
+            continue
+
+        # Save debug screenshot if requested
+        if save_screenshots:
+            safe_device = device.replace(":", "_").replace(".", "_")
+            shot_dir = os.path.join("debug", "territory_coords")
+            os.makedirs(shot_dir, exist_ok=True)
+            shot_path = os.path.join(shot_dir, f"{safe_device}_{row:02d}_{col:02d}.png")
+            cv2.imwrite(shot_path, screen)
+
+        # OCR the coordinate region
+        text = read_text(screen, region=_COORD_OCR_REGION,
+                         allowlist="0123456789xy:,. ", device=device)
+        coords = _parse_coordinates(text)
+
+        key = f"{row},{col}"
+        if coords:
+            coord_db[key] = {"x": coords[0], "y": coords[1]}
+            log.info("  (%2d,%2d) → x:%d, y:%d", row, col, coords[0], coords[1])
+            scanned += 1
+        else:
+            log.warning("  (%2d,%2d) → OCR failed: '%s'", row, col, text)
+            coord_db[key] = {"x": None, "y": None, "ocr_raw": text}
+            failed += 1
+
+    # Save database
+    os.makedirs(os.path.dirname(_COORD_DB_PATH), exist_ok=True)
+    import json
+    with open(_COORD_DB_PATH, "w") as f:
+        json.dump(coord_db, f, indent=2, sort_keys=True)
+
+    log.info("Scan complete: %d succeeded, %d failed", scanned, failed)
+    log.info("Database saved to %s (%d total entries)", _COORD_DB_PATH, len(coord_db))
+    log.info("=== END COORDINATE SCAN ===")
+
+    # Return to map
+    navigate(Screen.MAP, device)
+
+
+def scan_test_squares(device):
+    """Quick scan of just the 4 corner squares to calibrate OCR region.
+
+    Run this first to verify coordinate reading works before doing a full scan.
+    Screenshots saved to debug/territory_coords/ for visual inspection.
+    """
+    corners = [(0, 0), (0, 23), (23, 0), (23, 23)]
+    scan_territory_coordinates(device, squares=corners, save_screenshots=True)

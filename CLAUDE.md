@@ -21,7 +21,7 @@ Runs on Windows with BlueStacks or MuMu Player emulators. GUI built with tkinter
 | `vision.py` | Screenshots, template matching, OCR, ADB input | `load_screenshot`, `find_image`, `find_all_matches`, `tap_image`, `wait_for_image_and_tap`, `read_text`, `read_number`, `read_ap`, `adb_tap`, `adb_swipe`, `adb_keyevent`, `timed_wait`, `tap`, `logged_tap`, `get_last_best`, `save_failure_screenshot` |
 | `navigation.py` | Screen detection + state-machine navigation | `check_screen`, `navigate` |
 | `troops.py` | Troop counting (pixel), status model (OCR), healing | `troops_avail`, `all_troops_home`, `heal_all`, `read_panel_statuses`, `get_troop_status`, `detect_selected_troop`, `capture_portrait`, `store_portrait`, `identify_troop`, `TroopAction`, `TroopStatus`, `DeviceTroopSnapshot` |
-| `territory.py` | Territory grid analysis + auto-occupy | `attack_territory`, `auto_occupy_loop`, `open_territory_manager`, `sample_specific_squares` |
+| `territory.py` | Territory grid analysis + auto-occupy | `attack_territory`, `auto_occupy_loop`, `open_territory_manager`, `diagnose_grid`, `scan_territory_coordinates`, `scan_test_squares` |
 | `config.py` | Global mutable state, enums, constants | `QuestType`, `RallyType`, `Screen`, ADB path, thresholds, team colors, `alert_queue` |
 | `devices.py` | ADB device detection + emulator window mapping | `auto_connect_emulators`, `get_devices`, `get_emulator_instances` |
 | `botlog.py` | Logging, metrics, timing | `setup_logging`, `get_logger`, `set_console_verbose`, `StatsTracker`, `timed_action`, `stats`, `BOT_VERSION` |
@@ -94,6 +94,7 @@ Screen:    MAP, BATTLE_LIST, ALLIANCE_QUEST, TROOP_DETAIL, TERRITORY,
 | `AP_COST_EVIL_GUARD` | 70 | AP cost per evil guard rally |
 | `MAX_CONSECUTIVE_ERRORS` | 5 | Stop task after N consecutive action exceptions |
 | `MAX_CONSECUTIVE_NAV_FAILURES` | 10 | Stop task after N consecutive navigate() failures |
+| `ALL_TEAMS` | ["yellow", "green", "red", "blue"] | All territory team colors |
 
 ## Mutable Global State (config.py)
 
@@ -104,7 +105,7 @@ All session-scoped, reset on restart:
 - `MIN_TROOPS_AVAILABLE` — Minimum troop threshold
 - `AUTO_HEAL_ENABLED`, `AUTO_RESTORE_AP_ENABLED` — Feature toggles
 - `DEVICE_STATUS[device]` — Current status message shown in GUI
-- `MY_TEAM_COLOR`, `ENEMY_TEAMS` — Territory team config
+- `MY_TEAM_COLOR`, `ENEMY_TEAMS` — Territory team config (`set_territory_config(my_team)` auto-derives enemies from `ALL_TEAMS`)
 - `running_tasks` — Dict of active task_key → threading.Event (stop signals)
 - `auto_occupy_running`, `auto_occupy_thread` — Territory auto-occupy state
 - `MITHRIL_ENABLED`, `MITHRIL_INTERVAL`, `LAST_MITHRIL_TIME`, `MITHRIL_DEPLOY_TIME` — Mithril mining state
@@ -196,6 +197,27 @@ State machine via `navigate(target_screen, device)`:
 - Adjacency check: only attack squares bordering own territory
 - `MANUAL_ATTACK_SQUARES` / `MANUAL_IGNORE_SQUARES` override auto-detection
 - `open_territory_manager(device)`: Tkinter window for visual square selection (click to cycle: none → attack → ignore)
+- `diagnose_grid(device)`: diagnostic tool — screenshots all 576 squares, classifies each using the same
+  `_get_border_color` + `_classify_square_team` pipeline as `attack_territory`, logs a 24-row character grid
+  (Y/G/R/B/?/T), team counts, unknown BGR values with nearest-color distances, and saves annotated debug
+  image to `debug/territory_diag_{device}.png`. `sample_specific_squares` is retained as an alias for
+  backward compatibility.
+
+### Territory Coordinate Scanner (territory.py)
+Maps grid squares to world coordinates by clicking each square (which teleports to its tower location)
+and OCR-reading the coordinates from the MAP screen.
+
+- `_COORD_OCR_REGION = (0, 1750, 1080, 1870)` — OCR crop region for coordinate text on MAP screen
+- `_COORD_DB_PATH = "data/territory_coordinates.json"` — persistent coordinate database
+- `_parse_coordinates(text)` — extracts `(x, y)` from OCR text like `"x:150, y:7050"`, handles common artifacts
+- `scan_territory_coordinates(device, squares=None, save_screenshots=True)` — full scan: navigates to
+  TERRITORY, clicks each square, OCR-reads coordinates, saves to JSON database. Merges with existing data.
+  Screenshots saved to `debug/territory_coords/` for calibration. Defaults to all non-throne squares (572).
+- `scan_test_squares(device)` — quick calibration: scans only 4 corner squares `(0,0), (0,23), (23,0), (23,23)`
+
+**Coordinate patterns**: Column correlates with world X (col 0 ~ 150, col 23 ~ 7050). Row correlates
+inversely with world Y (row 0 ~ 7050, row 23 ~ 150-200). ~300 world units per grid step, but not uniform
+due to terrain. Mountain passes are strategic locations not on the territory grid.
 
 ### Rally Owner Blacklist (actions/rallies.py)
 - `_ocr_rally_owner()` reads "{Name}'s Troop" from war screen card
@@ -243,9 +265,9 @@ in a background thread — both share the same process (`config.running_tasks`, 
 - `AUTO_RUNNERS` dict maps auto-mode keys → runner lambdas
 - `TASK_FUNCTIONS` dict maps one-shot action names → callable functions
 - Device list cached for 15s (`_DEVICE_CACHE_TTL`) to avoid spamming ADB on every poll
-- CSS cache busting: `style.css?v=N` in `base.html` — bump on every CSS change
+- CSS cache busting: `style.css?v=19` in `base.html` — bump on every CSS change
 
-**Pages**: Dashboard (`/`), Settings (`/settings`), Logs (`/logs`)
+**Pages**: Dashboard (`/`), Settings (`/settings`), Debug (`/debug`), Logs (`/logs`)
 
 **API endpoints**:
 - `GET /api/status` — device statuses, troop snapshots, quest tracking, active tasks (polled every 3s)
@@ -260,7 +282,7 @@ in a background thread — both share the same process (`config.running_tasks`, 
 **Dashboard UI components**:
 - **Device card**: status dot (pulsing green when active), status text (color-coded), troop slots, quest pills
 - **Auto mode toggles**: iOS-style toggle switches in 2-column grid, grouped by category (Combat/Farming/Events)
-- **Action chips**: minimal bordered buttons in 3-column grid, farm actions (blue accent) and war actions (red accent)
+- **Action chips**: minimal bordered buttons in 3-column grid, farm actions (blue accent), war actions (red accent), debug actions (purple accent, `.action-chip-debug`)
 - **Running tasks list**: active task names with circular stop (×) buttons
 - **Bottom bar**: Stop All, Refresh, Restart — three equal compact buttons
 
@@ -268,7 +290,7 @@ in a background thread — both share the same process (`config.running_tasks`, 
 - Broken Lands (`bl`): Combat (Pass Battle, Occupy Towers, Reinforce Throne) + Farming (Auto Quest, Rally Titans, Mine Mithril)
 - Home Server (`rw`): Events (Join Groot) + Farming (Rally Titans, Mine Mithril) + Combat (Reinforce Throne)
 
-**Templates**: `base.html` (nav, shared JS), `index.html` (dashboard), `settings.html`, `logs.html`
+**Templates**: `base.html` (nav, shared JS), `index.html` (dashboard), `settings.html`, `debug.html` (debug actions), `logs.html`
 
 ### Device Status System (config.py + all runners)
 `config.DEVICE_STATUS[device]` holds the current status string displayed in both the tkinter GUI
@@ -305,11 +327,13 @@ and the web dashboard. Updated via `config.set_device_status(device, msg)`, clea
 | `debug/failures/` | Failure screenshots | Persistent, capped at 200 |
 | `stats/` | Session stats JSON | Auto-saved every 5min, keeps 30 sessions |
 | `debug/` | Debug screenshots (navigation) | Rolling, capped at `DEBUG_SCREENSHOT_MAX` |
+| `debug/territory_coords/` | Coordinate scan screenshots | Per-square, overwritten on rescan |
+| `data/` | Territory coordinate database (`territory_coordinates.json`) | Persistent, merged on rescan |
 
 ## Tests
 
 ```bash
-py -m pytest          # run all ~538 tests
+py -m pytest          # run all ~571 tests
 py -m pytest -x       # stop on first failure
 py -m pytest -k name  # filter by test name
 ```
@@ -332,7 +356,7 @@ No fixtures require a running emulator — all use mocked ADB/vision.
 | `test_check_quests_helpers.py` | `_deduplicate_quests`, `_get_actionable_quests` (`actions.quests`) |
 | `test_classify_quest.py` | `_classify_quest_text` OCR classification (all QuestType values) (`actions.quests`) |
 | `test_combat.py` | `_check_dead`, `_find_green_pixel`, `_detect_player_at_eg`, `teleport` (happy path, timeout, dead detection, cancel) (`actions.combat`) |
-| `test_territory.py` | `_classify_square_team` (exact/noisy colors, thresholds, team configs), `_get_border_color` (sampling, clock avoidance), `_has_flag` (red pixel detection), `_is_adjacent_to_my_territory` (adjacency, throne, edges), `attack_territory` (full workflow), `auto_occupy_loop` (cycle, stop signal) (`territory`) |
+| `test_territory.py` | `_classify_square_team` (exact/noisy colors, thresholds, team configs), `_get_border_color` (sampling, clock avoidance), `_has_flag` (red pixel detection), `_is_adjacent_to_my_territory` (adjacency, throne, edges), `attack_territory` (full workflow), `auto_occupy_loop` (cycle, stop signal), blue calibration (observed values, boundary distances), `set_territory_config` (auto-derived enemies, threshold changes), red edge cases (near-threshold values), clock overlay row 0 (dimming gaps), `diagnose_grid` (smoke tests) (`territory`) |
 | `test_gather_gold.py` | Gather gold flow (gather.png template tap, depart verification, retry logic), loop troop deployment with retry (`actions.farming`) |
 | `test_tower_quest.py` | Tower/fortress quest occupy, recall, navigation (`actions.quests`) |
 | `test_settings_validation.py` | `validate_settings` — type checks, range/choice validation, device_troops, warnings, schema sync |
@@ -396,8 +420,10 @@ PACbot/
 │       ├── base.html    # Nav, shared JS (fmtTime, quest labels, action classes)
 │       ├── index.html   # Dashboard: device cards, toggles, actions, running list
 │       ├── settings.html # Settings form
+│       ├── debug.html   # Debug actions (Check Screen, Check Troops, Diagnose Grid, Scan Corner Coords)
 │       └── logs.html    # Log viewer
-├── tests/               # pytest suite (~526 tests)
+├── data/                # Persistent data files (territory coordinates)
+├── tests/               # pytest suite (~571 tests)
 ├── logs/                # Log files
 ├── stats/               # Session stats JSON
 └── debug/               # Debug screenshots

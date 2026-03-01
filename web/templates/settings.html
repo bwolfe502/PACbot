@@ -212,15 +212,7 @@
                 </select>
             </label>
         </div>
-        <div class="setting-row">
-            <label>Enemy Team:
-                <select name="enemy_team" class="select-sm">
-                    {% for color in ['yellow', 'red', 'blue', 'green'] %}
-                    <option value="{{ color }}" {% if settings.enemy_team == color %}selected{% endif %}>{{ color|capitalize }}</option>
-                    {% endfor %}
-                </select>
-            </label>
-        </div>
+        <!-- Enemy teams auto-derived: all teams except my_team -->
     </div>
 
     <!-- Device Troops -->

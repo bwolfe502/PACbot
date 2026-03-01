@@ -7,7 +7,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="theme-color" content="#1a1a2e">
     <title>PACbot{% block title_suffix %}{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=18">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=19">
 </head>
 <body>
     <nav>
@@ -15,6 +15,7 @@
         <div class="nav-links">
             <a href="/" class="{% if request.path == '/' %}active{% endif %}">Dashboard</a>
             <a href="/settings" class="{% if request.path == '/settings' %}active{% endif %}">Settings</a>
+            <a href="/debug" class="{% if request.path == '/debug' %}active{% endif %}">Debug</a>
             <a href="/logs" class="{% if request.path == '/logs' %}active{% endif %}">Logs</a>
         </div>
     </nav>

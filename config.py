@@ -208,8 +208,9 @@ def get_device_lock(device):
             _device_locks[device] = threading.Lock()
         return _device_locks[device]
 
+ALL_TEAMS = ["yellow", "green", "red", "blue"]
 MY_TEAM_COLOR = "red"
-ENEMY_TEAMS = ["yellow"]
+ENEMY_TEAMS = ["yellow", "green", "blue"]
 running_tasks = {}
 DEVICE_STATUS = {}   # {device_id: "status message"} — shown in GUI
 
@@ -245,7 +246,7 @@ BORDER_COLORS = {
     "yellow": (107, 223, 239),
     "green":  (115, 219, 132),
     "red":    (49, 85, 247),
-    "blue":   (214, 154, 132)
+    "blue":   (148, 145, 165)  # recalibrated from live diagnostic data 2026-02-28
 }
 
 # ============================================================
@@ -280,7 +281,7 @@ SETTINGS_RULES = {
     # Strings — type + allowed values
     "pass_mode":             {"type": str, "choices": ["Rally Joiner", "Rally Starter"]},
     "my_team":               {"type": str, "choices": ["yellow", "red", "blue", "green"]},
-    "enemy_team":            {"type": str, "choices": ["yellow", "red", "blue", "green"]},
+    "enemy_team":            {"type": str, "choices": ["yellow", "red", "blue", "green"]},  # legacy — ignored, enemies auto-derived from my_team
     "mode":                  {"type": str, "choices": ["bl", "rw"]},
 }
 
@@ -416,9 +417,9 @@ def set_gather_options(enabled, mine_level, max_troops):
     _log.info("Gather config: enabled=%s, mine_level=%d, max_troops=%d",
               GATHER_ENABLED, GATHER_MINE_LEVEL, GATHER_MAX_TROOPS)
 
-def set_territory_config(my_team, enemy_teams):
-    """Set which team you are and which teams to attack"""
+def set_territory_config(my_team):
+    """Set which team you are; all other teams become enemies automatically."""
     global MY_TEAM_COLOR, ENEMY_TEAMS
     MY_TEAM_COLOR = my_team
-    ENEMY_TEAMS = enemy_teams
-    _log.info("Territory config: My team = %s, Attacking = %s", my_team, enemy_teams)
+    ENEMY_TEAMS = [t for t in ALL_TEAMS if t != my_team]
+    _log.info("Territory config: My team = %s, Enemies = %s", my_team, ENEMY_TEAMS)
