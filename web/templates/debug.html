@@ -3,6 +3,14 @@
 
 {% block content %}
 
+<div class="section-header">Screenshot</div>
+<div class="action-grid">
+{% for dev in devices %}
+<button class="action-chip action-chip-debug" onclick="takeScreenshot('{{ dev.id }}')">Screenshot {{ dev.name }}</button>
+{% endfor %}
+</div>
+
+
 <div class="section-header">Debug Actions</div>
 <div class="action-grid">
 {% for name in debug_actions %}
@@ -31,6 +39,21 @@
 </div>
 {% endif %}
 
+<!-- Logs -->
+<div class="section-header" style="margin-top:24px">Logs</div>
+<div class="log-controls">
+    <button class="btn btn-sm" onclick="refreshLogs()">Refresh</button>
+    <label class="setting-row" style="border:none; padding:0">
+        <input type="checkbox" id="auto-scroll" checked>
+        Auto-scroll
+    </label>
+</div>
+<div class="log-viewer" id="log-viewer">
+{% for line in log_lines %}
+<div class="log-line">{{ line }}</div>
+{% endfor %}
+</div>
+
 {% endblock %}
 
 {% block scripts %}
@@ -50,6 +73,40 @@ function updateDeviceForms() {
         if (input) input.value = val;
     });
 }
-document.addEventListener('DOMContentLoaded', updateDeviceForms);
+
+function takeScreenshot(device) {
+    window.location.href = '/api/screenshot?device=' + encodeURIComponent(device) + '&download=1';
+}
+
+var logViewer = document.getElementById('log-viewer');
+
+function scrollToBottom() {
+    if (document.getElementById('auto-scroll').checked) {
+        logViewer.scrollTop = logViewer.scrollHeight;
+    }
+}
+
+function refreshLogs() {
+    fetch('/api/logs')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            logViewer.textContent = '';
+            data.lines.forEach(function(line) {
+                var div = document.createElement('div');
+                div.className = 'log-line';
+                div.textContent = line;
+                logViewer.appendChild(div);
+            });
+            scrollToBottom();
+        })
+        .catch(function() {});
+}
+
+setInterval(refreshLogs, 5000);
+
+document.addEventListener('DOMContentLoaded', function() {
+    updateDeviceForms();
+    scrollToBottom();
+});
 </script>
 {% endblock %}

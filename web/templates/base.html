@@ -7,22 +7,23 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="theme-color" content="#1a1a2e">
     <title>PACbot{% block title_suffix %}{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=21">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=26">
 </head>
 <body class="{% block body_class %}{% endblock %}">
     <nav>
         <a href="/" class="nav-brand">PACbot</a>
         <div class="nav-links">
             <a href="/" class="{% if request.path == '/' %}active{% endif %}">Dashboard</a>
-            <a href="/settings" class="{% if request.path == '/settings' %}active{% endif %}">Settings</a>
-            <a href="/debug" class="{% if request.path == '/debug' %}active{% endif %}">Debug</a>
-            <a href="/territory" class="{% if request.path == '/territory' %}active{% endif %}">Territory</a>
-            <a href="/logs" class="{% if request.path == '/logs' %}active{% endif %}">Logs</a>
+            <a href="/settings" class="{% if request.path == '/settings' or request.path == '/territory' %}active{% endif %}">Settings</a>
         </div>
+        <button type="button" class="nav-restart" id="restart-btn" onclick="confirmRestart()">Restart</button>
     </nav>
     <main>
         {% block content %}{% endblock %}
     </main>
+    <footer class="page-footer">
+        <a href="/debug" class="footer-debug-link">Debug</a>
+    </footer>
     <script>
     function fmtTime(sec) {
         if (sec == null) return '';
@@ -40,6 +41,22 @@
         'Rallying': 'troop-rallying', 'Defending': 'troop-defending',
         'Marching': 'troop-marching', 'Gathering': 'troop-gathering'
     };
+    function confirmRestart() {
+        if (!confirm('Restart PACbot? All running tasks will be stopped.')) return;
+        var btn = document.getElementById('restart-btn');
+        btn.disabled = true;
+        btn.textContent = 'Restarting...';
+        fetch('/api/restart', {method: 'POST'}).catch(function() {});
+        function waitForServer() {
+            fetch('/api/status')
+                .then(function(r) {
+                    if (r.ok) location.reload();
+                    else setTimeout(waitForServer, 1000);
+                })
+                .catch(function() { setTimeout(waitForServer, 1000); });
+        }
+        setTimeout(waitForServer, 2000);
+    }
     </script>
     {% block scripts %}{% endblock %}
 </body>

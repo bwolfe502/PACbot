@@ -279,16 +279,17 @@ def join_rally(rally_types, device, skip_heal=False, stop_check=None):
     def _ocr_rally_owner(screen, join_y):
         """OCR the rally owner name from a war screen rally card.
         The name appears as "{Name}'s Troop" in the upper-right portion of the card,
-        roughly 80-160px above the join/full button.
+        roughly 130-210px above the join/full button.
         Returns the owner name (without "'s Troop"), or a visual hash fallback
         like 'crop_a1b2c3d4' if OCR fails — never returns empty string."""
         h, w = screen.shape[:2]
         # The owner name is in the right section of the card, above the troop portraits.
         # join_y is the top-left Y of the join button template match.
-        y_start = max(0, join_y - 160)
-        y_end = max(0, join_y - 80)
+        # Calibrated via live testing (Feb 2026): 130-210px above join, x:230-800.
+        y_start = max(0, join_y - 210)
+        y_end = max(0, join_y - 130)
         x_start = 230
-        x_end = min(w, 650)
+        x_end = min(w, 800)
         if y_start >= y_end:
             return f"pos_{join_y}"
         owner_crop = screen[y_start:y_end, x_start:x_end]
@@ -300,9 +301,8 @@ def join_rally(rally_types, device, skip_heal=False, stop_check=None):
         cv2.imwrite(_crop_path, owner_crop)
 
         gray = cv2.cvtColor(owner_crop, cv2.COLOR_BGR2GRAY)
-        # Apply Otsu threshold to isolate text from game background
-        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        upscaled = cv2.resize(thresh, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+        # Grayscale upscale (better accuracy than Otsu threshold on game UI text)
+        upscaled = cv2.resize(gray, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
 
         # Also save the preprocessed image for debugging
         cv2.imwrite(os.path.join(_debug_dir, f"owner_thresh_y{join_y}.png"), upscaled)
@@ -317,8 +317,13 @@ def join_rally(rally_types, device, skip_heal=False, stop_check=None):
             log.warning("Rally owner OCR empty (join_y=%d, crop y:%d-%d x:%d-%d)",
                         join_y, y_start, y_end, x_start, x_end)
 
-        # Extract owner name from "{Name}'s Troop" pattern
-        match = re.match(r"(.+?)[''\u2019]s\s+[Tt]roop", raw)
+        # Extract owner name from "{Name}'s Troop" pattern.
+        # OCR can mangle the apostrophe in various ways:
+        #   "DNGs Troop"      — apostrophe dropped, s attached to name
+        #   "DRP's Troop"     — clean read
+        #   'Bchen" S Troop'  — smart quote artifact + uppercase S + space
+        # Pattern allows optional whitespace/quotes between name and s/S.
+        match = re.match(r"(.+?)[\s''\u2019\u201c\u201d\"]*[sS]\s+[Tt]roop", raw)
         if match:
             return match.group(1).strip()
         # Fallback: if OCR read something but didn't match pattern, return raw

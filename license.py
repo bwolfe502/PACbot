@@ -105,6 +105,11 @@ def _compute_key_mac(key):
     ).hexdigest()
 
 
+def get_license_key():
+    """Return the saved license key, or None if not activated."""
+    return _load_saved_key()
+
+
 # ============================================================
 # REMOTE VALIDATION
 # ============================================================

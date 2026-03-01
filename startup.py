@@ -5,6 +5,9 @@ Used by both ``run_web.py`` (web-only) and ``main.py`` (legacy tkinter GUI).
 
 import os
 import sys
+import json
+import base64
+import hashlib
 import logging
 import platform
 import subprocess
@@ -16,6 +19,34 @@ from config import (running_tasks, set_min_troops, set_auto_heal,
                     set_territory_config, set_eg_rally_own, set_titan_rally_own,
                     set_gather_options, set_tower_quest_enabled)
 from settings import load_settings, save_settings
+
+# Relay server connection details (obfuscated, not plaintext in source)
+_RELAY_URL_B64 = "d3NzOi8vMTQ1My5saWZlL3dzL3R1bm5lbA=="
+_RELAY_SECRET_B64 = "MEpRR2l2bmJDMkNEUHlaS3dFVW5Qc1FrbGlWZ0phMXVZbmZ3MktOcHpYTQ=="
+
+
+def get_relay_config(settings):
+    """Compute relay configuration, auto-deriving from the license key.
+
+    Returns ``(relay_url, relay_secret, bot_name)`` when relay should be
+    active, or ``None`` when it should be disabled.
+    """
+    if not settings.get("remote_access", True):
+        return None
+
+    try:
+        from license import get_license_key
+        key = get_license_key()
+    except Exception:
+        key = None
+
+    if not key:
+        return None
+
+    bot_name = hashlib.sha256(key.encode()).hexdigest()[:10]
+    relay_url = base64.b64decode(_RELAY_URL_B64).decode()
+    relay_secret = base64.b64decode(_RELAY_SECRET_B64).decode()
+    return relay_url, relay_secret, bot_name
 
 
 def apply_settings(settings):
@@ -211,10 +242,18 @@ def create_bug_report_zip():
                 if f.endswith(".json"):
                     zf.write(os.path.join(STATS_DIR, f), f"stats/{f}")
 
-        # Settings
+        # Settings (redact secrets)
         settings_path = os.path.join(SCRIPT_DIR, "settings.json")
         if os.path.isfile(settings_path):
-            zf.write(settings_path, "settings.json")
+            try:
+                with open(settings_path, "r", encoding="utf-8") as sf:
+                    safe_settings = json.load(sf)
+                for key in ("relay_secret",):
+                    if key in safe_settings and safe_settings[key]:
+                        safe_settings[key] = "***REDACTED***"
+                zf.writestr("settings.json", json.dumps(safe_settings, indent=2))
+            except Exception:
+                zf.write(settings_path, "settings.json")
 
         # System info report
         try:

@@ -64,23 +64,13 @@ h1 { font-size: 1.6em; margin-bottom: 0.3em; }
 
 
 def _landing_page() -> str:
-    bots_html = ""
-    if _bots:
-        items = []
-        for name in sorted(_bots.keys()):
-            items.append(
-                f'<li><a href="/{name}/">'
-                f'<span class="dot online"></span> {name}</a></li>'
-            )
-        bots_html = f'<ul class="bot-list">{"".join(items)}</ul>'
-    else:
-        bots_html = '<p class="muted">No bots connected.</p>'
     return (
         f"<!DOCTYPE html><html><head><meta charset='utf-8'>"
         f"<meta name='viewport' content='width=device-width,initial-scale=1'>"
         f"<title>PACbot Relay</title><style>{_STYLE}</style>"
-        f"<meta http-equiv='refresh' content='5'>"
-        f"</head><body><h1>PACbot Relay</h1>{bots_html}</body></html>"
+        f"</head><body><h1>PACbot Relay</h1>"
+        f'<p class="muted">Use your PACbot dashboard to find your remote URL.</p>'
+        f"</body></html>"
     )
 
 
@@ -103,7 +93,12 @@ def _offline_page(bot_name: str) -> str:
 # ---------------------------------------------------------------------------
 
 async def handle_ws(request: web.Request) -> web.WebSocketResponse:
-    secret = request.query.get("secret", "")
+    # Accept secret from Authorization header (preferred) or query param (legacy)
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        secret = auth_header[7:]
+    else:
+        secret = request.query.get("secret", "")
     bot_name = request.query.get("bot", "").strip()
 
     if not SHARED_SECRET:

@@ -173,6 +173,38 @@ class TestApiStatus:
             t.join(timeout=1)
 
 
+class TestApiStatusTunnel:
+    """Tunnel status field in /api/status response."""
+
+    @patch("web.dashboard.get_devices", return_value=[])
+    @patch("web.dashboard.get_emulator_instances", return_value={})
+    @patch("web.dashboard.tunnel_status", return_value="connected")
+    def test_tunnel_connected(self, mock_ts, mock_inst, mock_devs, client):
+        data = json.loads(client.get("/api/status").data)
+        assert data["tunnel"] == "connected"
+
+    @patch("web.dashboard.get_devices", return_value=[])
+    @patch("web.dashboard.get_emulator_instances", return_value={})
+    @patch("web.dashboard.tunnel_status", return_value="connecting")
+    def test_tunnel_connecting(self, mock_ts, mock_inst, mock_devs, client):
+        data = json.loads(client.get("/api/status").data)
+        assert data["tunnel"] == "connecting"
+
+    @patch("web.dashboard.get_devices", return_value=[])
+    @patch("web.dashboard.get_emulator_instances", return_value={})
+    @patch("web.dashboard.tunnel_status", return_value="disconnected")
+    def test_tunnel_disconnected(self, mock_ts, mock_inst, mock_devs, client):
+        data = json.loads(client.get("/api/status").data)
+        assert data["tunnel"] == "disconnected"
+
+    @patch("web.dashboard.get_devices", return_value=[])
+    @patch("web.dashboard.get_emulator_instances", return_value={})
+    @patch("web.dashboard.tunnel_status", return_value="disabled")
+    def test_tunnel_disabled(self, mock_ts, mock_inst, mock_devs, client):
+        data = json.loads(client.get("/api/status").data)
+        assert data["tunnel"] == "disabled"
+
+
 class TestApiLogs:
     @patch("os.path.isfile", return_value=False)
     def test_returns_empty_when_no_log(self, mock_isfile, client):
@@ -519,7 +551,7 @@ class TestBugReportApi:
     @patch("startup.create_bug_report_zip")
     def test_bug_report_returns_zip(self, mock_zip, client):
         mock_zip.return_value = (b"PK\x03\x04fake_zip_data", "pacbot_bugreport_test.zip")
-        resp = client.get("/api/bug-report")
+        resp = client.post("/api/bug-report")
         assert resp.status_code == 200
         assert resp.content_type == "application/zip"
         assert b"PK" in resp.data  # zip magic bytes

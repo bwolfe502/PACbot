@@ -23,6 +23,7 @@ PRESERVE_FILES = {
     ".venv",
     "__pycache__",
     "platform-tools",
+    "settings.json",
     "_update.zip",
     "_update_temp",
 }
@@ -131,8 +132,12 @@ def check_and_update():
         print("Done.")
         print("Installing update...", end=" ", flush=True)
 
-        # Extract the zip
+        # Extract the zip (with zip-slip protection)
         with zipfile.ZipFile(zip_path, "r") as zf:
+            for member in zf.namelist():
+                member_path = os.path.realpath(os.path.join(extract_dir, member))
+                if not member_path.startswith(os.path.realpath(extract_dir) + os.sep) and member_path != os.path.realpath(extract_dir):
+                    raise ValueError(f"Zip contains unsafe path: {member}")
             zf.extractall(extract_dir)
 
         # GitHub zipball contains a single top-level folder like "user-repo-hash/"

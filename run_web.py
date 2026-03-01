@@ -17,6 +17,52 @@ from startup import initialize, shutdown, apply_settings
 from botlog import get_logger
 
 
+def _open_app_window(url, log):
+    """Open a chromium-based browser in app mode (no URL bar/tabs).
+
+    Tries Microsoft Edge first (always on Windows), then Chrome, then
+    falls back to the default browser.
+    """
+    import shutil
+    import subprocess
+
+    # Chromium browsers to try — (label, candidates)
+    # Edge is rarely on PATH; check common install locations directly.
+    _edge_paths = [
+        os.path.join(os.environ.get("ProgramFiles(x86)", ""),
+                     "Microsoft", "Edge", "Application", "msedge.exe"),
+        os.path.join(os.environ.get("ProgramFiles", ""),
+                     "Microsoft", "Edge", "Application", "msedge.exe"),
+    ]
+    candidates = (
+        [("Edge", p) for p in _edge_paths if os.path.isfile(p)]
+        + [("Edge", "msedge"), ("Chrome", "chrome"),
+           ("Chrome", "google-chrome")]
+    )
+
+    for name, cmd in candidates:
+        path = cmd if os.path.isabs(cmd) else shutil.which(cmd)
+        if path:
+            try:
+                # Dedicated user-data-dir forces a new process so
+                # window-size flags aren't ignored by an existing Edge.
+                app_data = os.path.join(os.environ.get("LOCALAPPDATA",
+                                        os.path.expanduser("~")),
+                                        "PACbot", "edge-app")
+                subprocess.Popen([path, f"--app={url}",
+                                  "--window-size=420,750",
+                                  f"--user-data-dir={app_data}"])
+                log.info("Opened %s in app mode", name)
+                return
+            except OSError:
+                pass
+
+    # Last resort: plain browser
+    log.info("No Chromium browser found — opening default browser")
+    import webbrowser
+    webbrowser.open(url)
+
+
 def main():
     settings = initialize()
     log = get_logger("run_web")
@@ -62,21 +108,21 @@ def main():
     threading.Thread(target=_cleanup_loop, daemon=True).start()
 
     # ------------------------------------------------------------------
-    # Relay tunnel (optional)
+    # Relay tunnel (auto-configured from license key)
     # ------------------------------------------------------------------
-    if settings.get("relay_enabled", False):
-        _relay_url = settings.get("relay_url", "")
-        _relay_secret = settings.get("relay_secret", "")
-        _relay_bot = settings.get("relay_bot_name", "")
-        if _relay_url and _relay_secret and _relay_bot:
-            try:
-                from tunnel import start_tunnel
-                start_tunnel(_relay_url, _relay_secret, _relay_bot)
-                log.info("Relay tunnel started")
-            except ImportError:
-                log.info("Relay tunnel enabled but 'websockets' not installed.")
-            except Exception as e:
-                log.warning("Failed to start relay tunnel: %s", e)
+    from startup import get_relay_config
+    relay_cfg = get_relay_config(settings)
+    if relay_cfg:
+        _relay_url, _relay_secret, _relay_bot = relay_cfg
+        try:
+            from tunnel import start_tunnel
+            start_tunnel(_relay_url, _relay_secret, _relay_bot)
+            host = _relay_url.replace("ws://", "").replace("wss://", "").split("/")[0]
+            log.info("Remote access: http://%s/%s/", host, _relay_bot)
+        except ImportError:
+            log.info("Remote access unavailable ('websockets' not installed)")
+        except Exception as e:
+            log.warning("Failed to start relay tunnel: %s", e)
 
     # ------------------------------------------------------------------
     # Graceful shutdown
@@ -131,20 +177,46 @@ def main():
             from updater import get_current_version
             title = f"PACbot v{get_current_version()}"
 
+            # Set taskbar icon on Windows
+            icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.ico")
+
+            def _set_icon():
+                """Set window/taskbar icon via Windows API after window appears."""
+                if sys.platform != "win32" or not os.path.isfile(icon_path):
+                    return
+                time.sleep(0.5)
+                try:
+                    import ctypes
+                    user32 = ctypes.windll.user32
+                    hwnd = user32.FindWindowW(None, title)
+                    if not hwnd:
+                        return
+                    icon = user32.LoadImageW(
+                        0, icon_path, 1, 0, 0, 0x0010 | 0x0040)
+                    if icon:
+                        user32.SendMessageW(hwnd, 0x0080, 0, icon)
+                        user32.SendMessageW(hwnd, 0x0080, 1, icon)
+                except Exception:
+                    pass
+
             window = webview.create_window(title, url,
                                            width=520, height=900,
                                            min_size=(400, 600))
             log.info("Opening native window...")
             print(f"\n  Dashboard: http://{local_ip}:8080  (phone access)\n")
-            webview.start()  # blocks until window closed
+            webview.start(func=_set_icon)  # blocks until window closed
         except Exception as exc:
             log.warning("pywebview window failed (%s) — falling back to browser", exc)
             webview = None  # fall through to browser
 
     if webview is None:
         print(f"\n  Dashboard: http://{local_ip}:8080\n")
-        import webbrowser
-        webbrowser.open(url)
+        # On restart, the existing browser window reconnects automatically —
+        # don't open a duplicate.
+        if os.environ.pop("PACBOT_RESTART", None):
+            log.info("Restart detected — reusing existing browser window")
+        else:
+            _open_app_window(url, log)
         try:
             print("Press Ctrl+C to stop PACbot.\n")
             while True:

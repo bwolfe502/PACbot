@@ -66,11 +66,13 @@ Jinja2 auto-escaping active, all subprocess calls use list args without shell=Tr
 - [x] Remove bot enumeration from relay landing page
 - [x] Fix settings.json wipe on update — added to `PRESERVE_FILES` in updater.py
 
+- [x] Switch relay tunnel to `wss://` (TLS) — nginx + Let's Encrypt on `1453.life`
+- [x] Move relay secret from URL query param to `Authorization: Bearer` header
+- [x] Run relay server as non-root `pacbot` user in systemd
+- [x] Atomic settings write — temp file + `os.replace()` prevents corruption on crash
+
 ### Remaining (prioritized)
-- [ ] Switch relay tunnel to `wss://` (TLS) — traffic currently plaintext over `ws://`
-- [ ] Move relay secret from URL query param to WebSocket header
 - [ ] Add CSRF protection to POST endpoints
-- [ ] Run relay server as non-root user in systemd
 - [ ] Add integrity verification (SHA-256) to auto-updater downloads
 - [x] Atomic settings write — temp file + `os.replace()` prevents corruption on crash
 

@@ -43,6 +43,12 @@ from actions import (attack, phantom_clash_attack, reinforce_throne, target,
 from territory import attack_territory, diagnose_grid, scan_test_squares
 from botlog import get_logger
 
+try:
+    from tunnel import tunnel_status
+except ImportError:
+    def tunnel_status():
+        return "disabled"
+
 _log = get_logger("web")
 
 # ---------------------------------------------------------------------------
@@ -280,15 +286,16 @@ def create_app():
         settings = _load_settings()
         mode = settings.get("mode", "bl")
         auto_groups = AUTO_MODES_BL if mode == "bl" else AUTO_MODES_HS
-        # Build remote URL from relay settings if enabled
+        # Build remote URL from auto-derived relay config
         relay_url = None
-        if settings.get("relay_enabled"):
-            raw = settings.get("relay_url", "")
-            bot_name = settings.get("relay_bot_name", "")
-            if raw and bot_name:
-                # ws://host/ws/tunnel -> http://host/bot_name
-                host = raw.replace("ws://", "").replace("wss://", "").split("/")[0]
-                relay_url = f"http://{host}/{bot_name}"
+        from startup import get_relay_config
+        relay_cfg = get_relay_config(settings)
+        if relay_cfg:
+            raw, _, bot_name = relay_cfg
+            is_secure = raw.startswith("wss://")
+            host = raw.replace("ws://", "").replace("wss://", "").split("/")[0]
+            scheme = "https" if is_secure else "http"
+            relay_url = f"{scheme}://{host}/{bot_name}"
 
         return render_template("index.html",
                                devices=device_info,
@@ -331,10 +338,20 @@ def create_app():
             thread = info.get("thread")
             if thread and thread.is_alive():
                 active_tasks.append(key)
+        log_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
+        lines = []
+        log_file = os.path.join(log_dir, "pacbot.log")
+        if os.path.isfile(log_file):
+            try:
+                with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+                    lines = f.readlines()[-150:]
+            except Exception:
+                lines = ["(Could not read log file)"]
         return render_template("debug.html",
                                devices=device_info,
                                tasks=active_tasks,
-                               debug_actions=ONESHOT_DEBUG)
+                               debug_actions=ONESHOT_DEBUG,
+                               log_lines=lines)
 
     @app.route("/logs")
     def logs_page():
@@ -395,7 +412,8 @@ def create_app():
                 thread = info.get("thread")
                 if thread and thread.is_alive():
                     active.append(key)
-        return jsonify({"devices": device_info, "tasks": active})
+        return jsonify({"devices": device_info, "tasks": active,
+                        "tunnel": tunnel_status()})
 
     @app.route("/api/devices/refresh", methods=["POST"])
     def api_refresh_devices():
@@ -415,6 +433,12 @@ def create_app():
             return redirect(url_for("tasks_page"))
 
         settings = _load_settings()
+
+        # Validate device IDs against known devices
+        known = set(_cached_devices()[0])
+        devices_to_run = [d for d in devices_to_run if d in known]
+        if not devices_to_run:
+            return redirect(url_for("tasks_page"))
 
         for device in devices_to_run:
             if task_type == "auto":
@@ -492,7 +516,7 @@ def create_app():
         for key in ["auto_heal", "auto_restore_ap", "ap_use_free", "ap_use_potions",
                      "ap_allow_large_potions", "ap_use_gems", "verbose_logging",
                      "eg_rally_own", "titan_rally_own", "web_dashboard", "gather_enabled",
-                     "tower_quest_enabled", "relay_enabled"]:
+                     "tower_quest_enabled", "remote_access"]:
             settings[key] = key in request.form
 
         for key in ["ap_gem_limit", "min_troops", "variation", "titan_interval",
@@ -502,8 +526,7 @@ def create_app():
             if val.isdigit():
                 settings[key] = int(val)
 
-        for key in ["pass_mode", "my_team", "mode",
-                     "relay_url", "relay_secret", "relay_bot_name"]:
+        for key in ["pass_mode", "my_team", "mode"]:
             val = request.form.get(key)
             if val is not None:
                 settings[key] = val
@@ -535,12 +558,13 @@ def create_app():
 
         def _do_restart():
             time.sleep(0.5)  # let the HTTP response flush
+            os.environ["PACBOT_RESTART"] = "1"  # skip opening new window
             os.execv(sys.executable, [sys.executable] + sys.argv)
 
         threading.Thread(target=_do_restart, daemon=True).start()
         return jsonify({"ok": True, "message": "Restarting..."})
 
-    @app.route("/api/bug-report")
+    @app.route("/api/bug-report", methods=["POST"])
     def api_bug_report():
         from startup import create_bug_report_zip
         from flask import send_file
@@ -586,5 +610,44 @@ def create_app():
         config.MANUAL_ATTACK_SQUARES = {tuple(s) for s in data.get("attack", [])}
         config.MANUAL_IGNORE_SQUARES = {tuple(s) for s in data.get("ignore", [])}
         return jsonify({"ok": True})
+
+    # --- QR code generator ---
+
+    @app.route("/api/screenshot")
+    def api_screenshot():
+        """Take a live screenshot from a device and return it as PNG."""
+        device = request.args.get("device", "")
+        if not device:
+            return "Missing device parameter", 400
+        known = set(_cached_devices()[0])
+        if device not in known:
+            return "Unknown device", 404
+        import io
+        import cv2
+        from flask import send_file
+        screen = load_screenshot(device)
+        if screen is None:
+            return "Screenshot failed (ADB error)", 500
+        _, buf = cv2.imencode(".png", screen)
+        as_attachment = bool(request.args.get("download"))
+        return send_file(io.BytesIO(buf.tobytes()), mimetype="image/png",
+                         as_attachment=as_attachment,
+                         download_name=f"screenshot_{device.replace(':', '_')}.png")
+
+    @app.route("/api/qr")
+    def api_qr():
+        url = request.args.get("url", "")
+        if not url:
+            return "Missing url parameter", 400
+        import io
+        import qrcode
+        from flask import Response
+        qr = qrcode.QRCode(box_size=12, border=2)
+        qr.add_data(url)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return Response(buf.getvalue(), mimetype="image/png")
 
     return app

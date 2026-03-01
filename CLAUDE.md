@@ -8,19 +8,19 @@ Runs on Windows with BlueStacks or MuMu Player emulators. GUI built with tkinter
 | File | Purpose | Key exports |
 |------|---------|-------------|
 | `run_web.py` | Web-only entry point (primary) | `main` (pywebview + browser fallback) |
-| `startup.py` | Shared initialization & shutdown | `initialize`, `shutdown`, `apply_settings`, `create_bug_report_zip` |
+| `startup.py` | Shared initialization & shutdown | `initialize`, `shutdown`, `apply_settings`, `create_bug_report_zip`, `get_relay_config` |
 | `main.py` | Legacy GUI entry point (deprecated) | Tkinter app, `create_gui()` |
 | `runners.py` | Shared task runners | `run_auto_quest`, `run_auto_titan`, `run_repeat`, `run_once`, `launch_task`, `stop_task` |
 | `settings.py` | Settings persistence | `DEFAULTS`, `load_settings`, `save_settings`, `SETTINGS_FILE` |
 | `actions/` | Game actions package (7 submodules) | Re-exports all public functions via `__init__.py` |
-| `actions/quests.py` | Quest system + tower quest | `check_quests`, `get_quest_tracking_state`, `reset_quest_tracking`, `occupy_tower` |
+| `actions/quests.py` | Quest system + tower quest + PVP attack | `check_quests`, `get_quest_tracking_state`, `reset_quest_tracking`, `occupy_tower`, `recall_tower_troop` |
 | `actions/rallies.py` | Rally joining + blacklist | `join_rally`, `join_war_rallies`, `reset_rally_blacklist` |
 | `actions/combat.py` | Attacks, targeting, teleport | `attack`, `phantom_clash_attack`, `reinforce_throne`, `target`, `teleport` |
 | `actions/titans.py` | Titan rally + AP restore | `rally_titan`, `restore_ap`, `_restore_ap_from_open_menu`, `_close_ap_menu`, `_MAX_TITAN_SEARCH_ATTEMPTS` |
 | `actions/evil_guard.py` | Evil Guard attack sequence | `rally_eg`, `search_eg_reset`, `test_eg_positions`, `_handle_ap_popup` |
 | `actions/farming.py` | Gold + mithril gathering | `mine_mithril`, `gather_gold`, `gather_gold_loop` |
 | `actions/_helpers.py` | Shared state + utilities | `_interruptible_sleep`, `_last_depart_slot` |
-| `vision.py` | Screenshots, template matching, OCR, ADB input | `load_screenshot`, `find_image`, `find_all_matches`, `tap_image`, `wait_for_image_and_tap`, `read_text`, `read_number`, `read_ap`, `adb_tap`, `adb_swipe`, `adb_keyevent`, `timed_wait`, `tap`, `logged_tap`, `get_last_best`, `save_failure_screenshot` |
+| `vision.py` | Screenshots, template matching, OCR, ADB input | `load_screenshot`, `find_image`, `find_all_matches`, `tap_image`, `wait_for_image_and_tap`, `read_text`, `read_number`, `read_ap`, `adb_tap`, `adb_swipe`, `adb_keyevent`, `timed_wait`, `tap`, `logged_tap`, `get_last_best`, `save_failure_screenshot`, `tap_tower_until_attack_menu` |
 | `navigation.py` | Screen detection + state-machine navigation | `check_screen`, `navigate` |
 | `troops.py` | Troop counting (pixel), status model (OCR), healing | `troops_avail`, `all_troops_home`, `heal_all`, `read_panel_statuses`, `get_troop_status`, `detect_selected_troop`, `capture_portrait`, `store_portrait`, `identify_troop`, `TroopAction`, `TroopStatus`, `DeviceTroopSnapshot` |
 | `territory.py` | Territory grid analysis + auto-occupy | `attack_territory`, `auto_occupy_loop`, `open_territory_manager`, `diagnose_grid`, `scan_territory_coordinates`, `scan_test_squares` |
@@ -28,6 +28,9 @@ Runs on Windows with BlueStacks or MuMu Player emulators. GUI built with tkinter
 | `devices.py` | ADB device detection + emulator window mapping | `auto_connect_emulators`, `get_devices`, `get_emulator_instances` |
 | `botlog.py` | Logging, metrics, timing | `setup_logging`, `get_logger`, `set_console_verbose`, `StatsTracker`, `timed_action`, `stats`, `BOT_VERSION` |
 | `web/dashboard.py` | Flask web dashboard (mobile remote control) | `create_app`, routes, auto-mode toggles |
+| `license.py` | Machine-bound license keys | `get_license_key`, `activate_key`, `validate_license` |
+| `tunnel.py` | WebSocket relay tunnel | `start_tunnel`, `stop_tunnel`, `tunnel_status` |
+| `updater.py` | Auto-update from GitHub releases | `check_and_update`, `get_latest_release`, `get_current_version` |
 
 ## Dependency Graph
 
@@ -235,7 +238,20 @@ due to terrain. Mountain passes are strategic locations not on the territory gri
 - Per-device, session-scoped
 
 ### Quest Dispatch (actions/quests.py)
-**Gather priority**: Gold gathering is blocked while titan/EG rallies are in-flight (pending). The bot waits for rally completion instead of deploying gather troops, preserving troop availability for potential rally retries.
+**Dispatch priority chain**: PVP attack → Tower quest → EG/Titan rallies → pending rally wait → gather gold.
+PVP and Tower run first because they're quick single-troop dispatches (no AP, no waiting).
+PVP dispatches a troop then continues to other quests while it marches (non-blocking).
+Gold gathering is blocked while titan/EG rallies are in-flight (pending). The bot waits for
+rally completion instead of deploying gather troops, preserving troop availability for retries.
+
+**Tower quest**: `_navigate_to_tower()` opens target menu, taps **Friend tab** `(540, 330)`, looks for
+`friend_marker.png`, then taps the marker to center the map on the tower. `occupy_tower()` then
+taps the tower, reinforces, and departs. `recall_tower_troop()` recalls when the quest completes.
+
+**PVP attack**: `_attack_pvp_tower()` uses `target()` (Enemy tab + `target_marker.png`) to navigate
+to an enemy tower, then `tap_tower_until_attack_menu()` to open the attack menu, and `depart.png`
+to send 1 troop. A 10-minute cooldown (`_PVP_COOLDOWN_S = 600`) prevents re-dispatch while the
+troop marches. PVP on cooldown doesn't block gold mining (`_all_quests_visually_complete` is aware).
 
 ### Titan Search Retry (actions/titans.py)
 `rally_titan` searches for the titan, which centers the map on it, then blind-taps (540, 900)
@@ -260,9 +276,10 @@ AP via `_restore_ap_from_open_menu`, and single-closes the popup. Used in `click
 (primary) and `poll_troop_ready()` (safety net).
 
 ### Settings Persistence (settings.py)
-`settings.json` stores user preferences (auto-heal, AP options, intervals, territory teams).
-Loaded on startup, saved on quit/restart. `DEFAULTS` dict provides fallback values.
-Shared by both `main.py` (GUI) and `web/dashboard.py` (Flask).
+`settings.json` stores user preferences (auto-heal, AP options, intervals, territory teams,
+`remote_access` toggle). Loaded on startup, saved on quit/restart. `DEFAULTS` dict provides
+fallback values. Shared by both `main.py` (GUI) and `web/dashboard.py` (Flask).
+`updater.py` preserves `settings.json` across auto-updates (`PRESERVE_FILES`).
 
 ### Web Dashboard (web/dashboard.py)
 Mobile-friendly Flask app for remote control from any browser. `run_web.py` is now the primary
@@ -278,12 +295,15 @@ banner displays the LAN URL for mobile remote control.
 - `AUTO_RUNNERS` dict maps auto-mode keys → runner lambdas
 - `TASK_FUNCTIONS` dict maps one-shot action names → callable functions
 - Device list cached for 15s (`_DEVICE_CACHE_TTL`) to avoid spamming ADB on every poll
-- CSS cache busting: `style.css?v=19` in `base.html` — bump on every CSS change
+- CSS cache busting: `style.css?v=23` in `base.html` — bump on every CSS change
+- Device ID validation: `/tasks/start` rejects device IDs not in `get_devices()` whitelist
+- XSS prevention: dashboard JS uses `textContent` / DOM creation (no `innerHTML` for dynamic data)
+- Relay auto-config: index route calls `get_relay_config()` to show remote URL when relay is active
 
 **Pages**: Dashboard (`/`), Settings (`/settings`), Debug (`/debug`), Logs (`/logs`), Territory Grid (`/territory`)
 
 **API endpoints**:
-- `GET /api/status` — device statuses, troop snapshots, quest tracking, active tasks (polled every 3s)
+- `GET /api/status` — device statuses, troop snapshots, quest tracking, active tasks, tunnel status (polled every 3s)
 - `POST /api/devices/refresh` — reconnect ADB devices
 - `POST /tasks/start` — launch auto-mode or one-shot task
 - `POST /tasks/stop` — stop a specific task
@@ -292,21 +312,50 @@ banner displays the LAN URL for mobile remote control.
 - `POST /api/restart` — save settings, stop all, `os.execv` restart
 - `GET /api/logs` — last 150 log lines as JSON
 - `POST /api/bug-report` — generate and download bug report ZIP
+- `GET /api/screenshot?device=<id>&download=1` — live device screenshot as PNG (download=1 forces file save)
+- `GET /api/qr?url=<encoded>` — generate QR code PNG (box_size=12, border=2) for dashboard modal
 - `GET /api/territory/grid` — territory grid state (colors, flags, adjacency)
 - `POST /api/territory/squares` — update manual attack/ignore squares
 
 **Dashboard UI components**:
 - **Device card**: status dot (pulsing green when active), status text (color-coded), troop slots, quest pills
+- **Access banners**: LAN + relay URL banners with tap-to-copy, QR code button, and tunnel status indicator (dot + label, updated via polling: green=connected, amber=connecting, red=disconnected, gray=disabled)
 - **Auto mode toggles**: iOS-style toggle switches in 2-column grid, grouped by category (Combat/Farming/Events)
 - **Action chips**: minimal bordered buttons in 3-column grid, farm actions (blue accent), war actions (red accent), debug actions (purple accent, `.action-chip-debug`)
 - **Running tasks list**: active task names with circular stop (×) buttons
-- **Bottom bar**: Stop All, Refresh, Restart — three equal compact buttons
+- **Nav bar restart**: red Restart button in top-right corner of nav (all pages), confirms before `os.execv`
+- **Bottom bar**: Stop All, Refresh, Bug Report — three equal compact buttons
 
 **Auto mode groups** (vary by game mode):
 - Broken Lands (`bl`): Combat (Pass Battle, Occupy Towers, Reinforce Throne) + Farming (Auto Quest, Rally Titans, Mine Mithril)
 - Home Server (`rw`): Events (Join Groot) + Farming (Rally Titans, Mine Mithril) + Combat (Reinforce Throne)
 
 **Templates**: `base.html` (nav, shared JS), `index.html` (dashboard), `settings.html`, `debug.html` (debug actions), `logs.html`
+
+### Relay Tunnel (tunnel.py + relay/)
+WebSocket relay for remote access — lets users control PACbot from outside the LAN.
+
+**Zero-config**: Relay auto-configures from the license key. No user-facing URL/secret/bot-name
+settings. `get_relay_config(settings)` in `startup.py` returns `(relay_url, relay_secret, bot_name)`
+or `None`. Bot name is `SHA256(license_key)[:10]` — unique per user, stable, unguessable.
+
+**Architecture**: `tunnel.py` opens a `wss://` WebSocket to the relay server (`1453.life`,
+DigitalOcean droplet). Browser hits `https://1453.life/bot_name/` → nginx terminates TLS →
+relay forwards HTTP requests through the tunnel to `localhost:8080` (Flask dashboard).
+Reconnects with exponential backoff (5s→60s cap). Secret sent via `Authorization: Bearer`
+header (not URL query param).
+
+**Server stack**: nginx (TLS termination, Let's Encrypt auto-renew) → aiohttp relay on port 8090.
+Service runs as non-root `pacbot` user via systemd.
+
+**Settings**: Single `remote_access` boolean (default `True`). When `False`, relay is disabled.
+Relay URL and secret are base64-obfuscated constants in `startup.py` (not in settings.json).
+
+**Status**: `tunnel_status()` returns `"disabled"` / `"connecting"` / `"connected"` / `"disconnected"`.
+Exposed in `/api/status` response and shown as a dot + label in the remote access banner.
+
+**Relay server** (`relay/relay_server.py`): asyncio WebSocket server, routes `/bot_name/...`
+to the connected bot's tunnel. Landing page shows no bot names (prevents enumeration).
 
 ### Device Status System (config.py + all runners)
 `config.DEVICE_STATUS[device]` holds the current status string displayed in both the tkinter GUI
@@ -349,7 +398,7 @@ and the web dashboard. Updated via `config.set_device_status(device, msg)`, clea
 ## Tests
 
 ```bash
-py -m pytest          # run all ~571 tests
+py -m pytest          # run all ~621 tests
 py -m pytest -x       # stop on first failure
 py -m pytest -k name  # filter by test name
 ```
@@ -369,14 +418,16 @@ No fixtures require a running emulator — all use mocked ADB/vision.
 | `test_rally_blacklist.py` | Direct blacklist, failure thresholds, 30-min expiry, reset (`actions.rallies`) |
 | `test_rally_wait.py` | Troop-tracked rally, slot tracking, panel-based waiting, false positive detection (`actions.quests`) |
 | `test_quest_tracking.py` | Multi-device quest rally tracking, `_track_quest_progress`, `_record_rally_started` (`actions.quests`) |
-| `test_check_quests_helpers.py` | `_deduplicate_quests`, `_get_actionable_quests` (`actions.quests`) |
+| `test_check_quests_helpers.py` | `_deduplicate_quests`, `_get_actionable_quests`, `_all_quests_visually_complete` (PVP cooldown), `_attack_pvp_tower` (handler unit tests), PVP dispatch integration (`actions.quests`) |
 | `test_classify_quest.py` | `_classify_quest_text` OCR classification (all QuestType values) (`actions.quests`) |
 | `test_combat.py` | `_check_dead`, `_find_green_pixel`, `_detect_player_at_eg`, `teleport` (happy path, timeout, dead detection, cancel) (`actions.combat`) |
 | `test_territory.py` | `_classify_square_team` (exact/noisy colors, thresholds, team configs), `_get_border_color` (sampling, clock avoidance), `_has_flag` (red pixel detection), `_is_adjacent_to_my_territory` (adjacency, throne, edges), `attack_territory` (full workflow), `auto_occupy_loop` (cycle, stop signal), blue calibration (observed values, boundary distances), `set_territory_config` (auto-derived enemies, threshold changes), red edge cases (near-threshold values), clock overlay row 0 (dimming gaps), `diagnose_grid` (smoke tests) (`territory`) |
 | `test_gather_gold.py` | Gather gold flow (gather.png template tap, depart verification, retry logic), loop troop deployment with retry (`actions.farming`) |
-| `test_tower_quest.py` | Tower/fortress quest occupy, recall, navigation (`actions.quests`) |
+| `test_tower_quest.py` | Tower/fortress quest occupy, recall, navigation (friend tab + friend_marker) (`actions.quests`) |
 | `test_settings_validation.py` | `validate_settings` — type checks, range/choice validation, device_troops, warnings, schema sync |
 | `test_task_runner.py` | `sleep_interval`, `launch_task`/`stop_task`, run_once, run_repeat, consecutive error recovery, settings load/save (`runners`) |
+| `test_relay_config.py` | `get_relay_config` auto-derive (SHA256 bot name, stability, uniqueness), disabled states (no key, import error, toggle off), defaults integration (`startup`) |
+| `test_web_dashboard.py` | Route tests (index, settings, debug, logs, tasks), API tests (`/api/status` incl. tunnel status, `/api/logs`, device refresh), task start/stop/stop-all, auto-mode exclusivity, territory grid API, bug report, firewall helper, `sleep_interval`, `run_once`, `launch_task`, `cleanup_dead_tasks`, `apply_settings`, `create_bug_report_zip` (`web.dashboard`, `startup`) |
 
 ### Test Conventions
 - Fixtures in `conftest.py`: `mock_device` ("127.0.0.1:9999"), `mock_device_b` ("127.0.0.1:8888")
@@ -423,8 +474,10 @@ PACbot/
 ├── config.py            # Enums, constants, global state
 ├── devices.py           # ADB device detection
 ├── botlog.py            # Logging + metrics
+├── license.py           # Machine-bound license keys
+├── tunnel.py            # WebSocket relay tunnel client
 ├── run.bat              # User entry point (venv + launch)
-├── requirements.txt     # Python dependencies
+├── requirements.txt     # Python dependencies (pinned versions)
 ├── settings.json        # User settings (auto-generated)
 ├── version.txt          # Current version string
 ├── elements/            # Template images for matching
@@ -440,8 +493,11 @@ PACbot/
 │       ├── settings.html # Settings form
 │       ├── debug.html   # Debug actions (Check Screen, Check Troops, Diagnose Grid, Scan Corner Coords)
 │       └── logs.html    # Log viewer
+├── relay/               # Relay server (deployed on droplet)
+│   └── relay_server.py  # asyncio WebSocket relay server
 ├── data/                # Persistent data files (territory coordinates)
-├── tests/               # pytest suite (~571 tests)
+├── updater.py           # Auto-update from GitHub releases (zip-slip protected)
+├── tests/               # pytest suite (~621 tests)
 ├── logs/                # Log files
 ├── stats/               # Session stats JSON
 └── debug/               # Debug screenshots

@@ -70,17 +70,21 @@ class TestIsTroopDefending:
 # ---------------------------------------------------------------------------
 
 class TestNavigateToTower:
-    def test_success(self, mock_device):
+    def test_success_uses_friend_tab_and_marker(self, mock_device):
         screen = MagicMock()
         with patch("actions.quests.check_screen", return_value=Screen.MAP), \
              patch("actions.quests.tap_image", return_value=True), \
-             patch("actions.quests.logged_tap"), \
+             patch("actions.quests.logged_tap") as mock_tap, \
              patch("actions.quests.load_screenshot", return_value=screen), \
-             patch("actions.quests.find_image", return_value=(0.9, (100, 100), 50, 50)), \
+             patch("actions.quests.find_image", return_value=(0.9, (100, 100), 50, 50)) as mock_find, \
              patch("actions.quests.time.sleep"):
             assert _navigate_to_tower(mock_device) is True
+            # Should tap Friend tab at (540, 330)
+            mock_tap.assert_any_call(mock_device, 540, 330, "tower_target_friend_tab")
+            # Should look for friend_marker.png
+            mock_find.assert_called_with(screen, "friend_marker.png", threshold=0.7)
 
-    def test_no_target_marker(self, mock_device):
+    def test_no_friend_marker(self, mock_device):
         t = [0.0]
         def fake_time():
             t[0] += 0.5

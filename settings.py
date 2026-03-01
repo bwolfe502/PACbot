@@ -12,6 +12,7 @@ Key exports:
 
 import json
 import os
+import tempfile
 
 from botlog import get_logger
 from config import validate_settings
@@ -44,10 +45,7 @@ DEFAULTS = {
     "gather_mine_level": 4,
     "gather_max_troops": 3,
     "tower_quest_enabled": False,
-    "relay_enabled": False,
-    "relay_url": "",
-    "relay_secret": "",
-    "relay_bot_name": "",
+    "remote_access": True,
 }
 
 
@@ -75,8 +73,12 @@ def save_settings(settings):
     """Write settings dict to settings.json."""
     _log = get_logger("settings")
     try:
-        with open(SETTINGS_FILE, "w") as f:
-            json.dump(settings, f, indent=2)
+        dir_name = os.path.dirname(SETTINGS_FILE)
+        with tempfile.NamedTemporaryFile("w", dir=dir_name, suffix=".tmp",
+                                         delete=False) as tmp:
+            json.dump(settings, tmp, indent=2)
+            tmp_path = tmp.name
+        os.replace(tmp_path, SETTINGS_FILE)
         _log.debug("Settings saved (%d keys)", len(settings))
     except Exception as e:
         _log.error("Failed to save settings: %s", e)

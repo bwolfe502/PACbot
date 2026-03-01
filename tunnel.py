@@ -122,7 +122,7 @@ async def _run_tunnel(relay_url: str, relay_secret: str, bot_name: str) -> None:
     executor = ThreadPoolExecutor(max_workers=EXECUTOR_WORKERS)
     backoff = RECONNECT_BASE
 
-    ws_url = f"{relay_url}?secret={relay_secret}&bot={bot_name}"
+    ws_url = f"{relay_url}?bot={bot_name}"
 
     while not _stop_event.is_set():
         with _status_lock:
@@ -134,6 +134,7 @@ async def _run_tunnel(relay_url: str, relay_secret: str, bot_name: str) -> None:
                 ping_interval=30,
                 ping_timeout=10,
                 close_timeout=5,
+                additional_headers={"Authorization": f"Bearer {relay_secret}"},
             ) as ws:
                 with _status_lock:
                     _status = "connected"

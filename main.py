@@ -1768,27 +1768,24 @@ def create_gui():
             log.warning("Failed to start web dashboard: %s", e)
 
     # ============================================================
-    # RELAY TUNNEL (opt-in, connects to remote relay server)
+    # RELAY TUNNEL (auto-configured from license key)
     # ============================================================
 
-    if settings.get("relay_enabled", False):
-        _relay_url = settings.get("relay_url", "")
-        _relay_secret = settings.get("relay_secret", "")
-        _relay_bot = settings.get("relay_bot_name", "")
-        if _relay_url and _relay_secret and _relay_bot:
-            try:
-                from tunnel import start_tunnel, tunnel_status
-                start_tunnel(_relay_url, _relay_secret, _relay_bot)
-                # Override Web App link to point to the relay
-                _relay_host = _relay_url.replace("ws://", "").replace("wss://", "")
-                _relay_host = _relay_host.split("/")[0]  # just host:port
-                _web_open_url[0] = f"http://{_relay_host}/{_relay_bot}/"
-                web_link_btn.configure(text="Remote Dashboard")
-            except ImportError:
-                log.info("Relay tunnel enabled but 'websockets' not installed. "
-                         "Install with: pip install websockets")
-            except Exception as e:
-                log.warning("Failed to start relay tunnel: %s", e)
+    from startup import get_relay_config
+    relay_cfg = get_relay_config(settings)
+    if relay_cfg:
+        _relay_url, _relay_secret, _relay_bot = relay_cfg
+        try:
+            from tunnel import start_tunnel
+            start_tunnel(_relay_url, _relay_secret, _relay_bot)
+            _relay_host = _relay_url.replace("ws://", "").replace("wss://", "")
+            _relay_host = _relay_host.split("/")[0]
+            _web_open_url[0] = f"http://{_relay_host}/{_relay_bot}/"
+            web_link_btn.configure(text="Remote Dashboard")
+        except ImportError:
+            log.info("Remote access unavailable ('websockets' not installed)")
+        except Exception as e:
+            log.warning("Failed to start relay tunnel: %s", e)
 
     _resize_window()
 

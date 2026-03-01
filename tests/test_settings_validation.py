@@ -32,6 +32,7 @@ DEFAULTS = {
     "gather_mine_level": 4,
     "gather_max_troops": 3,
     "tower_quest_enabled": False,
+    "remote_access": True,
 }
 
 

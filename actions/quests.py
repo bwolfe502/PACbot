@@ -20,7 +20,8 @@ from config import QuestType, Screen
 from botlog import get_logger, timed_action, stats
 from vision import (tap_image, wait_for_image_and_tap, timed_wait,
                     load_screenshot, find_image, get_template,
-                    logged_tap, save_failure_screenshot)
+                    logged_tap, save_failure_screenshot,
+                    tap_tower_until_attack_menu)
 from navigation import navigate, check_screen, DEBUG_DIR
 from troops import (troops_avail, heal_all, read_panel_statuses,
                     get_troop_status, TroopAction)
@@ -49,6 +50,13 @@ PENDING_TIMEOUT_S = config.QUEST_PENDING_TIMEOUT
 # ---- Tower quest state ----
 # Tracks whether we have a troop defending a tower for quest purposes.
 _tower_quest_state = {}   # {device: {"deployed_at": float}}
+
+# ---- PVP quest state ----
+# Tracks when we last dispatched a PVP attack troop. The troop marches
+# several minutes to the enemy tower, attacks, and returns — we skip
+# PVP dispatch while the cooldown is active to avoid wasting troops.
+_pvp_last_dispatch = {}   # {device: timestamp}
+_PVP_COOLDOWN_S = 600     # 10 minutes
 
 
 def _track_quest_progress(device, quest_type, current, target=None):
@@ -160,6 +168,7 @@ def reset_quest_tracking(device=None):
         _quest_rally_slots.clear()
         _last_depart_slot.clear()
         _tower_quest_state.clear()
+        _pvp_last_dispatch.clear()
     else:
         for d in list(_quest_rallies_pending):
             if d[0] == device:
@@ -178,6 +187,7 @@ def reset_quest_tracking(device=None):
                 del _quest_rally_slots[d]
         _last_depart_slot.pop(device, None)
         _tower_quest_state.pop(device, None)
+        _pvp_last_dispatch.pop(device, None)
 
 
 # ---- Quest OCR helpers ----
@@ -281,7 +291,6 @@ def _check_quests_legacy(device, stop_check):
     from actions.rallies import join_rally
     from actions.titans import rally_titan
     from actions.evil_guard import rally_eg
-    from actions.combat import attack, target
     log = get_logger("actions", device)
     screen = load_screenshot(device)
     if screen is None:
@@ -344,11 +353,7 @@ def _check_quests_legacy(device, stop_check):
                         log.info("No Titan rally to join — own rally disabled, skipping")
             break
         elif quest_img == "pvp.png":
-            if navigate(Screen.MAP, device):
-                target(device)
-                if stop_check and stop_check():
-                    return
-                attack(device)
+            _attack_pvp_tower(device, stop_check)
             break
 
 
@@ -414,6 +419,12 @@ def _all_quests_visually_complete(device, quests):
         if qt in (QuestType.TOWER, QuestType.FORTRESS):
             # Tower is OK as long as a troop is defending
             if _is_troop_defending(device):
+                continue
+            return False
+        if qt == QuestType.PVP:
+            # PVP is OK if a troop was recently dispatched (on cooldown)
+            last = _pvp_last_dispatch.get(device, 0)
+            if time.time() - last < _PVP_COOLDOWN_S:
                 continue
             return False
         # For all other quests, check visual counter
@@ -592,10 +603,9 @@ def _wait_for_rallies(device, stop_check):
 def check_quests(device, stop_check=None):
     """Check alliance/side quests using OCR counter reading, with PNG fallback.
     Reads quest counters (e.g. 'Defeat Titans(0/5)') to determine what needs work.
-    Priority: Join EG > Join Titan > Start own Titan > Start own EG > PvP.
+    Priority: Tower > PVP attack > Join EG/Titan > Start own rally > Gather Gold.
     stop_check: optional callable that returns True if we should abort immediately.
     """
-    from actions.combat import attack, target
     from actions.farming import gather_gold_loop
     log = get_logger("actions", device)
     if stop_check and stop_check():
@@ -666,7 +676,13 @@ def check_quests(device, stop_check=None):
         has_gather = QuestType.GATHER in types_active and config.GATHER_ENABLED
         has_tower = (QuestType.TOWER in types_active or QuestType.FORTRESS in types_active) and config.TOWER_QUEST_ENABLED
 
-        # Handle tower quest first (low cost: 1 troop, no AP, quick deploy)
+        # PVP attack first — send 1 troop, then continue other quests while it marches
+        if has_pvp:
+            _attack_pvp_tower(device, stop_check)
+            if stop_check and stop_check():
+                return True
+
+        # Handle tower quest (low cost: 1 troop, no AP, quick deploy)
         if has_tower:
             _run_tower_quest(device, quests, stop_check)
             if stop_check and stop_check():
@@ -683,18 +699,6 @@ def check_quests(device, stop_check=None):
         if has_eg or has_titan:
             if _run_rally_loop(device, actionable, stop_check):
                 return True  # stop_check triggered
-            return True
-
-        elif has_pvp:
-            if navigate(Screen.MAP, device):
-                target(device)
-                if stop_check and stop_check():
-                    return True
-                attack(device)
-            # After PVP, deploy gather troops only if no rallies pending
-            if has_gather and not has_pending_rallies and not (stop_check and stop_check()):
-                if navigate(Screen.MAP, device):
-                    gather_gold_loop(device, stop_check)
             return True
 
         elif has_pending_rallies:
@@ -725,6 +729,69 @@ def check_quests(device, stop_check=None):
         return True
 
 # ============================================================
+# PVP QUEST — attack an enemy tower
+# ============================================================
+
+@timed_action("pvp_attack")
+def _attack_pvp_tower(device, stop_check=None):
+    """Send 1 troop to attack an enemy tower for PVP quest.
+
+    Uses target() to navigate to enemy tower via Enemy tab target marker,
+    then taps the tower to open attack menu, and departs.
+    Records dispatch time; caller should respect _PVP_COOLDOWN_S.
+    Returns True if troop dispatched, False otherwise.
+    """
+    from actions.combat import target
+    log = get_logger("actions", device)
+
+    # Check cooldown
+    last = _pvp_last_dispatch.get(device, 0)
+    elapsed = time.time() - last
+    if elapsed < _PVP_COOLDOWN_S:
+        remaining = int(_PVP_COOLDOWN_S - elapsed)
+        log.info("PVP on cooldown (%ds remaining), skipping", remaining)
+        return False
+
+    # Check troop availability
+    avail = troops_avail(device)
+    if avail < 1:
+        log.info("PVP: no troops available (%d), skipping", avail)
+        return False
+
+    # Navigate to enemy tower via target menu (Enemy tab + target_marker)
+    config.set_device_status(device, "Attacking PVP Tower...")
+    result = target(device)
+    if result is not True:
+        reason = "no marker" if result == "no_marker" else "target failed"
+        log.warning("PVP: target() returned %s (%s)", result, reason)
+        save_failure_screenshot(device, "pvp_target_fail")
+        return False
+
+    if stop_check and stop_check():
+        return False
+
+    # Tap the tower to open attack menu
+    if not tap_tower_until_attack_menu(device, timeout=10):
+        log.warning("PVP: attack menu did not open")
+        save_failure_screenshot(device, "pvp_attack_menu_fail")
+        return False
+
+    if stop_check and stop_check():
+        return False
+
+    # Depart — send the troop
+    if not tap_image("depart.png", device):
+        log.warning("PVP: depart button not found")
+        save_failure_screenshot(device, "pvp_depart_fail")
+        return False
+
+    time.sleep(1)
+    _pvp_last_dispatch[device] = time.time()
+    log.info("PVP: troop dispatched to enemy tower")
+    return True
+
+
+# ============================================================
 # TOWER QUEST — occupy a tower for alliance quest
 # ============================================================
 
@@ -742,8 +809,8 @@ def _is_troop_defending(device):
 
 
 def _navigate_to_tower(device):
-    """Navigate to the tower marked with the in-game target marker.
-    Uses the same target menu flow as target() but without heal.
+    """Navigate to the tower marked with the in-game friend marker.
+    Opens target menu, taps Friend tab, finds friend_marker.png, centers map.
     Returns True if map is now centered on the tower, False on failure."""
     log = get_logger("actions", device)
 
@@ -757,22 +824,22 @@ def _navigate_to_tower(device):
         return False
     time.sleep(1)
 
-    # Tap the Enemy tab (tower marker is stored here)
-    logged_tap(device, 740, 330, "tower_target_enemy_tab")
+    # Tap the Friend tab (tower marker is stored here)
+    logged_tap(device, 540, 330, "tower_target_friend_tab")
     time.sleep(1)
 
-    # Check that a target marker exists
+    # Check that a friend marker exists
     marker_found = False
     start_time = time.time()
     while time.time() - start_time < 3:
         screen = load_screenshot(device)
-        if screen is not None and find_image(screen, "target_marker.png", threshold=0.7):
+        if screen is not None and find_image(screen, "friend_marker.png", threshold=0.7):
             marker_found = True
             break
         time.sleep(0.5)
 
     if not marker_found:
-        log.warning("Tower nav: no target marker found — is the tower marked?")
+        log.warning("Tower nav: no friend marker found — is the tower marked?")
         return False
 
     # Tap the target to center map on the tower

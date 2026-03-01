@@ -6,11 +6,18 @@
     box-sizing: border-box;
 }
 
+/* Thin dark scrollbars (Chromium/Edge) */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+
 body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     background: #0c0c18;
     color: #e0e0f0;
     min-height: 100vh;
+    overflow-x: hidden;
     -webkit-text-size-adjust: 100%;
 }
 
@@ -56,11 +63,36 @@ nav {
     background: #1e3a5f;
 }
 
+.nav-restart {
+    background: #b71c1c;
+    color: #fff;
+    border: none;
+    padding: 7px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    flex-shrink: 0;
+    margin-left: 8px;
+    transition: all 0.15s ease;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.nav-restart:active {
+    background: #d32f2f;
+    transform: scale(0.95);
+}
+
+.nav-restart:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+
 /* Main content */
 main {
-    max-width: 600px;
+    max-width: 480px;
     margin: 0 auto;
-    padding: 16px;
+    padding: 12px;
 }
 
 h1 { font-size: 24px; margin-bottom: 16px; color: #fff; }
@@ -79,41 +111,195 @@ h3 { font-size: 15px; margin-bottom: 12px; color: #64d8ff; }
 
 .muted { color: #778; font-size: 14px; }
 
-/* Phone access banner */
-.phone-access {
+/* Access card */
+.access-card {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 10px 14px;
+    gap: 12px;
+    padding: 12px 14px;
     background: #141428;
-    border: 1px solid rgba(100,216,255,0.1);
+    border: 1px solid rgba(255,255,255,0.06);
     border-radius: 10px;
     margin-bottom: 10px;
-    font-size: 13px;
-    color: #889;
+}
+
+.access-icon {
+    font-size: 20px;
+    flex-shrink: 0;
+    line-height: 1;
+}
+
+.access-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.access-label {
+    font-size: 14px;
+    font-weight: 600;
+    color: #ccd;
+}
+
+.access-status {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.access-actions {
+    margin-left: auto;
+    display: flex;
+    gap: 6px;
+}
+
+.access-btn {
+    background: none;
+    border: 1px solid rgba(100,216,255,0.15);
+    color: #64d8ff;
+    padding: 5px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
     cursor: pointer;
     transition: all 0.15s ease;
     -webkit-tap-highlight-color: transparent;
 }
 
-.phone-access:active {
-    background: #1a1e38;
-    border-color: rgba(100,216,255,0.25);
+.access-btn:active {
+    background: rgba(100,216,255,0.1);
+    border-color: rgba(100,216,255,0.35);
 }
 
-.phone-access strong {
+/* QR code modal overlay */
+.qr-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.75);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 200;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+}
+
+.qr-overlay.visible {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.qr-modal {
+    background: #1a1a30;
+    border: 1px solid rgba(100,216,255,0.15);
+    border-radius: 16px;
+    padding: 24px;
+    text-align: center;
+    max-width: 320px;
+    width: 90%;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+}
+
+.qr-title {
+    font-size: 12px;
     color: #64d8ff;
     font-weight: 600;
+    margin-bottom: 16px;
+    word-break: break-all;
 }
 
-.phone-icon {
-    font-size: 16px;
+.qr-img {
+    width: 200px;
+    height: 200px;
+    border-radius: 8px;
+    background: #fff;
+    padding: 8px;
+}
+
+.qr-close {
+    margin-top: 16px;
+    padding: 8px 24px;
+    background: #141428;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 8px;
+    color: #889;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.qr-close:active {
+    background: #1e3a5f;
+    color: #dde;
+}
+
+/* Tunnel status indicator (inside remote banner) */
+.tunnel-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-left: 8px;
     flex-shrink: 0;
 }
 
-.copy-hint {
-    margin-left: auto;
+.tunnel-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.tunnel-label {
     font-size: 11px;
+    font-weight: 600;
+}
+
+/* Connected — green, pulsing */
+.tunnel-connected {
+    background: #4caf50;
+    box-shadow: 0 0 8px rgba(76,175,80,0.7);
+    animation: pulse-glow 2s ease-in-out infinite;
+}
+
+.tunnel-label-connected {
+    color: #66bb6a;
+}
+
+/* Connecting — amber, pulsing */
+.tunnel-connecting {
+    background: #ffb74d;
+    box-shadow: 0 0 8px rgba(255,183,77,0.6);
+    animation: pulse-amber 2s ease-in-out infinite;
+}
+
+.tunnel-label-connecting {
+    color: #ffb74d;
+}
+
+@keyframes pulse-amber {
+    0%, 100% { box-shadow: 0 0 4px rgba(255,183,77,0.3); }
+    50% { box-shadow: 0 0 12px rgba(255,183,77,0.7); }
+}
+
+/* Disconnected — red, static */
+.tunnel-disconnected {
+    background: #ef5350;
+}
+
+.tunnel-label-disconnected {
+    color: #ef5350;
+}
+
+/* Disabled — gray, static */
+.tunnel-disabled {
+    background: #444;
+}
+
+.tunnel-label-disabled {
     color: #556;
 }
 
@@ -824,6 +1010,23 @@ h3 { font-size: 15px; margin-bottom: 12px; color: #64d8ff; }
     color: #667;
     line-height: 1;
     user-select: none;
+}
+
+/* Footer debug link */
+.page-footer {
+    text-align: center;
+    padding: 24px 0 8px;
+}
+
+.footer-debug-link {
+    font-size: 11px;
+    color: #445;
+    text-decoration: none;
+    letter-spacing: 0.3px;
+}
+
+.footer-debug-link:active {
+    color: #778;
 }
 
 /* Safe area for notched iPhones */

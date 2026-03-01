@@ -3,23 +3,42 @@
 
 {% block content %}
 
-<!-- Remote Access -->
+<!-- Access -->
 {% if relay_url %}
-<div class="phone-access" onclick="copyUrl(this)" data-url="{{ relay_url }}">
-    <span class="phone-icon">&#127760;</span>
-    <span>Remote: <strong>{{ relay_url }}</strong></span>
-    <span class="copy-hint">tap to copy</span>
+<div class="access-card">
+    <span class="access-icon">&#128241;</span>
+    <div class="access-info">
+        <span class="access-label">Remote Access</span>
+        <span class="access-status">
+            <span class="tunnel-dot tunnel-connecting" id="access-dot"></span>
+            <span class="tunnel-label tunnel-label-connecting" id="access-status-text">Connecting...</span>
+        </span>
+    </div>
+    <div class="access-actions">
+        <button type="button" class="access-btn" onclick="copyAccessUrl(this, '{{ relay_url }}')" title="Copy URL">Copy</button>
+        <button type="button" class="access-btn" onclick="showQr('{{ relay_url }}')" title="QR Code">QR</button>
+    </div>
 </div>
 {% else %}
-<a href="/settings" class="phone-access" style="text-decoration:none">
-    <span class="phone-icon">&#127760;</span>
-    <span>Remote access: <strong>Set up in Settings &rarr; Remote Access</strong></span>
-</a>
+<div class="access-card">
+    <span class="access-icon">&#128241;</span>
+    <div class="access-info">
+        <span class="access-label">Local Network</span>
+    </div>
+    <div class="access-actions">
+        <button type="button" class="access-btn" onclick="copyAccessUrl(this, 'http://{{ local_ip }}:8080')" title="Copy URL">Copy</button>
+        <button type="button" class="access-btn" onclick="showQr('http://{{ local_ip }}:8080')" title="QR Code">QR</button>
+    </div>
+</div>
 {% endif %}
-<div class="phone-access" onclick="copyUrl(this)" data-url="http://{{ local_ip }}:8080">
-    <span class="phone-icon">&#128241;</span>
-    <span>Same WiFi: <strong>http://{{ local_ip }}:8080</strong></span>
-    <span class="copy-hint">tap to copy</span>
+
+<!-- QR Code Modal -->
+<div class="qr-overlay" id="qr-overlay" onclick="closeQr()">
+    <div class="qr-modal" onclick="event.stopPropagation()">
+        <div class="qr-title" id="qr-title"></div>
+        <img class="qr-img" id="qr-img" alt="QR Code">
+        <button type="button" class="qr-close" onclick="closeQr()">Close</button>
+    </div>
 </div>
 
 <!-- Device Cards -->
@@ -130,8 +149,7 @@
     <form method="post" action="/api/devices/refresh" style="flex:1">
         <button type="submit" class="bottom-btn">Refresh</button>
     </form>
-    <button type="button" class="bottom-btn bottom-btn-danger" style="flex:1" id="restart-btn" onclick="confirmRestart()">Restart</button>
-    <a href="/api/bug-report" class="bottom-btn" style="flex:1;text-align:center;text-decoration:none">Bug Report</a>
+    <button type="button" class="bottom-btn" style="flex:1" onclick="downloadBugReport()">Bug Report</button>
 </div>
 
 {% endblock %}
@@ -142,11 +160,15 @@
 var _troopData = {};
 
 function renderTroops(container, troops, age, elapsed) {
+    container.textContent = '';
     if (!troops || troops.length === 0) {
-        container.innerHTML = '<span class="muted" style="font-size:11px">No troop data yet</span>';
+        var hint = document.createElement('span');
+        hint.className = 'muted';
+        hint.style.fontSize = '11px';
+        hint.textContent = 'No troop data yet';
+        container.appendChild(hint);
         return;
     }
-    var html = '';
     troops.forEach(function(t) {
         var isHome = t.action === 'Home';
         var cls = ACTION_CLASSES[t.action] || 'troop-deployed';
@@ -155,13 +177,18 @@ function renderTroops(container, troops, age, elapsed) {
             var adjusted = Math.max(0, t.time_left - (elapsed || 0));
             label += ' ' + fmtTime(adjusted);
         }
-        html += '<span class="troop-slot ' + cls + '">' + label + '</span>';
+        var span = document.createElement('span');
+        span.className = 'troop-slot ' + cls;
+        span.textContent = label;
+        container.appendChild(span);
     });
     if (age != null) {
         var displayAge = age + (elapsed || 0);
-        html += '<span class="troop-age">' + (displayAge < 60 ? displayAge + 's ago' : Math.floor(displayAge/60) + 'm ago') + '</span>';
+        var ageSpan = document.createElement('span');
+        ageSpan.className = 'troop-age';
+        ageSpan.textContent = displayAge < 60 ? displayAge + 's ago' : Math.floor(displayAge/60) + 'm ago';
+        container.appendChild(ageSpan);
     }
-    container.innerHTML = html;
 }
 
 function tickTroopTimers() {
@@ -186,29 +213,42 @@ function fmtNum(n) {
 function renderQuests(container, quests) {
     var header = container.previousElementSibling;
     if (!quests || quests.length === 0) {
-        container.innerHTML = '';
+        container.textContent = '';
         if (header) header.style.display = 'none';
         return;
     }
     if (header) header.style.display = '';
-    var html = '<div class="dp-quests">';
+    container.textContent = '';
+    var wrap = document.createElement('div');
+    wrap.className = 'dp-quests';
     quests.forEach(function(q) {
         var raw = q.quest_type.replace('QuestType.', '');
         var label = QUEST_LABELS[raw] || raw;
         var seen = q.last_seen != null ? q.last_seen : 0;
         var target = q.target;
         var pend = q.pending || 0;
-        // Hide completed quests (seen >= target, no pending rallies)
         if (target != null && seen >= target && pend === 0) return;
-        html += '<div class="quest-pill">';
-        html += '<span class="quest-label">' + label + '</span>';
-        html += '<span class="quest-val">' + fmtNum(seen);
-        if (target != null) html += '/' + fmtNum(target);
-        if (pend > 0) html += '<span class="quest-pend">+' + pend + '</span>';
-        html += '</span></div>';
+        var pill = document.createElement('div');
+        pill.className = 'quest-pill';
+        var lbl = document.createElement('span');
+        lbl.className = 'quest-label';
+        lbl.textContent = label;
+        pill.appendChild(lbl);
+        var val = document.createElement('span');
+        val.className = 'quest-val';
+        var valText = fmtNum(seen);
+        if (target != null) valText += '/' + fmtNum(target);
+        val.textContent = valText;
+        if (pend > 0) {
+            var pendSpan = document.createElement('span');
+            pendSpan.className = 'quest-pend';
+            pendSpan.textContent = '+' + pend;
+            val.appendChild(pendSpan);
+        }
+        pill.appendChild(val);
+        wrap.appendChild(pill);
     });
-    html += '</div>';
-    container.innerHTML = html;
+    container.appendChild(wrap);
 }
 
 function refreshStatus() {
@@ -253,6 +293,15 @@ function refreshStatus() {
                 var questEl = card.querySelector('.quest-tracking');
                 if (questEl) renderQuests(questEl, dev.quests);
             });
+            // Update tunnel status
+            var dot = document.getElementById('access-dot');
+            var lbl = document.getElementById('access-status-text');
+            if (dot && data.tunnel) {
+                var labels = {connected:'Connected', connecting:'Connecting...', disconnected:'Disconnected', disabled:'Disabled'};
+                dot.className = 'tunnel-dot tunnel-' + data.tunnel;
+                lbl.className = 'tunnel-label tunnel-label-' + data.tunnel;
+                lbl.textContent = labels[data.tunnel] || data.tunnel;
+            }
             // Update auto mode toggles
             document.querySelectorAll('.auto-row[data-mode]').forEach(function(row) {
                 var key = row.getAttribute('data-mode');
@@ -316,29 +365,39 @@ function toggleAutoMode(modeKey) {
     }).catch(function() {});
 }
 
-function copyUrl(el) {
-    var url = el.getAttribute('data-url') || 'http://{{ local_ip }}:8080';
+function copyAccessUrl(btn, url) {
     navigator.clipboard.writeText(url).then(function() {
-        var hint = el.querySelector('.copy-hint');
-        if (hint) { hint.textContent = 'copied!'; setTimeout(function() { hint.textContent = 'tap to copy'; }, 1500); }
+        var orig = btn.textContent;
+        btn.textContent = 'Copied!';
+        setTimeout(function() { btn.textContent = orig; }, 1500);
     }).catch(function() {});
 }
 
-function confirmRestart() {
-    if (!confirm('Restart PACbot? All running tasks will be stopped.')) return;
-    var btn = document.getElementById('restart-btn');
-    btn.disabled = true;
-    btn.textContent = 'Restarting...';
-    fetch('/api/restart', {method: 'POST'}).catch(function() {});
-    function waitForServer() {
-        fetch('/api/status')
-            .then(function(r) {
-                if (r.ok) location.reload();
-                else setTimeout(waitForServer, 1000);
-            })
-            .catch(function() { setTimeout(waitForServer, 1000); });
-    }
-    setTimeout(waitForServer, 2000);
+function showQr(url) {
+    var overlay = document.getElementById('qr-overlay');
+    var img = document.getElementById('qr-img');
+    var title = document.getElementById('qr-title');
+    title.textContent = url;
+    img.src = '/api/qr?url=' + encodeURIComponent(url);
+    overlay.classList.add('visible');
 }
+function closeQr() {
+    document.getElementById('qr-overlay').classList.remove('visible');
+}
+
+function downloadBugReport() {
+    fetch('/api/bug-report', {method: 'POST'})
+        .then(function(r) { return r.blob().then(function(b) { return {blob: b, r: r}; }); })
+        .then(function(obj) {
+            var a = document.createElement('a');
+            a.href = URL.createObjectURL(obj.blob);
+            var cd = obj.r.headers.get('Content-Disposition') || '';
+            var m = cd.match(/filename="?([^"]+)"?/);
+            a.download = m ? m[1] : 'pacbot_bugreport.zip';
+            a.click();
+            URL.revokeObjectURL(a.href);
+        }).catch(function() {});
+}
+
 </script>
 {% endblock %}
