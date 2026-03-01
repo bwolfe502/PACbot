@@ -482,6 +482,11 @@ def find_image(screen, image_name, threshold=0.8, region=None, device=None):
                     device, image_name, loc[0] + w // 2, loc[1] + h // 2, max_val)
             return max_val, loc, h, w
 
+        # Some templates must ONLY match in their region (no fallback)
+        # to prevent false positives elsewhere on screen.
+        if image_name in _REGION_STRICT:
+            return None
+
         # Fallback: search full screen in case the element moved outside the region
         result = cv2.matchTemplate(screen, button, cv2.TM_CCOEFF_NORMED)
         _, max_val_full, _, max_loc_full = cv2.minMaxLoc(result)
@@ -588,6 +593,12 @@ def tap(button_name, device):
     y = BUTTONS[button_name]["y"]
     adb_tap(device, x, y)
     log.debug("Tapped %s at %d, %d", button_name, x, y)
+
+# Templates that must ONLY match within their IMAGE_REGIONS region.
+# No full-screen fallback — prevents false positives elsewhere on screen.
+_REGION_STRICT = {
+    "heal.png",
+}
 
 # Region constraints for templates that should only match in specific screen areas.
 # Values are (x1, y1, x2, y2) defining the search region.

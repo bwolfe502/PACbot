@@ -134,7 +134,7 @@ class TestOccupyTower:
              patch("actions.quests.troops_avail", return_value=3), \
              patch("actions.quests._navigate_to_tower", return_value=True), \
              patch("actions.quests.logged_tap"), \
-             patch("actions.quests.tap_image", return_value=True), \
+             patch("actions.quests.wait_for_image_and_tap", return_value=True), \
              patch("actions.quests.config") as mock_config, \
              patch("actions.quests.time.sleep"):
             mock_config.set_device_status = MagicMock()
@@ -150,13 +150,28 @@ class TestOccupyTower:
             mock_config.set_device_status = MagicMock()
             assert occupy_tower(mock_device) is False
 
-    def test_fails_if_depart_not_found(self, mock_device):
+    def test_fails_if_reinforce_not_found(self, mock_device):
         with patch("actions.quests.navigate", return_value=True), \
              patch("actions.quests._is_troop_defending", return_value=False), \
              patch("actions.quests.troops_avail", return_value=3), \
              patch("actions.quests._navigate_to_tower", return_value=True), \
              patch("actions.quests.logged_tap"), \
-             patch("actions.quests.tap_image", return_value=False), \
+             patch("actions.quests.wait_for_image_and_tap", return_value=False), \
+             patch("actions.quests.save_failure_screenshot"), \
+             patch("actions.quests.config") as mock_config, \
+             patch("actions.quests.time.sleep"):
+            mock_config.set_device_status = MagicMock()
+            assert occupy_tower(mock_device) is False
+
+    def test_fails_if_depart_not_found(self, mock_device):
+        def _wfiat_side_effect(image, *a, **kw):
+            return image == "reinforce_button.png"  # reinforce OK, depart fails
+        with patch("actions.quests.navigate", return_value=True), \
+             patch("actions.quests._is_troop_defending", return_value=False), \
+             patch("actions.quests.troops_avail", return_value=3), \
+             patch("actions.quests._navigate_to_tower", return_value=True), \
+             patch("actions.quests.logged_tap"), \
+             patch("actions.quests.wait_for_image_and_tap", side_effect=_wfiat_side_effect), \
              patch("actions.quests.save_failure_screenshot"), \
              patch("actions.quests.config") as mock_config, \
              patch("actions.quests.time.sleep"):

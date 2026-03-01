@@ -801,15 +801,18 @@ def occupy_tower(device, stop_check=None):
     logged_tap(device, 540, 900, "tower_tap")
     time.sleep(1.5)
 
-    # Tap reinforce
-    logged_tap(device, 730, 1430, "tower_reinforce")
+    # Tap reinforce (template match — position varies by tower type)
+    if not wait_for_image_and_tap("reinforce_button.png", device, timeout=5):
+        log.warning("Reinforce button not found after tower tap")
+        save_failure_screenshot(device, "tower_reinforce_missing")
+        return False
     time.sleep(1)
 
     if stop_check and stop_check():
         return False
 
     # Tap depart
-    if tap_image("depart.png", device):
+    if wait_for_image_and_tap("depart.png", device, timeout=5):
         log.info("Tower troop deployed!")
         _tower_quest_state[device] = {"deployed_at": time.time()}
         return True
