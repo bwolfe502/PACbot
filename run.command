@@ -122,7 +122,7 @@ echo ""
 python updater.py
 
 echo ""
-python main.py
+python run_web.py
 if [ $? -ne 0 ]; then
     echo ""
     echo "=========================================="

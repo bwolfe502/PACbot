@@ -185,11 +185,9 @@ class TestApiRefreshDevices:
     @patch("web.dashboard.auto_connect_emulators")
     @patch("web.dashboard.get_devices", return_value=["127.0.0.1:9999"])
     @patch("web.dashboard.get_emulator_instances", return_value={"127.0.0.1:9999": "MuMu"})
-    def test_refresh_returns_devices(self, mock_inst, mock_devs, mock_connect, client):
+    def test_refresh_redirects_to_index(self, mock_inst, mock_devs, mock_connect, client):
         resp = client.post("/api/devices/refresh")
-        assert resp.status_code == 200
-        data = json.loads(resp.data)
-        assert len(data["devices"]) == 1
+        assert resp.status_code == 302
         mock_connect.assert_called_once()
 
 
@@ -451,3 +449,161 @@ class TestAutoModeExclusivity:
         # auto_quest stop event should be set (exclusivity)
         assert ev_quest.is_set()
         t.join(timeout=1)
+
+
+# ---------------------------------------------------------------------------
+# Territory grid API tests
+# ---------------------------------------------------------------------------
+
+class TestTerritoryPage:
+    def test_territory_page_returns_200(self, client):
+        resp = client.get("/territory")
+        assert resp.status_code == 200
+        assert b"territory" in resp.data.lower()
+
+
+class TestTerritoryGridApi:
+    def test_get_grid_returns_json(self, client):
+        config.MANUAL_ATTACK_SQUARES = {(0, 1), (2, 3)}
+        config.MANUAL_IGNORE_SQUARES = {(5, 6)}
+        resp = client.get("/api/territory/grid")
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert "attack" in data
+        assert "ignore" in data
+        assert "throne" in data
+        assert len(data["attack"]) == 2
+        assert len(data["ignore"]) == 1
+        assert [11, 11] in data["throne"]
+
+    def test_get_grid_empty(self, client):
+        config.MANUAL_ATTACK_SQUARES = set()
+        config.MANUAL_IGNORE_SQUARES = set()
+        resp = client.get("/api/territory/grid")
+        data = json.loads(resp.data)
+        assert data["attack"] == []
+        assert data["ignore"] == []
+
+    def test_post_grid_saves_squares(self, client):
+        config.MANUAL_ATTACK_SQUARES = set()
+        config.MANUAL_IGNORE_SQUARES = set()
+        resp = client.post("/api/territory/grid",
+                           data=json.dumps({
+                               "attack": [[1, 2], [3, 4]],
+                               "ignore": [[5, 6]],
+                           }),
+                           content_type="application/json")
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert data["ok"] is True
+        assert (1, 2) in config.MANUAL_ATTACK_SQUARES
+        assert (3, 4) in config.MANUAL_ATTACK_SQUARES
+        assert (5, 6) in config.MANUAL_IGNORE_SQUARES
+
+    def test_post_grid_clears_previous(self, client):
+        config.MANUAL_ATTACK_SQUARES = {(9, 9)}
+        config.MANUAL_IGNORE_SQUARES = {(8, 8)}
+        resp = client.post("/api/territory/grid",
+                           data=json.dumps({"attack": [], "ignore": []}),
+                           content_type="application/json")
+        assert resp.status_code == 200
+        assert len(config.MANUAL_ATTACK_SQUARES) == 0
+        assert len(config.MANUAL_IGNORE_SQUARES) == 0
+
+
+# ---------------------------------------------------------------------------
+# Bug report endpoint tests
+# ---------------------------------------------------------------------------
+
+class TestBugReportApi:
+    @patch("startup.create_bug_report_zip")
+    def test_bug_report_returns_zip(self, mock_zip, client):
+        mock_zip.return_value = (b"PK\x03\x04fake_zip_data", "pacbot_bugreport_test.zip")
+        resp = client.get("/api/bug-report")
+        assert resp.status_code == 200
+        assert resp.content_type == "application/zip"
+        assert b"PK" in resp.data  # zip magic bytes
+
+
+# ---------------------------------------------------------------------------
+# Debug page tests
+# ---------------------------------------------------------------------------
+
+class TestDebugPage:
+    @patch("web.dashboard.get_devices", return_value=["127.0.0.1:9999"])
+    @patch("web.dashboard.get_emulator_instances", return_value={})
+    def test_debug_page_returns_200(self, mock_inst, mock_devs, client):
+        resp = client.get("/debug")
+        assert resp.status_code == 200
+        assert b"debug" in resp.data.lower()
+
+
+# ---------------------------------------------------------------------------
+# startup.py tests
+# ---------------------------------------------------------------------------
+
+class TestApplySettings:
+    def test_apply_settings_sets_config_globals(self):
+        from startup import apply_settings
+        apply_settings({
+            "auto_heal": False,
+            "auto_restore_ap": True,
+            "min_troops": 3,
+            "my_team": "red",
+            "mithril_interval": 25,
+            "gather_enabled": False,
+            "gather_mine_level": 5,
+            "gather_max_troops": 2,
+            "tower_quest_enabled": True,
+            "device_troops": {"127.0.0.1:9999": 4},
+        })
+        assert config.AUTO_HEAL_ENABLED is False
+        assert config.AUTO_RESTORE_AP_ENABLED is True
+        assert config.MIN_TROOPS_AVAILABLE == 3
+        assert config.MY_TEAM_COLOR == "red"
+        assert config.MITHRIL_INTERVAL == 25
+        assert config.DEVICE_TOTAL_TROOPS.get("127.0.0.1:9999") == 4
+
+    def test_apply_settings_defaults(self):
+        from startup import apply_settings
+        apply_settings({})
+        assert config.AUTO_HEAL_ENABLED is True
+        assert config.MIN_TROOPS_AVAILABLE == 0
+
+
+class TestCreateBugReportZip:
+    @patch("devices.get_devices", return_value=["127.0.0.1:9999"])
+    def test_creates_valid_zip(self, mock_devs):
+        import zipfile
+        import io
+        from startup import create_bug_report_zip
+        zip_bytes, filename = create_bug_report_zip()
+        assert filename.startswith("pacbot_bugreport_")
+        assert filename.endswith(".zip")
+        # Verify it's a valid zip
+        buf = io.BytesIO(zip_bytes)
+        with zipfile.ZipFile(buf, "r") as zf:
+            names = zf.namelist()
+            assert "report_info.txt" in names
+
+    @patch("devices.get_devices", return_value=[])
+    def test_includes_system_info(self, mock_devs):
+        import zipfile
+        import io
+        from startup import create_bug_report_zip
+        zip_bytes, _ = create_bug_report_zip()
+        buf = io.BytesIO(zip_bytes)
+        with zipfile.ZipFile(buf, "r") as zf:
+            info = zf.read("report_info.txt").decode("utf-8")
+            assert "PACbot Bug Report" in info
+            assert "Python:" in info
+            assert "OS:" in info
+
+
+class TestGetRamGb:
+    def test_returns_string(self):
+        from startup import _get_ram_gb
+        result = _get_ram_gb()
+        assert isinstance(result, str)
+        # Should be either "X.X GB" or "unknown"
+        assert "GB" in result or result == "unknown"

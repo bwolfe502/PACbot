@@ -18,6 +18,8 @@ import functools
 from datetime import datetime
 from threading import Lock
 
+import psutil
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_DIR = os.path.join(SCRIPT_DIR, "logs")
 STATS_DIR = os.path.join(SCRIPT_DIR, "stats")
@@ -45,6 +47,31 @@ ADAPTIVE_MIN_BUDGET_S = 0.3         # absolute floor in seconds
 
 # Reference to the console handler so set_console_verbose() can adjust it
 _console_handler = None
+
+# ============================================================
+# MEMORY MONITORING
+# ============================================================
+
+_process = psutil.Process(os.getpid())
+_peak_memory_mb = 0.0
+
+def get_memory_mb():
+    """Return current process RSS in MB."""
+    return _process.memory_info().rss / (1024 * 1024)
+
+
+def get_peak_memory_mb():
+    """Return the highest RSS observed by memory checkpoints."""
+    return _peak_memory_mb
+
+
+def _update_peak():
+    """Update the high-water mark."""
+    global _peak_memory_mb
+    current = get_memory_mb()
+    if current > _peak_memory_mb:
+        _peak_memory_mb = current
+    return current
 
 
 # ============================================================
@@ -107,6 +134,7 @@ def setup_logging(verbose=False):
     _banner.info("System: %s %s | %s | %d cores | Python %s",
                  _plat.system(), _plat.release(), _plat.machine(),
                  os.cpu_count() or 0, _plat.python_version())
+    _banner.info("Memory: %.0f MB (startup)", _update_peak())
     _banner.info("=" * 60)
 
 
@@ -209,6 +237,9 @@ class StatsTracker:
         def _tick():
             try:
                 self.save()
+                mem = _update_peak()
+                _log = logging.getLogger("botlog")
+                _log.info("Memory checkpoint: %.0f MB (peak: %.0f MB)", mem, _peak_memory_mb)
             except Exception:
                 pass
             self._start_auto_save()
@@ -430,6 +461,8 @@ class StatsTracker:
                 "session_start": self._session_start.strftime("%Y-%m-%d %H:%M:%S"),
                 "session_end": now.strftime("%Y-%m-%d %H:%M:%S"),
                 "duration_minutes": round(duration, 1),
+                "memory_mb": round(get_memory_mb(), 1),
+                "peak_memory_mb": round(_peak_memory_mb, 1),
                 "devices": output_devices,
             }
 
@@ -464,6 +497,7 @@ class StatsTracker:
             lines = []
             duration = (datetime.now() - self._session_start).total_seconds() / 60.0
             lines.append(f"Session duration: {duration:.0f} minutes")
+            lines.append(f"Memory: {get_memory_mb():.0f} MB (peak: {_peak_memory_mb:.0f} MB)")
 
             for device, data in self._data.items():
                 lines.append(f"\n=== {device} ===")
@@ -567,15 +601,19 @@ def timed_action(action_name):
         def wrapper(device, *args, **kwargs):
             log = get_logger(func.__module__ or "unknown", device)
             log.info(">>> %s starting", action_name)
+            mem_before = get_memory_mb()
             start = time.time()
             try:
                 result = func(device, *args, **kwargs)
                 elapsed = time.time() - start
                 success = result is not False and result is not None
+                mem_after = _update_peak()
+                mem_delta = mem_after - mem_before
+                mem_note = f" ({mem_delta:+.1f} MB, RSS: {mem_after:.0f} MB)" if abs(mem_delta) > 5 else ""
                 if success:
-                    log.info("<<< %s completed in %.1fs", action_name, elapsed)
+                    log.info("<<< %s completed in %.1fs%s", action_name, elapsed, mem_note)
                 else:
-                    log.warning("<<< %s returned failure in %.1fs", action_name, elapsed)
+                    log.warning("<<< %s returned failure in %.1fs%s", action_name, elapsed, mem_note)
                 stats.record_action(device, action_name, success, elapsed)
                 return result
             except Exception as e:

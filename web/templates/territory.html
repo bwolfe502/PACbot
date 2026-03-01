@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+{% block title_suffix %} - Territory{% endblock %}
+{% block body_class %}territory-page{% endblock %}
+
+{% block content %}
+
+<div class="section-header">Territory Grid</div>
+<p class="muted" style="margin-bottom:12px;font-size:12px">
+    Click to cycle: <span style="color:#555">none</span> &rarr;
+    <span style="color:#4caf50">attack</span> &rarr;
+    <span style="color:#ef5350">ignore</span>
+</p>
+
+<div class="card" style="padding:10px;overflow-x:auto">
+    <!-- Column numbers -->
+    <div class="terr-grid-wrap">
+        <div class="terr-grid-corner"></div>
+        <div class="terr-col-headers" id="col-headers"></div>
+    </div>
+    <div class="terr-grid-body">
+        <div class="terr-row-headers" id="row-headers"></div>
+        <div class="terr-grid" id="territory-grid"></div>
+    </div>
+</div>
+
+<div style="display:flex;gap:8px;margin-top:12px">
+    <button class="btn btn-start" style="flex:1" onclick="saveGrid()">Save</button>
+    <button class="btn" style="flex:1" onclick="clearAll()">Clear All</button>
+</div>
+
+<div id="save-status" style="margin-top:8px;font-size:12px;color:#4caf50;display:none"></div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+var GRID_SIZE = 24;
+var THRONE = {};
+var cellStates = {}; // "r,c" -> "none" | "attack" | "ignore"
+
+// Initialize throne set for quick lookup
+[[11,11],[11,12],[12,11],[12,12]].forEach(function(rc) {
+    THRONE[rc[0] + ',' + rc[1]] = true;
+});
+
+function buildGrid() {
+    var colHeaders = document.getElementById('col-headers');
+    var rowHeaders = document.getElementById('row-headers');
+    var grid = document.getElementById('territory-grid');
+
+    // Column headers
+    var colHtml = '';
+    for (var c = 0; c < GRID_SIZE; c++) {
+        colHtml += '<div class="terr-header-cell">' + c + '</div>';
+    }
+    colHeaders.innerHTML = colHtml;
+
+    // Row headers + grid cells
+    var rowHtml = '';
+    var gridHtml = '';
+    for (var r = 0; r < GRID_SIZE; r++) {
+        rowHtml += '<div class="terr-header-cell terr-row-num">' + r + '</div>';
+        for (var c = 0; c < GRID_SIZE; c++) {
+            var key = r + ',' + c;
+            var isThrone = THRONE[key];
+            var cls = 'terr-cell';
+            if (isThrone) cls += ' terr-throne';
+            gridHtml += '<div class="' + cls + '" data-r="' + r + '" data-c="' + c + '"';
+            if (!isThrone) {
+                gridHtml += ' onclick="cycleCell(this)"';
+            }
+            gridHtml += '>';
+            if (isThrone) gridHtml += '<span class="terr-throne-label">T</span>';
+            gridHtml += '</div>';
+        }
+    }
+    rowHeaders.innerHTML = rowHtml;
+    grid.innerHTML = gridHtml;
+}
+
+function cycleCell(el) {
+    var r = el.getAttribute('data-r');
+    var c = el.getAttribute('data-c');
+    var key = r + ',' + c;
+    var current = cellStates[key] || 'none';
+    var next;
+    if (current === 'none') next = 'attack';
+    else if (current === 'attack') next = 'ignore';
+    else next = 'none';
+
+    cellStates[key] = next;
+    el.classList.remove('terr-attack', 'terr-ignore');
+    if (next === 'attack') el.classList.add('terr-attack');
+    else if (next === 'ignore') el.classList.add('terr-ignore');
+}
+
+function applyState(attackList, ignoreList) {
+    // Reset all
+    cellStates = {};
+    document.querySelectorAll('.terr-cell').forEach(function(el) {
+        el.classList.remove('terr-attack', 'terr-ignore');
+    });
+
+    attackList.forEach(function(rc) {
+        var key = rc[0] + ',' + rc[1];
+        cellStates[key] = 'attack';
+        var el = document.querySelector('.terr-cell[data-r="' + rc[0] + '"][data-c="' + rc[1] + '"]');
+        if (el) el.classList.add('terr-attack');
+    });
+
+    ignoreList.forEach(function(rc) {
+        var key = rc[0] + ',' + rc[1];
+        cellStates[key] = 'ignore';
+        var el = document.querySelector('.terr-cell[data-r="' + rc[0] + '"][data-c="' + rc[1] + '"]');
+        if (el) el.classList.add('terr-ignore');
+    });
+}
+
+function loadGrid() {
+    fetch('/api/territory/grid')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            applyState(data.attack || [], data.ignore || []);
+        })
+        .catch(function(err) {
+            console.error('Failed to load grid:', err);
+        });
+}
+
+function saveGrid() {
+    var attack = [];
+    var ignore = [];
+    Object.keys(cellStates).forEach(function(key) {
+        var parts = key.split(',');
+        var rc = [parseInt(parts[0]), parseInt(parts[1])];
+        if (cellStates[key] === 'attack') attack.push(rc);
+        else if (cellStates[key] === 'ignore') ignore.push(rc);
+    });
+
+    fetch('/api/territory/grid', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({attack: attack, ignore: ignore})
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+        if (data.ok) {
+            var el = document.getElementById('save-status');
+            el.textContent = 'Saved (' + attack.length + ' attack, ' + ignore.length + ' ignore)';
+            el.style.display = 'block';
+            setTimeout(function() { el.style.display = 'none'; }, 3000);
+        }
+    })
+    .catch(function(err) {
+        console.error('Failed to save grid:', err);
+    });
+}
+
+function clearAll() {
+    cellStates = {};
+    document.querySelectorAll('.terr-cell').forEach(function(el) {
+        el.classList.remove('terr-attack', 'terr-ignore');
+    });
+}
+
+buildGrid();
+loadGrid();
+</script>
+{% endblock %}

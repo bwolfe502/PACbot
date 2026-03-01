@@ -7,15 +7,16 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="theme-color" content="#1a1a2e">
     <title>PACbot{% block title_suffix %}{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=19">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=21">
 </head>
-<body>
+<body class="{% block body_class %}{% endblock %}">
     <nav>
         <a href="/" class="nav-brand">PACbot</a>
         <div class="nav-links">
             <a href="/" class="{% if request.path == '/' %}active{% endif %}">Dashboard</a>
             <a href="/settings" class="{% if request.path == '/settings' %}active{% endif %}">Settings</a>
             <a href="/debug" class="{% if request.path == '/debug' %}active{% endif %}">Debug</a>
+            <a href="/territory" class="{% if request.path == '/territory' %}active{% endif %}">Territory</a>
             <a href="/logs" class="{% if request.path == '/logs' %}active{% endif %}">Logs</a>
         </div>
     </nav>
