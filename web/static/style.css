@@ -589,6 +589,11 @@ h3 { font-size: 15px; margin-bottom: 12px; color: #64d8ff; }
     font-weight: 500;
 }
 
+.status-text.status-stopping {
+    color: #ff6b6b;
+    font-weight: 600;
+}
+
 /* Section labels inside cards */
 .section-label {
     font-size: 10px;

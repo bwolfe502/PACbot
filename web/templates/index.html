@@ -402,9 +402,11 @@ function refreshStatus() {
                     var text = statusBar.querySelector('.status-text');
                     if (text) {
                         text.textContent = dev.status;
-                        text.classList.remove('status-active', 'status-waiting', 'status-navigating');
+                        text.classList.remove('status-active', 'status-waiting', 'status-navigating', 'status-stopping');
                         if (dev.status === 'Idle') {
                             // default gray
+                        } else if (dev.status.indexOf('Stopping') !== -1) {
+                            text.classList.add('status-stopping');
                         } else if (dev.status.indexOf('Waiting') !== -1) {
                             text.classList.add('status-waiting');
                         } else if (dev.status.indexOf('Navigating') !== -1) {
