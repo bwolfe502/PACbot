@@ -682,7 +682,7 @@ class TestUploadBugReport:
         assert ok is True
         assert "successful" in msg.lower()
         # Verify clear_debug=False was passed
-        mock_zip.assert_called_once_with(clear_debug=False)
+        mock_zip.assert_called_once_with(clear_debug=False, notes=None)
         # Verify URL derived from relay URL
         call_args = mock_post.call_args
         assert "example.com/_upload" in call_args[0][0]
