@@ -332,14 +332,19 @@ def _recover_to_known_screen(device):
         log.debug("Recovery via %s: still unknown", name)
 
     # Phase 2: Android BACK key (dismisses game popups that lack an X button)
-    log.info("Recovery phase 2: Android BACK key")
-    adb_keyevent(device, 4)  # KEYCODE_BACK
-    timed_wait(device, lambda: check_screen(device) != Screen.UNKNOWN,
-               2, "recover_android_back")
-    current = check_screen(device)
-    if current != Screen.UNKNOWN:
-        log.info("Recovery via Android BACK key: now on %s", current)
-        return current
+    # SKIP on likely MAP — BACK triggers the game's "quit" dialog on MAP screen,
+    # creating a dismiss → reappear loop that the user sees as repeated exit prompts.
+    if likely_map:
+        log.debug("Recovery phase 2: skipping BACK key (likely MAP — would trigger quit dialog)")
+    else:
+        log.info("Recovery phase 2: Android BACK key")
+        adb_keyevent(device, 4)  # KEYCODE_BACK
+        timed_wait(device, lambda: check_screen(device) != Screen.UNKNOWN,
+                   2, "recover_android_back")
+        current = check_screen(device)
+        if current != Screen.UNKNOWN:
+            log.info("Recovery via Android BACK key: now on %s", current)
+            return current
 
     # Phase 3: Tap screen center (dismiss transparent/click-through overlays)
     log.info("Recovery phase 3: center tap to dismiss overlays")
@@ -351,15 +356,20 @@ def _recover_to_known_screen(device):
         return current
 
     # Phase 4: Nuclear — 3x BACK + center tap + 5s wait
-    log.info("Recovery phase 4: nuclear — 3x BACK + center tap + long wait")
-    for _ in range(3):
-        adb_keyevent(device, 4)  # KEYCODE_BACK
-        time.sleep(0.5)
+    # SKIP BACK keys on likely MAP (same quit dialog issue as phase 2).
+    if likely_map:
+        log.info("Recovery phase 4: center tap + long wait (skipping BACK keys — likely MAP)")
+    else:
+        log.info("Recovery phase 4: nuclear — 3x BACK + center tap + long wait")
+        for _ in range(3):
+            adb_keyevent(device, 4)  # KEYCODE_BACK
+            time.sleep(0.5)
     adb_tap(device, 540, 960)
     time.sleep(5)
     current = check_screen(device)
     if current != Screen.UNKNOWN:
-        log.info("Recovery via nuclear option: now on %s", current)
+        log.info("Recovery via %s: now on %s",
+                 "center tap + wait" if likely_map else "nuclear option", current)
         return current
 
     log.warning("Recovery FAILED after all strategies (including escalation)")

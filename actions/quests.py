@@ -902,8 +902,10 @@ def _run_tower_quest(device, quests, stop_check=None):
             recall_tower_troop(device, stop_check)
         return
 
-    # Tower quest is active
-    if _is_troop_defending(device):
+    # Tower quest is active — check if already defending.
+    # _tower_quest_state is set on successful deploy (reliable within session).
+    # _is_troop_defending reads the troop panel (requires MAP screen, may fail here).
+    if device in _tower_quest_state or _is_troop_defending(device):
         log.info("Tower quest active, troop already defending — skipping")
         config.set_device_status(device, "Tower Quest: Defending...")
         return
