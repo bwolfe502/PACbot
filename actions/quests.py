@@ -435,7 +435,7 @@ def _all_quests_visually_complete(device, quests):
             continue
         if qt in (QuestType.TOWER, QuestType.FORTRESS):
             # Tower is OK as long as a troop is defending
-            if _is_troop_defending(device):
+            if device in _tower_quest_state or _is_troop_defending_relaxed(device):
                 continue
             return False
         if qt == QuestType.PVP:
@@ -892,6 +892,23 @@ def _is_troop_defending(device):
     return snapshot.any_doing(TroopAction.DEFENDING)
 
 
+def _is_troop_defending_relaxed(device):
+    """Like _is_troop_defending but accepts snapshots up to 120s old.
+
+    Quest OCR takes 60+ seconds, so by the time _run_tower_quest runs the
+    snapshot from check_quests start is stale for the 30s window but still
+    valid — defending status doesn't change that quickly.
+    """
+    snapshot = get_troop_status(device)
+    if snapshot is not None and snapshot.age_seconds < 120:
+        return snapshot.any_doing(TroopAction.DEFENDING)
+    # Snapshot too old — try fresh panel read (needs MAP screen)
+    snapshot = read_panel_statuses(device)
+    if snapshot is None:
+        return False
+    return snapshot.any_doing(TroopAction.DEFENDING)
+
+
 def _navigate_to_tower(device):
     """Navigate to the tower marked with the in-game friend marker.
     Opens target menu, taps Friend tab, finds friend_marker.png, centers map.
@@ -1066,7 +1083,7 @@ def _run_tower_quest(device, quests, stop_check=None):
     if not tower_quests:
         # No tower quests on screen — but troop may still be defending from a
         # previous quest. Recall it so it's not stuck indefinitely.
-        if device in _tower_quest_state or _is_troop_defending(device):
+        if device in _tower_quest_state or _is_troop_defending_relaxed(device):
             log.info("No tower quests but troop still defending — recalling")
             recall_tower_troop(device, stop_check)
         return
@@ -1076,15 +1093,14 @@ def _run_tower_quest(device, quests, stop_check=None):
 
     if all_done:
         # All tower quests completed — recall troop if defending
-        if _is_troop_defending(device):
+        if device in _tower_quest_state or _is_troop_defending_relaxed(device):
             log.info("Tower quests complete — recalling troop")
             recall_tower_troop(device, stop_check)
         return
 
     # Tower quest is active — check if already defending.
     # _tower_quest_state is set on successful deploy (reliable within session).
-    # _is_troop_defending reads the troop panel (requires MAP screen, may fail here).
-    if device in _tower_quest_state or _is_troop_defending(device):
+    if device in _tower_quest_state or _is_troop_defending_relaxed(device):
         log.info("Tower quest active, troop already defending — skipping")
         config.set_device_status(device, "Tower Quest: Defending...")
         return

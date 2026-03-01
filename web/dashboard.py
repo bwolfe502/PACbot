@@ -13,10 +13,8 @@ Then access at ``http://<your-ip>:8080`` from any browser.
 
 import os
 import sys
-import glob
 import json
 import time
-import random
 import threading
 import socket
 import functools
@@ -27,19 +25,18 @@ from flask import Flask, render_template, request, redirect, url_for, jsonify, a
 # 9Bot imports (same as main.py)
 # ---------------------------------------------------------------------------
 import config
-from config import (running_tasks, QuestType, RallyType, Screen)
+from config import (running_tasks, QuestType, RallyType)
 from devices import get_devices, get_emulator_instances, auto_connect_emulators
 from navigation import check_screen
-from vision import (adb_tap, load_screenshot, find_image, tap_image,
-                    wait_for_image_and_tap, read_ap, warmup_ocr)
-from troops import troops_avail, heal_all, read_panel_statuses, get_troop_status
+from vision import load_screenshot
+from troops import troops_avail, heal_all, get_troop_status
 from actions import (attack, phantom_clash_attack, reinforce_throne, target,
                      check_quests, teleport, teleport_benchmark,
                      rally_titan, rally_eg,
                      search_eg_reset, join_rally, join_war_rallies,
                      reset_quest_tracking, reset_rally_blacklist,
-                     mine_mithril, mine_mithril_if_due,
-                     gather_gold, gather_gold_loop,
+                     mine_mithril,
+                     gather_gold,
                      get_quest_tracking_state, get_quest_last_checked, occupy_tower)
 from territory import attack_territory, diagnose_grid, scan_test_squares
 from botlog import get_logger
@@ -49,6 +46,12 @@ try:
 except ImportError:
     def tunnel_status():
         return "disabled"
+
+try:
+    from startup import upload_status as _upload_status
+except ImportError:
+    def _upload_status():
+        return {"enabled": False}
 
 _log = get_logger("web")
 
@@ -123,12 +126,15 @@ ONESHOT_DEBUG = ["Check Screen", "Check Troops", "Diagnose Grid",
 # Task runners (shared module — no more duplication)
 # ---------------------------------------------------------------------------
 
-from runners import (sleep_interval, run_auto_quest, run_auto_titan, run_auto_groot,
+from runners import (run_auto_quest, run_auto_titan, run_auto_groot,
                      run_auto_pass, run_auto_occupy, run_auto_reinforce,
                      run_auto_mithril, run_auto_gold, run_once, run_repeat,
-                     launch_task, stop_task, stop_all_tasks_matching)
+                     launch_task, stop_task, stop_all_tasks_matching,
+                     force_stop_all)
 
 
+
+_task_start_lock = threading.Lock()  # prevent TOCTOU race on running_tasks
 
 # Map auto-mode keys to their runner functions
 AUTO_RUNNERS = {
@@ -148,15 +154,8 @@ AUTO_RUNNERS = {
 # ---------------------------------------------------------------------------
 
 def stop_all():
-    """Stop every running task and clear device statuses."""
-    # Reset loop-control flags that bypass stop events
-    config.auto_occupy_running = False
-    config.MITHRIL_ENABLED_DEVICES.clear()
-    config.MITHRIL_DEPLOY_TIME.clear()
-    for key in list(running_tasks.keys()):
-        stop_task(key)
-    config.DEVICE_STATUS.clear()
-    _log.info("=== ALL TASKS STOPPED (via web) ===")
+    """Force-kill every running task immediately."""
+    force_stop_all()
 
 def cleanup_dead_tasks():
     """Remove finished threads from running_tasks."""
@@ -450,7 +449,8 @@ def create_app():
                 if thread and thread.is_alive():
                     active.append(key)
         return jsonify({"devices": device_info, "tasks": active,
-                        "tunnel": tunnel_status()})
+                        "tunnel": tunnel_status(),
+                        "upload": _upload_status()})
 
     @app.route("/api/devices/refresh", methods=["POST"])
     def api_refresh_devices():
@@ -478,6 +478,7 @@ def create_app():
             return redirect(url_for("tasks_page"))
 
         for device in devices_to_run:
+          with _task_start_lock:
             if task_type == "auto":
                 # Start an auto-mode
                 mode_key = task_name
@@ -567,12 +568,13 @@ def create_app():
         for key in ["auto_heal", "auto_restore_ap", "ap_use_free", "ap_use_potions",
                      "ap_allow_large_potions", "ap_use_gems", "verbose_logging",
                      "eg_rally_own", "titan_rally_own", "web_dashboard", "gather_enabled",
-                     "tower_quest_enabled", "remote_access"]:
+                     "tower_quest_enabled", "remote_access", "auto_upload_logs"]:
             settings[key] = key in request.form
 
         for key in ["ap_gem_limit", "min_troops", "variation", "titan_interval",
                      "groot_interval", "reinforce_interval", "pass_interval",
-                     "mithril_interval", "gather_mine_level", "gather_max_troops"]:
+                     "mithril_interval", "gather_mine_level", "gather_max_troops",
+                     "upload_interval_hours"]:
             val = request.form.get(key, "")
             if val.isdigit():
                 settings[key] = int(val)
@@ -604,6 +606,8 @@ def create_app():
     def device_settings_page(device_id):
         """Per-device settings page with override toggles."""
         detected, instances = _cached_devices()
+        if device_id not in detected:
+            abort(404)
         all_devices = [{"id": d, "name": instances.get(d, d.split(":")[-1])}
                        for d in detected]
         settings = _load_settings()
@@ -622,6 +626,9 @@ def create_app():
     @app.route("/settings/device/<device_id>", methods=["POST"])
     def save_device_settings(device_id):
         """Save per-device setting overrides."""
+        detected = _cached_devices()[0]
+        if device_id not in detected:
+            abort(404)
         from settings import DEVICE_OVERRIDABLE_KEYS
         settings = _load_settings()
         ds = settings.setdefault("device_settings", {})
@@ -682,6 +689,9 @@ def create_app():
     @app.route("/settings/device/<device_id>/reset", methods=["POST"])
     def reset_device_settings(device_id):
         """Remove all per-device overrides for a device."""
+        detected = _cached_devices()[0]
+        if device_id not in detected:
+            abort(404)
         settings = _load_settings()
         ds = settings.get("device_settings", {})
         ds.pop(device_id, None)
@@ -725,6 +735,13 @@ def create_app():
             as_attachment=True,
             download_name=filename,
         )
+
+    @app.route("/api/upload-logs", methods=["POST"])
+    def api_upload_logs():
+        """Manually upload a bug report to the relay server."""
+        from startup import upload_bug_report
+        ok, msg = upload_bug_report()
+        return jsonify({"ok": ok, "message": msg})
 
     @app.route("/api/quit", methods=["POST"])
     def api_quit():
@@ -1003,7 +1020,8 @@ def create_app():
                 if thread and thread.is_alive() and key.startswith(device):
                     active.append(key)
         return jsonify({"devices": device_info, "tasks": active,
-                        "tunnel": tunnel_status()})
+                        "tunnel": tunnel_status(),
+                        "upload": _upload_status()})
 
     @app.route("/d/<dhash>/tasks/start", methods=["POST"])
     @require_device_token

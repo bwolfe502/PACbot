@@ -12,7 +12,6 @@ Key exports:
 
 import cv2
 import time
-import os
 
 import config
 from config import Screen
@@ -21,7 +20,7 @@ from vision import (tap_image, wait_for_image_and_tap, timed_wait,
                     load_screenshot, find_image, get_template,
                     adb_tap, adb_swipe, logged_tap,
                     save_failure_screenshot, read_ap)
-from navigation import navigate, check_screen, DEBUG_DIR
+from navigation import navigate, check_screen
 from troops import (troops_avail, heal_all, read_panel_statuses,
                     TroopAction, capture_departing_portrait)
 

@@ -21,6 +21,7 @@ Key exports:
     stop_all_tasks_matching — Stop all tasks with a given suffix
 """
 
+import ctypes
 import threading
 import time
 import random
@@ -489,13 +490,72 @@ def launch_task(device, task_name, target_func, stop_event, args=()):
     get_logger("runner", device).info("Started %s", task_name)
 
 
+# Human-readable labels for auto-mode keys (used in "Stopping ..." status)
+_MODE_LABELS = {
+    "auto_quest":     "Auto Quest",
+    "auto_titan":     "Rally Titans",
+    "auto_groot":     "Join Groot",
+    "auto_pass":      "Pass Battle",
+    "auto_occupy":    "Occupy Towers",
+    "auto_reinforce": "Reinforce Throne",
+    "auto_mithril":   "Mine Mithril",
+    "auto_gold":      "Gather Gold",
+}
+
+
 def stop_task(task_key):
-    """Signal a task to stop via its threading.Event."""
+    """Signal a task to stop via its threading.Event and set Stopping status."""
     if task_key in running_tasks:
         info = running_tasks[task_key]
         if isinstance(info, dict) and "stop_event" in info:
             info["stop_event"].set()
             get_logger("runner").debug("Stop signal sent for %s", task_key)
+        # Show "Stopping ..." in the device status
+        parts = task_key.split("_", 1)
+        if len(parts) == 2:
+            device, mode_key = parts
+            label = _MODE_LABELS.get(mode_key, mode_key)
+            config.set_device_status(device, f"Stopping {label}...")
+
+
+def _force_kill_thread(thread):
+    """Force-kill a thread by injecting SystemExit at the next bytecode."""
+    if not thread.is_alive():
+        return
+    tid = thread.ident
+    if tid is None:
+        return
+    res = ctypes.pythonapi.PyThreadState_SetAsyncExc(
+        ctypes.c_ulong(tid), ctypes.py_object(SystemExit))
+    if res > 1:
+        # Revert — something went wrong
+        ctypes.pythonapi.PyThreadState_SetAsyncExc(
+            ctypes.c_ulong(tid), None)
+
+
+def force_stop_all():
+    """Force-kill every running task thread immediately."""
+    _log = get_logger("runner")
+    config.auto_occupy_running = False
+    config.MITHRIL_ENABLED_DEVICES.clear()
+    config.MITHRIL_DEPLOY_TIME.clear()
+    for key in list(running_tasks.keys()):
+        info = running_tasks.get(key)
+        if not isinstance(info, dict):
+            continue
+        # Set stop event first (cooperative)
+        stop_ev = info.get("stop_event")
+        if stop_ev:
+            stop_ev.set()
+        # Force-kill the thread
+        thread = info.get("thread")
+        if thread:
+            _force_kill_thread(thread)
+    # Give threads a moment to actually die, then clean up
+    time.sleep(0.1)
+    running_tasks.clear()
+    config.DEVICE_STATUS.clear()
+    _log.info("=== ALL TASKS FORCE-KILLED ===")
 
 
 def stop_all_tasks_matching(suffix):

@@ -13,7 +13,7 @@ import atexit
 import signal
 import threading
 
-from startup import initialize, shutdown, apply_settings
+from startup import initialize, shutdown
 from botlog import get_logger
 
 
@@ -125,6 +125,13 @@ def main():
             log.warning("Failed to start relay tunnel: %s", e)
 
     # ------------------------------------------------------------------
+    # Auto bug report upload (opt-in)
+    # ------------------------------------------------------------------
+    if relay_cfg and settings.get("auto_upload_logs", False):
+        from startup import start_auto_upload
+        start_auto_upload(settings)
+
+    # ------------------------------------------------------------------
     # Graceful shutdown
     # ------------------------------------------------------------------
     _shutting_down = threading.Event()
@@ -132,6 +139,8 @@ def main():
     def _on_exit():
         if not _shutting_down.is_set():
             _shutting_down.set()
+            from startup import stop_auto_upload
+            stop_auto_upload()
             shutdown()
 
     atexit.register(_on_exit)

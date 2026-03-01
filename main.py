@@ -5,7 +5,6 @@ import queue
 import time
 import os
 import sys
-import random
 import json
 import logging
 import platform
@@ -20,21 +19,21 @@ from config import (set_min_troops, set_auto_heal, set_auto_restore_ap,
                      set_titan_rally_own, set_gather_options, set_tower_quest_enabled,
                      running_tasks, QuestType, RallyType, Screen)
 from devices import get_devices, get_emulator_instances, auto_connect_emulators
-from navigation import check_screen, navigate
-from vision import adb_tap, tap_image, load_screenshot, find_image, wait_for_image_and_tap, read_ap, warmup_ocr
+from navigation import check_screen
+from vision import adb_tap, tap_image, load_screenshot, find_image, wait_for_image_and_tap, read_ap
 from troops import troops_avail, heal_all, read_panel_statuses, get_troop_status, TroopAction
 from actions import (attack, phantom_clash_attack, reinforce_throne, target, check_quests, teleport,
                      teleport_benchmark,
                      rally_titan, rally_eg, search_eg_reset, join_rally,
                      join_war_rallies, reset_quest_tracking, reset_rally_blacklist,
-                     test_eg_positions, mine_mithril, mine_mithril_if_due,
-                     gather_gold, gather_gold_loop, occupy_tower,
+                     test_eg_positions, mine_mithril,
+                     gather_gold, occupy_tower,
                      get_quest_tracking_state)
 from territory import (attack_territory, auto_occupy_loop,
                        open_territory_manager, diagnose_grid)
 from botlog import get_logger
 from settings import SETTINGS_FILE, DEFAULTS, load_settings, save_settings
-from runners import (sleep_interval, run_auto_quest, run_auto_titan, run_auto_groot,
+from runners import (run_auto_quest, run_auto_titan, run_auto_groot,
                      run_auto_pass, run_auto_occupy, run_auto_reinforce,
                      run_auto_mithril, run_auto_gold, run_repeat, run_once,
                      launch_task, stop_task, stop_all_tasks_matching)
@@ -1532,7 +1531,9 @@ def create_gui():
     def cleanup_dead_tasks():
         """Check for finished threads and clean up."""
         for key in list(running_tasks.keys()):
-            info = running_tasks[key]
+            info = running_tasks.get(key)
+            if info is None:
+                continue
             if not isinstance(info, dict):
                 continue
             thread = info.get("thread")

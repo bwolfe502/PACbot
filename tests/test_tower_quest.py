@@ -6,8 +6,8 @@ import pytest
 
 from config import QuestType, Screen
 from actions.quests import (
-    _is_troop_defending, _navigate_to_tower, occupy_tower,
-    recall_tower_troop, _run_tower_quest, _tower_quest_state,
+    _is_troop_defending, _is_troop_defending_relaxed, _navigate_to_tower,
+    occupy_tower, recall_tower_troop, _run_tower_quest, _tower_quest_state,
 )
 from troops import TroopAction, TroopStatus, DeviceTroopSnapshot
 
@@ -237,7 +237,7 @@ class TestRunTowerQuest:
         quests = [
             {"quest_type": QuestType.TOWER, "current": 0, "target": 30, "completed": False},
         ]
-        with patch("actions.quests._is_troop_defending", return_value=False), \
+        with patch("actions.quests._is_troop_defending_relaxed", return_value=False), \
              patch("actions.quests.occupy_tower", return_value=True) as mock_occ, \
              patch("actions.quests.config") as mock_config:
             mock_config.set_device_status = MagicMock()
@@ -248,7 +248,7 @@ class TestRunTowerQuest:
         quests = [
             {"quest_type": QuestType.FORTRESS, "current": 10, "target": 30, "completed": False},
         ]
-        with patch("actions.quests._is_troop_defending", return_value=True), \
+        with patch("actions.quests._is_troop_defending_relaxed", return_value=True), \
              patch("actions.quests.occupy_tower") as mock_occ, \
              patch("actions.quests.config") as mock_config:
             mock_config.set_device_status = MagicMock()
@@ -259,7 +259,7 @@ class TestRunTowerQuest:
         quests = [
             {"quest_type": QuestType.TOWER, "current": 30, "target": 30, "completed": True},
         ]
-        with patch("actions.quests._is_troop_defending", return_value=True), \
+        with patch("actions.quests._is_troop_defending_relaxed", return_value=True), \
              patch("actions.quests.recall_tower_troop") as mock_recall:
             _run_tower_quest(mock_device, quests)
             mock_recall.assert_called_once()
@@ -268,7 +268,7 @@ class TestRunTowerQuest:
         quests = [
             {"quest_type": QuestType.TOWER, "current": 30, "target": 30, "completed": True},
         ]
-        with patch("actions.quests._is_troop_defending", return_value=False), \
+        with patch("actions.quests._is_troop_defending_relaxed", return_value=False), \
              patch("actions.quests.recall_tower_troop") as mock_recall:
             _run_tower_quest(mock_device, quests)
             mock_recall.assert_not_called()
@@ -278,7 +278,7 @@ class TestRunTowerQuest:
             {"quest_type": QuestType.TOWER, "current": 5, "target": 30, "completed": False},
             {"quest_type": QuestType.FORTRESS, "current": 0, "target": 30, "completed": False},
         ]
-        with patch("actions.quests._is_troop_defending", return_value=False), \
+        with patch("actions.quests._is_troop_defending_relaxed", return_value=False), \
              patch("actions.quests.occupy_tower", return_value=True) as mock_occ, \
              patch("actions.quests.config") as mock_config:
             mock_config.set_device_status = MagicMock()
@@ -289,7 +289,7 @@ class TestRunTowerQuest:
         quests = [
             {"quest_type": QuestType.TITAN, "current": 0, "target": 15, "completed": False},
         ]
-        with patch("actions.quests._is_troop_defending", return_value=False) as mock_def, \
+        with patch("actions.quests._is_troop_defending_relaxed", return_value=False), \
              patch("actions.quests.occupy_tower") as mock_occ, \
              patch("actions.quests.recall_tower_troop") as mock_recall:
             _run_tower_quest(mock_device, quests)
@@ -301,7 +301,7 @@ class TestRunTowerQuest:
         quests = [
             {"quest_type": QuestType.TITAN, "current": 0, "target": 15, "completed": False},
         ]
-        with patch("actions.quests._is_troop_defending", return_value=True), \
+        with patch("actions.quests._is_troop_defending_relaxed", return_value=True), \
              patch("actions.quests.occupy_tower") as mock_occ, \
              patch("actions.quests.recall_tower_troop") as mock_recall:
             _run_tower_quest(mock_device, quests)

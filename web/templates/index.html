@@ -251,6 +251,10 @@ var IS_FRIEND_VIEW = false;
 // Per-device troop data for client-side countdown between polls
 var _troopData = {};
 
+// Track modes that are being stopped — prevents poll from flipping toggle back on
+// while the thread is still winding down. Keyed by "device_modeKey".
+var _stoppingModes = {};
+
 function renderTroops(container, troops, age, elapsed) {
     container.textContent = '';
     // Update age in the section label
@@ -453,24 +457,37 @@ function refreshStatus() {
                 var device = row.getAttribute('data-device');
                 var toggle = row.querySelector('.toggle');
                 if (!toggle) return;
+                var stoppingKey = (device || '') + '_' + key;
                 var isRunning;
                 if (device) {
                     isRunning = data.tasks.indexOf(device + '_' + key) !== -1;
                 } else {
                     isRunning = data.tasks.some(function(t) { return t.endsWith('_' + key); });
                 }
-                if (isRunning) toggle.classList.add('on');
-                else toggle.classList.remove('on');
+                // If mode is stopping, keep toggle off until task actually disappears
+                if (_stoppingModes[stoppingKey]) {
+                    if (!isRunning) delete _stoppingModes[stoppingKey];
+                    toggle.classList.remove('on');
+                } else {
+                    if (isRunning) toggle.classList.add('on');
+                    else toggle.classList.remove('on');
+                }
             });
             // Update collapsed pills
             document.querySelectorAll('.control-pill[data-mode]').forEach(function(pill) {
                 var key = pill.getAttribute('data-mode');
                 var device = pill.getAttribute('data-device');
+                var stoppingKey = (device || '') + '_' + key;
                 var isRunning = device
                     ? data.tasks.indexOf(device + '_' + key) !== -1
                     : data.tasks.some(function(t) { return t.endsWith('_' + key); });
-                if (isRunning) pill.classList.add('pill-on');
-                else pill.classList.remove('pill-on');
+                if (_stoppingModes[stoppingKey]) {
+                    if (!isRunning) delete _stoppingModes[stoppingKey];
+                    pill.classList.remove('pill-on');
+                } else {
+                    if (isRunning) pill.classList.add('pill-on');
+                    else pill.classList.remove('pill-on');
+                }
             });
         })
         .catch(function() {});
@@ -522,6 +539,16 @@ function toggleAutoMode(modeKey, deviceId) {
     }
     // Optimistic toggle
     if (toggle) toggle.classList.toggle('on');
+    // Track stopping state so poll doesn't override optimistic toggle
+    var stoppingKey = (deviceId || '') + '_' + modeKey;
+    if (isRunning) {
+        _stoppingModes[stoppingKey] = true;
+        // Also update collapsed pill
+        var pill = document.querySelector('.control-pill[data-mode="' + modeKey + '"][data-device="' + deviceId + '"]');
+        if (pill) pill.classList.remove('pill-on');
+    } else {
+        delete _stoppingModes[stoppingKey];
+    }
     fetch(url, {
         method: 'POST',
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},

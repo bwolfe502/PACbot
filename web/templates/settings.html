@@ -40,6 +40,16 @@
             Enable Remote Access
         </label>
         <p style="color:#667;font-size:12px;padding-top:6px;margin:0">Requires restart to take effect.</p>
+        <label class="setting-row" style="margin-top:12px">
+            <input type="checkbox" name="auto_upload_logs" {% if settings.auto_upload_logs %}checked{% endif %}>
+            Auto-Upload Bug Reports
+        </label>
+        <label class="setting-row indent">
+            <input type="number" name="upload_interval_hours" class="input-sm"
+                   min="1" max="168" value="{{ settings.upload_interval_hours }}">
+            <span class="unit">hours</span>
+        </label>
+        <p style="color:#667;font-size:12px;padding-top:6px;margin:0">Periodically uploads logs and debug data for troubleshooting. Requires restart.</p>
     </div>
 
     <!-- Auto Quest -->

@@ -187,7 +187,10 @@ def initialize():
     from updater import check_and_update
     if check_and_update():
         log.info("Update installed — restarting...")
-        os.execv(sys.executable, [sys.executable] + sys.argv)
+        try:
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+        except OSError as e:
+            log.error("Failed to restart after update: %s", e)
 
     # Load and apply settings
     settings = load_settings()
@@ -263,8 +266,12 @@ def shutdown():
         pass
 
 
-def create_bug_report_zip():
+def create_bug_report_zip(clear_debug=True):
     """Create a bug report zip file in memory and return the bytes.
+
+    Args:
+        clear_debug: If True (default), remove debug screenshots after zipping.
+            Pass False for periodic auto-uploads to keep debug files intact.
 
     Returns ``(zip_bytes, filename)`` tuple.
     """
@@ -342,8 +349,8 @@ def create_bug_report_zip():
     buf.seek(0)
     zip_bytes = buf.getvalue()
 
-    # Clean up debug files now that they're safely zipped
-    _clear_debug_files(SCRIPT_DIR)
+    if clear_debug:
+        _clear_debug_files(SCRIPT_DIR)
 
     return zip_bytes, filename
 
@@ -361,6 +368,112 @@ def _clear_debug_files(script_dir):
                     os.remove(fpath)
                 except Exception:
                     pass
+
+
+# ---------------------------------------------------------------------------
+# Bug report auto-upload
+# ---------------------------------------------------------------------------
+
+_upload_thread = None
+_upload_stop = threading.Event()
+_last_upload_time = None      # datetime or None
+_last_upload_error = None     # str or None
+_upload_interval_hours = 24
+
+
+def upload_bug_report(settings=None):
+    """Upload a bug report ZIP to the relay server.
+
+    Returns ``(success, message)`` tuple.
+    """
+    global _last_upload_time, _last_upload_error
+    if settings is None:
+        settings = load_settings()
+    relay_cfg = get_relay_config(settings)
+    if not relay_cfg:
+        return False, "Relay not configured (no license or remote access disabled)"
+
+    relay_url, relay_secret, bot_name = relay_cfg
+    host = relay_url.replace("wss://", "").replace("ws://", "").split("/")[0]
+    upload_url = f"https://{host}/_upload?bot={bot_name}"
+
+    zip_bytes, filename = create_bug_report_zip(clear_debug=False)
+
+    import requests as _req
+    try:
+        resp = _req.post(
+            upload_url,
+            files={"file": (filename, zip_bytes, "application/zip")},
+            headers={"Authorization": f"Bearer {relay_secret}"},
+            timeout=120,
+        )
+    except Exception as e:
+        _last_upload_error = str(e)
+        return False, f"Upload failed: {e}"
+
+    if resp.status_code == 200:
+        from datetime import datetime
+        _last_upload_time = datetime.now()
+        _last_upload_error = None
+        return True, "Upload successful"
+
+    _last_upload_error = f"HTTP {resp.status_code}"
+    return False, f"Upload failed: HTTP {resp.status_code}"
+
+
+def start_auto_upload(settings):
+    """Start periodic bug report upload in a background thread."""
+    global _upload_thread, _upload_interval_hours
+    if _upload_thread is not None and _upload_thread.is_alive():
+        return
+    _upload_stop.clear()
+    _upload_interval_hours = max(1, settings.get("upload_interval_hours", 24))
+
+    def _loop():
+        from botlog import get_logger
+        log = get_logger("auto_upload")
+        log.info("Auto-upload started (every %dh)", _upload_interval_hours)
+        while not _upload_stop.is_set():
+            _upload_stop.wait(_upload_interval_hours * 3600)
+            if _upload_stop.is_set():
+                break
+            try:
+                ok, msg = upload_bug_report(settings)
+                if ok:
+                    log.info("Auto-upload: %s", msg)
+                else:
+                    log.warning("Auto-upload: %s", msg)
+            except Exception as e:
+                log.warning("Auto-upload error: %s", e)
+        log.info("Auto-upload stopped")
+
+    _upload_thread = threading.Thread(target=_loop, daemon=True, name="auto-upload")
+    _upload_thread.start()
+
+
+def stop_auto_upload():
+    """Stop the periodic upload thread."""
+    global _upload_thread
+    _upload_stop.set()
+    if _upload_thread is not None:
+        _upload_thread.join(timeout=2)
+        _upload_thread = None
+
+
+def upload_status():
+    """Return dict describing auto-upload state."""
+    from datetime import datetime
+    enabled = (_upload_thread is not None and _upload_thread.is_alive())
+    result = {
+        "enabled": enabled,
+        "interval_hours": _upload_interval_hours,
+        "last_upload": _last_upload_time.isoformat() if _last_upload_time else None,
+        "error": _last_upload_error,
+    }
+    if enabled and _last_upload_time:
+        next_dt = _last_upload_time.timestamp() + _upload_interval_hours * 3600
+        result["next_upload_in_s"] = max(0, int(next_dt - datetime.now().timestamp()))
+    return result
 
 
 def _get_ram_gb():

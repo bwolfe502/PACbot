@@ -247,6 +247,9 @@ class StatsTracker:
         def _tick():
             try:
                 self.save()
+                # Reclaim any reference-cycled PyTorch tensors
+                import gc
+                gc.collect()
                 mem = _update_peak()
                 _log = logging.getLogger("botlog")
                 _log.info("Memory checkpoint: %.0f MB (peak: %.0f MB)", mem, _peak_memory_mb)

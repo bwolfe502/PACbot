@@ -271,6 +271,7 @@ SETTINGS_RULES = {
     "gather_enabled":        {"type": bool},
     "tower_quest_enabled":   {"type": bool},
     "remote_access":         {"type": bool},
+    "auto_upload_logs":      {"type": bool},
     # Ints — type + optional min/max
     "ap_gem_limit":          {"type": int, "min": 0, "max": 3500},
     "min_troops":            {"type": int, "min": 0, "max": 5},
@@ -282,6 +283,7 @@ SETTINGS_RULES = {
     "mithril_interval":      {"type": int, "min": 1},
     "gather_mine_level":     {"type": int, "min": 4, "max": 6},
     "gather_max_troops":     {"type": int, "min": 1, "max": 5},
+    "upload_interval_hours": {"type": int, "min": 1, "max": 168},
     # Strings — type + allowed values
     "pass_mode":             {"type": str, "choices": ["Rally Joiner", "Rally Starter"]},
     "my_team":               {"type": str, "choices": ["yellow", "red", "blue", "green"]},

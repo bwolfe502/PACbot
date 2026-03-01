@@ -16,7 +16,7 @@ import config
 from config import Screen
 from botlog import get_logger, timed_action, stats
 from vision import (tap_image, wait_for_image_and_tap, timed_wait,
-                    load_screenshot, find_image, get_template,
+                    load_screenshot, find_image,
                     adb_tap, logged_tap,
                     save_failure_screenshot, read_ap,
                     TAP_OFFSETS, _save_click_trail)

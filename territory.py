@@ -881,10 +881,13 @@ def scan_territory_coordinates(device, squares=None, save_screenshots=True):
             failed += 1
 
     # Save database
-    os.makedirs(os.path.dirname(_COORD_DB_PATH), exist_ok=True)
-    import json
-    with open(_COORD_DB_PATH, "w") as f:
-        json.dump(coord_db, f, indent=2, sort_keys=True)
+    try:
+        os.makedirs(os.path.dirname(_COORD_DB_PATH), exist_ok=True)
+        import json
+        with open(_COORD_DB_PATH, "w") as f:
+            json.dump(coord_db, f, indent=2, sort_keys=True)
+    except OSError as e:
+        log.error("Failed to save coordinate database: %s", e)
 
     log.info("Scan complete: %d succeeded, %d failed", scanned, failed)
     log.info("Database saved to %s (%d total entries)", _COORD_DB_PATH, len(coord_db))

@@ -23,6 +23,11 @@
 {% endfor %}
 </div>
 
+<div class="section-header" style="margin-top:24px">Reports</div>
+<div class="action-grid">
+<button class="action-chip action-chip-debug" id="upload-logs-btn" onclick="uploadLogs()">Upload Logs</button>
+</div>
+
 <!-- Running Tasks -->
 {% if tasks %}
 <div class="section-header" style="margin-top:24px">Running</div>
@@ -76,6 +81,28 @@ function updateDeviceForms() {
 
 function takeScreenshot(device) {
     window.location.href = '/api/screenshot?device=' + encodeURIComponent(device) + '&download=1';
+}
+
+function uploadLogs() {
+    var btn = document.getElementById('upload-logs-btn');
+    btn.textContent = 'Uploading...';
+    btn.disabled = true;
+    fetch('/api/upload-logs', {method: 'POST'})
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            btn.textContent = data.ok ? 'Uploaded!' : 'Failed';
+            btn.style.borderColor = data.ok ? '#4cff8e' : '#ff6464';
+            setTimeout(function() {
+                btn.textContent = 'Upload Logs';
+                btn.disabled = false;
+                btn.style.borderColor = '';
+            }, 3000);
+        })
+        .catch(function() {
+            btn.textContent = 'Error';
+            btn.disabled = false;
+            setTimeout(function() { btn.textContent = 'Upload Logs'; }, 3000);
+        });
 }
 
 var logViewer = document.getElementById('log-viewer');

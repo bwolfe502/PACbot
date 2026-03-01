@@ -11,7 +11,6 @@ Key exports:
 
 import time
 
-import cv2
 import numpy as np
 
 import config
@@ -20,8 +19,7 @@ from botlog import get_logger, timed_action
 from vision import (tap_image, wait_for_image_and_tap, timed_wait,
                     load_screenshot, find_image,
                     adb_tap, adb_swipe, logged_tap,
-                    save_failure_screenshot,
-                    TAP_OFFSETS, _save_click_trail)
+                    save_failure_screenshot)
 from navigation import navigate, check_screen
 from troops import troops_avail, heal_all
 
@@ -163,6 +161,9 @@ def mine_mithril(device, stop_check=None):
 
         # Screenshot and find safe (unoccupied) mines on this page
         screen = load_screenshot(device)
+        if screen is None:
+            log.warning("Screenshot failed — skipping mine scan")
+            break
         safe_mines = []
         for i, (mine_x, mine_y) in enumerate(_MITHRIL_MINES):
             if _is_mine_occupied(screen, mine_x, mine_y):

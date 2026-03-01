@@ -21,8 +21,6 @@ import http.client
 import json
 import logging
 import threading
-import urllib.request
-import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 
 _log = logging.getLogger("tunnel")

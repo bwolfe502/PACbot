@@ -54,6 +54,8 @@ DEFAULTS = {
     "gather_max_troops": 3,
     "tower_quest_enabled": False,
     "remote_access": True,
+    "auto_upload_logs": False,
+    "upload_interval_hours": 24,
 }
 
 

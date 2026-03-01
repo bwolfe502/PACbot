@@ -20,10 +20,11 @@ if "PIL.ImageTk" not in sys.modules:
 import config
 from web.dashboard import (
     create_app, launch_task, stop_task, stop_all, cleanup_dead_tasks,
-    sleep_interval, run_once, TASK_FUNCTIONS, AUTO_RUNNERS,
+    run_once, TASK_FUNCTIONS, AUTO_RUNNERS,
     _load_settings, _save_settings, _apply_settings,
     DEFAULTS, ensure_firewall_open,
 )
+from runners import sleep_interval
 
 
 @pytest.fixture
@@ -630,6 +631,173 @@ class TestCreateBugReportZip:
             assert "9Bot Bug Report" in info
             assert "Python:" in info
             assert "OS:" in info
+
+
+class TestCreateBugReportZipClearDebug:
+    """Test clear_debug parameter on create_bug_report_zip."""
+
+    @patch("devices.get_devices", return_value=[])
+    @patch("startup._clear_debug_files")
+    def test_clear_debug_true_calls_cleanup(self, mock_clear, mock_devs):
+        from startup import create_bug_report_zip
+        create_bug_report_zip(clear_debug=True)
+        mock_clear.assert_called_once()
+
+    @patch("devices.get_devices", return_value=[])
+    @patch("startup._clear_debug_files")
+    def test_clear_debug_false_skips_cleanup(self, mock_clear, mock_devs):
+        from startup import create_bug_report_zip
+        create_bug_report_zip(clear_debug=False)
+        mock_clear.assert_not_called()
+
+    @patch("devices.get_devices", return_value=[])
+    @patch("startup._clear_debug_files")
+    def test_clear_debug_default_is_true(self, mock_clear, mock_devs):
+        from startup import create_bug_report_zip
+        create_bug_report_zip()
+        mock_clear.assert_called_once()
+
+
+class TestUploadBugReport:
+    """Test upload_bug_report() in startup.py."""
+
+    @patch("startup.get_relay_config", return_value=None)
+    def test_no_relay_returns_failure(self, mock_cfg):
+        from startup import upload_bug_report
+        ok, msg = upload_bug_report(settings={})
+        assert ok is False
+        assert "not configured" in msg.lower()
+
+    @patch("startup.create_bug_report_zip",
+           return_value=(b"PK\x03\x04fake", "test.zip"))
+    @patch("startup.get_relay_config",
+           return_value=("wss://example.com/ws/tunnel", "secret123", "bot42"))
+    def test_successful_upload(self, mock_cfg, mock_zip):
+        import startup
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        with patch.object(startup, "upload_bug_report", wraps=startup.upload_bug_report):
+            with patch("requests.post", return_value=mock_resp) as mock_post:
+                ok, msg = startup.upload_bug_report(settings={})
+        assert ok is True
+        assert "successful" in msg.lower()
+        # Verify clear_debug=False was passed
+        mock_zip.assert_called_once_with(clear_debug=False)
+        # Verify URL derived from relay URL
+        call_args = mock_post.call_args
+        assert "example.com/_upload" in call_args[0][0]
+
+    @patch("startup.create_bug_report_zip",
+           return_value=(b"PK\x03\x04fake", "test.zip"))
+    @patch("startup.get_relay_config",
+           return_value=("wss://example.com/ws/tunnel", "secret123", "bot42"))
+    def test_http_error_returns_failure(self, mock_cfg, mock_zip):
+        from startup import upload_bug_report
+        mock_resp = MagicMock()
+        mock_resp.status_code = 500
+        with patch("requests.post", return_value=mock_resp):
+            ok, msg = upload_bug_report(settings={})
+        assert ok is False
+        assert "500" in msg
+
+    @patch("startup.create_bug_report_zip",
+           return_value=(b"PK\x03\x04fake", "test.zip"))
+    @patch("startup.get_relay_config",
+           return_value=("wss://example.com/ws/tunnel", "secret123", "bot42"))
+    def test_network_error_returns_failure(self, mock_cfg, mock_zip):
+        from startup import upload_bug_report
+        with patch("requests.post", side_effect=ConnectionError("timeout")):
+            ok, msg = upload_bug_report(settings={})
+        assert ok is False
+        assert "timeout" in msg.lower()
+
+
+class TestUploadStatus:
+    def test_disabled_when_no_thread(self):
+        import startup
+        startup._upload_thread = None
+        result = startup.upload_status()
+        assert result["enabled"] is False
+
+    def test_shows_last_upload_time(self):
+        import startup
+        from datetime import datetime
+        startup._last_upload_time = datetime(2026, 3, 1, 12, 0, 0)
+        startup._last_upload_error = None
+        result = startup.upload_status()
+        assert result["last_upload"] is not None
+        assert result["error"] is None
+        startup._last_upload_time = None
+
+    def test_shows_error(self):
+        import startup
+        startup._last_upload_error = "Connection refused"
+        result = startup.upload_status()
+        assert result["error"] == "Connection refused"
+        startup._last_upload_error = None
+
+
+class TestAutoUploadThread:
+    def test_start_and_stop(self):
+        import startup
+        startup.start_auto_upload({"upload_interval_hours": 1})
+        assert startup._upload_thread is not None
+        assert startup._upload_thread.is_alive()
+        startup.stop_auto_upload()
+        assert startup._upload_thread is None
+
+    def test_stop_when_not_started(self):
+        import startup
+        startup._upload_thread = None
+        startup.stop_auto_upload()  # should not raise
+
+
+class TestUploadLogsApi:
+    """Test /api/upload-logs route."""
+
+    @patch("startup.upload_bug_report", return_value=(True, "Upload successful"))
+    def test_upload_success(self, mock_upload, client):
+        resp = client.post("/api/upload-logs")
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert data["ok"] is True
+        assert "successful" in data["message"].lower()
+
+    @patch("startup.upload_bug_report",
+           return_value=(False, "Relay not configured"))
+    def test_upload_failure(self, mock_upload, client):
+        resp = client.post("/api/upload-logs")
+        data = json.loads(resp.data)
+        assert data["ok"] is False
+
+
+class TestApiStatusUpload:
+    """Upload status field in /api/status response."""
+
+    @patch("web.dashboard.get_devices", return_value=[])
+    @patch("web.dashboard.get_emulator_instances", return_value={})
+    @patch("web.dashboard._upload_status", return_value={"enabled": True})
+    def test_upload_status_included(self, mock_us, mock_inst, mock_devs, client):
+        data = json.loads(client.get("/api/status").data)
+        assert "upload" in data
+        assert data["upload"]["enabled"] is True
+
+    @patch("web.dashboard.get_devices", return_value=[])
+    @patch("web.dashboard.get_emulator_instances", return_value={})
+    @patch("web.dashboard._upload_status", return_value={"enabled": False})
+    def test_upload_disabled(self, mock_us, mock_inst, mock_devs, client):
+        data = json.loads(client.get("/api/status").data)
+        assert data["upload"]["enabled"] is False
+
+
+class TestUploadSettings:
+    """Test that upload settings are parsed from form."""
+
+    def test_defaults_include_upload_keys(self):
+        assert "auto_upload_logs" in DEFAULTS
+        assert "upload_interval_hours" in DEFAULTS
+        assert DEFAULTS["auto_upload_logs"] is False
+        assert DEFAULTS["upload_interval_hours"] == 24
 
 
 class TestGetRamGb:
