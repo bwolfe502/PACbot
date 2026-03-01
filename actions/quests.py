@@ -189,7 +189,7 @@ def _classify_quest_text(text):
         return QuestType.TITAN
     if "evil" in t or "guard" in t:
         return QuestType.EVIL_GUARD
-    if "pvp" in t or "attack" in t:
+    if "pvp" in t or "attack" in t or "enemy" in t or "defeat" in t:
         return QuestType.PVP
     if "gather" in t:
         return QuestType.GATHER
