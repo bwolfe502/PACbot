@@ -280,6 +280,16 @@ def create_app():
         settings = _load_settings()
         mode = settings.get("mode", "bl")
         auto_groups = AUTO_MODES_BL if mode == "bl" else AUTO_MODES_HS
+        # Build remote URL from relay settings if enabled
+        relay_url = None
+        if settings.get("relay_enabled"):
+            raw = settings.get("relay_url", "")
+            bot_name = settings.get("relay_bot_name", "")
+            if raw and bot_name:
+                # ws://host/ws/tunnel -> http://host/bot_name
+                host = raw.replace("ws://", "").replace("wss://", "").split("/")[0]
+                relay_url = f"http://{host}/{bot_name}"
+
         return render_template("index.html",
                                devices=device_info,
                                tasks=active_tasks,
@@ -289,7 +299,8 @@ def create_app():
                                oneshot_farm=ONESHOT_FARM,
                                oneshot_war=ONESHOT_WAR,
                                active_tasks=active_tasks,
-                               local_ip=get_local_ip())
+                               local_ip=get_local_ip(),
+                               relay_url=relay_url)
 
     @app.route("/tasks")
     def tasks_page():
