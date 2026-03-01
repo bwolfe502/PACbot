@@ -950,6 +950,21 @@ h3 { font-size: 15px; margin-bottom: 12px; color: #64d8ff; }
 
 .inline-form { display: inline; }
 
+/* Collapsible actions section */
+.actions-section {
+    margin-top: 24px;
+}
+.actions-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+    padding-bottom: 8px;
+    border-bottom: 1px solid rgba(100,216,255,0.15);
+    margin-bottom: 8px;
+    -webkit-tap-highlight-color: transparent;
+}
+
 /* Action chips (quick actions grid) */
 .action-grid {
     display: grid;
@@ -1351,6 +1366,17 @@ h3 { font-size: 15px; margin-bottom: 12px; color: #64d8ff; }
 
 .footer-debug-link:active {
     color: #778;
+}
+
+.footer-kofi {
+    display: block;
+    margin-top: 10px;
+    font-size: 11px;
+    color: #334;
+    text-decoration: none;
+}
+.footer-kofi:hover {
+    color: #ffb74d;
 }
 
 /* Inline auto-modes inside device card */

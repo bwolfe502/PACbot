@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>9Bot — Quick Start Guide</title>
+<link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:ital,wght@1,700&text=9&display=swap" rel="stylesheet">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0c0c18;
+    color: #e0e0f0;
+    min-height: 100vh;
+    line-height: 1.6;
+}
+.page { max-width: 680px; margin: 0 auto; padding: 32px 20px 60px; }
+.header { text-align: center; margin-bottom: 32px; }
+.logo-brand { display: inline-flex; align-items: baseline; gap: 2px; position: relative; padding-left: 8px; }
+.logo-line-left, .logo-line-right { position: absolute; left: 0; top: 4px; bottom: 4px; width: 1px; }
+.logo-line-left { background: linear-gradient(180deg, #64d8ff22, #64d8ff88, #64d8ff22); }
+.logo-line-right { left: 3px; background: linear-gradient(180deg, #64d8ff44, #64d8ff, #64d8ff44); }
+.logo-nine { font-family: 'Bodoni Moda', serif; font-style: italic; font-weight: 700; font-size: 42px; color: #64d8ff; line-height: 1; text-shadow: 0 0 15px rgba(100,216,255,0.3); }
+.logo-text { font-family: system-ui, sans-serif; font-weight: 300; font-size: 14px; letter-spacing: 5px; color: #64d8ff; margin-left: 2px; }
+h1 { font-size: 22px; font-weight: 700; color: #fff; margin-top: 12px; }
+.subtitle { font-size: 14px; color: #778; margin-top: 4px; }
+.step { display: flex; gap: 14px; margin-bottom: 28px; }
+.step-num { width: 32px; height: 32px; min-width: 32px; border-radius: 50%; background: rgba(100,216,255,0.12); border: 1px solid rgba(100,216,255,0.25); color: #64d8ff; font-size: 15px; font-weight: 700; display: flex; align-items: center; justify-content: center; margin-top: 2px; }
+.step-body h2 { font-size: 16px; font-weight: 700; color: #fff; margin: 0 0 6px; }
+.step-body p { font-size: 14px; color: #bbc; margin: 0 0 10px; }
+code { font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; font-size: 12px; background: rgba(100,216,255,0.08); border: 1px solid rgba(100,216,255,0.15); border-radius: 4px; padding: 1px 6px; color: #64d8ff; }
+.note { font-size: 13px; color: #889; background: rgba(255,255,255,0.03); border-left: 2px solid rgba(100,216,255,0.2); padding: 8px 12px; border-radius: 0 6px 6px 0; line-height: 1.5; }
+.hint { font-size: 12px; color: #667; margin-top: 2px; line-height: 1.4; }
+.checklist { display: flex; flex-direction: column; gap: 10px; }
+.check { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; color: #ccd; }
+.check-icon { font-size: 16px; color: #556; flex-shrink: 0; margin-top: 1px; }
+.markers { display: flex; flex-direction: column; gap: 12px; margin-bottom: 12px; }
+.marker-row { display: flex; gap: 12px; align-items: flex-start; font-size: 14px; color: #ccd; line-height: 1.4; }
+.marker-img { width: 44px; height: 44px; border-radius: 6px; flex-shrink: 0; margin-top: 1px; }
+.modes { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+.mode { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; color: #ccd; line-height: 1.4; }
+.mode-dot { width: 10px; height: 10px; min-width: 10px; border-radius: 50%; margin-top: 5px; }
+.mode-farming { background: #4caf50; box-shadow: 0 0 6px rgba(76,175,80,0.4); }
+.mode-combat { background: #ef5350; box-shadow: 0 0 6px rgba(239,83,80,0.4); }
+.divider { height: 1px; background: rgba(255,255,255,0.06); margin: 32px 0 24px; }
+a { color: #64d8ff; }
+.section-title { font-size: 16px; font-weight: 700; color: #fff; margin: 0 0 16px; }
+.tips { display: flex; flex-direction: column; gap: 12px; }
+.tip { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; color: #bbc; line-height: 1.5; }
+.tip-icon { font-size: 16px; flex-shrink: 0; margin-top: 1px; }
+.back-link { display: inline-block; margin-bottom: 24px; font-size: 13px; color: #64d8ff; text-decoration: none; }
+.back-link:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="page">
+
+<a href="/install" class="back-link">&larr; Installation Guide</a>
+
+<div class="header">
+    <div class="logo-brand">
+        <span class="logo-line-left"></span>
+        <span class="logo-line-right"></span>
+        <span class="logo-nine">9</span><span class="logo-text">BOT</span>
+    </div>
+    <h1>Quick Start Guide</h1>
+    <p class="subtitle">Set up markers, turn on Auto Quest, and go.</p>
+</div>
+
+<!-- Step 1 -->
+<div class="step">
+    <div class="step-num">1</div>
+    <div class="step-body">
+        <h2>Set Up Your Emulator</h2>
+        <p>Before launching 9Bot, your emulator needs two settings:</p>
+        <div class="checklist">
+            <div class="check">
+                <span class="check-icon">&#9744;</span>
+                <div>
+                    <strong>Screen resolution</strong> &mdash; set to <code>1080 x 1920</code> (portrait)
+                    <div class="hint">BlueStacks: Settings &rarr; Display &rarr; Resolution &rarr; Custom<br>MuMu: Settings &rarr; Display &rarr; 1080x1920</div>
+                </div>
+            </div>
+            <div class="check">
+                <span class="check-icon">&#9744;</span>
+                <div>
+                    <strong>ADB enabled</strong> &mdash; allows 9Bot to control the emulator
+                    <div class="hint">BlueStacks: Settings &rarr; Advanced &rarr; Enable Android Debug Bridge<br>MuMu: Already enabled by default</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Step 2 -->
+<div class="step">
+    <div class="step-num">2</div>
+    <div class="step-body">
+        <h2>Launch 9Bot</h2>
+        <p>Double-click <code>run.bat</code> (Windows) or <code>run.command</code> (Mac) in the 9Bot folder.</p>
+        <div class="note">First launch takes a few minutes &mdash; it downloads some files automatically. Future launches are fast.</div>
+    </div>
+</div>
+
+<!-- Step 3 -->
+<div class="step">
+    <div class="step-num">3</div>
+    <div class="step-body">
+        <h2>Open the Game</h2>
+        <p>In your emulator, open the game and wait until you're on the <strong>map screen</strong> (the main world view where you can see your castle).</p>
+        <div class="note">9Bot needs the game to be on the map screen before starting any tasks.</div>
+    </div>
+</div>
+
+<!-- Step 4 -->
+<div class="step">
+    <div class="step-num">4</div>
+    <div class="step-body">
+        <h2>Place Your Markers In-Game</h2>
+        <p>Before turning on Auto Quest, place <strong>personal markers</strong> on the world map so the bot knows where to go. Open the target menu in-game and set these up:</p>
+        <div class="markers">
+            <div class="marker-row">
+                <img src="img/friend_marker.png" alt="Friend Marker" class="marker-img">
+                <div>
+                    <strong>Friend Marker</strong> &mdash; place on the <strong>tower you want to occupy</strong> for tower/fortress alliance quests.
+                    <div class="hint">Open the target menu &rarr; <strong>Friend tab</strong> &rarr; set marker on your chosen tower.</div>
+                </div>
+            </div>
+            <div class="marker-row">
+                <img src="img/target_marker.png" alt="Target Marker" class="marker-img">
+                <div>
+                    <strong>Target Marker</strong> &mdash; place on an <strong>enemy tower</strong> for PVP quests. Also used by <strong>Pass Battle</strong> &mdash; place on the pass you want to reinforce/attack.
+                    <div class="hint">Open the target menu &rarr; <strong>Enemy tab</strong> &rarr; set marker on the enemy tower or pass.</div>
+                </div>
+            </div>
+        </div>
+        <div class="note">Without these markers, Auto Quest will skip tower and PVP quests, and Pass Battle won't know where to go. You only need to set them once &mdash; they persist until you move them. Tower quest is off by default &mdash; enable it on the Settings page.</div>
+    </div>
+</div>
+
+<!-- Step 5 -->
+<div class="step">
+    <div class="step-num">5</div>
+    <div class="step-body">
+        <h2>Turn On Auto Quest</h2>
+        <p>On the Dashboard, find the <strong>Controls</strong> section under your device and turn on <strong>Auto Quest</strong>. This is the main feature &mdash; it reads your alliance quests and works through them automatically:</p>
+        <div class="checklist" style="margin-bottom:12px">
+            <div class="check">
+                <span class="check-icon" style="color:#ffb74d">&#9876;</span>
+                <div><strong>Titan &amp; Evil Guard rallies</strong> &mdash; starts or joins rallies, manages AP restoration</div>
+            </div>
+            <div class="check">
+                <span class="check-icon" style="color:#64b5f6">&#9965;</span>
+                <div><strong>Tower / Fortress quests</strong> &mdash; occupies a tower using your Friend marker</div>
+            </div>
+            <div class="check">
+                <span class="check-icon" style="color:#ce93d8">&#9876;</span>
+                <div><strong>PVP attack</strong> &mdash; sends a troop to the enemy tower on your Target marker</div>
+            </div>
+            <div class="check">
+                <span class="check-icon" style="color:#c9a030">&#9878;</span>
+                <div><strong>Gold gathering</strong> &mdash; sends troops to gather gold when nothing higher-priority is available</div>
+            </div>
+        </div>
+        <div class="note">Auto Quest prioritizes fast quests first (PVP, towers), then rallies, then gold. It checks for new quests every 60 seconds and keeps cycling until everything is done.</div>
+    </div>
+</div>
+
+<!-- Step 6 -->
+<div class="step">
+    <div class="step-num">6</div>
+    <div class="step-body">
+        <h2>Other Modes</h2>
+        <p>Beyond Auto Quest, there are other modes you can turn on as needed:</p>
+        <div class="modes">
+            <div class="mode">
+                <span class="mode-dot mode-farming"></span>
+                <div>
+                    <strong>Mine Mithril</strong>
+                    <div class="hint">Sends all troops to advanced mithril on a timer &mdash; pulls them out before the 20-minute vulnerability window</div>
+                </div>
+            </div>
+            <div class="mode">
+                <span class="mode-dot mode-combat"></span>
+                <div>
+                    <strong>Pass Battle</strong>
+                    <div class="hint">Reinforces the pass and joins pass rallies during Broken Lands. Requires a Target marker on the pass.</div>
+                </div>
+            </div>
+            <div class="mode">
+                <span class="mode-dot mode-combat"></span>
+                <div>
+                    <strong>Occupy Towers</strong>
+                    <div class="hint">Attacks and captures enemy territory towers on the Broken Lands grid</div>
+                </div>
+            </div>
+            <div class="mode">
+                <span class="mode-dot mode-combat"></span>
+                <div>
+                    <strong>Reinforce Throne</strong>
+                    <div class="hint">Keeps troops reinforcing the throne so your alliance holds it</div>
+                </div>
+            </div>
+        </div>
+        <div class="note">You don't have to use these &mdash; Auto Quest alone handles most alliance quests. Turn on extra modes when the situation calls for it.</div>
+    </div>
+</div>
+
+<!-- Step 7 -->
+<div class="step">
+    <div class="step-num">7</div>
+    <div class="step-body">
+        <h2>Control from Your Phone</h2>
+        <p>Want to check on things from your phone? Tap <strong>Copy</strong> or <strong>QR</strong> at the top of the Dashboard to get the link.</p>
+        <div class="note">If you're on the same Wi-Fi, use the local link. If you're away from home, remote access works automatically.</div>
+        <p style="margin-top:10px">You can also run someone else's account on your computer and share just that device with them. Tap the <strong>Share</strong> button on a device card to get a link they can use from their phone to control or monitor their own account.</p>
+    </div>
+</div>
+
+<div class="divider"></div>
+
+<h2 class="section-title">Good to Know</h2>
+<div class="tips">
+    <div class="tip"><span class="tip-icon">&#128161;</span><div><strong>Stop All</strong> button at the bottom instantly stops everything. Use it anytime.</div></div>
+    <div class="tip"><span class="tip-icon">&#128161;</span><div><strong>Settings</strong> page lets you customize intervals, AP restoration, team color, and more.</div></div>
+    <div class="tip"><span class="tip-icon">&#128161;</span><div><strong>Live View</strong> button on each device card shows what your emulator screen looks like right now.</div></div>
+    <div class="tip"><span class="tip-icon">&#128161;</span><div><strong>Status colors</strong> tell you what's happening: <span style="color:#64d8ff">cyan</span> = working, <span style="color:#ffb74d">amber</span> = waiting, <span style="color:#ff6b6b">red</span> = stopping, <span style="color:#667">gray</span> = idle.</div></div>
+</div>
+
+</div>
+</body>
+</html>
