@@ -244,7 +244,7 @@ THRONE_SQUARES = {(11, 11), (11, 12), (12, 11), (12, 12)}
 
 BORDER_COLORS = {
     "yellow": (107, 223, 239),
-    "green":  (115, 219, 132),
+    "green":  (100, 175, 160),  # recalibrated from live diagnostic data 2026-02-28
     "red":    (49, 85, 247),
     "blue":   (148, 145, 165)  # recalibrated from live diagnostic data 2026-02-28
 }
@@ -267,6 +267,7 @@ SETTINGS_RULES = {
     "web_dashboard":         {"type": bool},
     "gather_enabled":        {"type": bool},
     "tower_quest_enabled":   {"type": bool},
+    "remote_access":         {"type": bool},
     # Ints — type + optional min/max
     "ap_gem_limit":          {"type": int, "min": 0, "max": 3500},
     "min_troops":            {"type": int, "min": 0, "max": 5},
