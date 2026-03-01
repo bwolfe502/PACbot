@@ -285,14 +285,25 @@ class TestRunTowerQuest:
             _run_tower_quest(mock_device, quests)
             mock_occ.assert_called_once()
 
-    def test_no_tower_quests_does_nothing(self, mock_device):
+    def test_no_tower_quests_no_defending_does_nothing(self, mock_device):
         quests = [
             {"quest_type": QuestType.TITAN, "current": 0, "target": 15, "completed": False},
         ]
-        with patch("actions.quests._is_troop_defending") as mock_def, \
+        with patch("actions.quests._is_troop_defending", return_value=False) as mock_def, \
              patch("actions.quests.occupy_tower") as mock_occ, \
              patch("actions.quests.recall_tower_troop") as mock_recall:
             _run_tower_quest(mock_device, quests)
-            mock_def.assert_not_called()
             mock_occ.assert_not_called()
             mock_recall.assert_not_called()
+
+    def test_no_tower_quests_recalls_stranded_troop(self, mock_device):
+        """If no tower quests exist but a troop is still defending, recall it."""
+        quests = [
+            {"quest_type": QuestType.TITAN, "current": 0, "target": 15, "completed": False},
+        ]
+        with patch("actions.quests._is_troop_defending", return_value=True), \
+             patch("actions.quests.occupy_tower") as mock_occ, \
+             patch("actions.quests.recall_tower_troop") as mock_recall:
+            _run_tower_quest(mock_device, quests)
+            mock_occ.assert_not_called()
+            mock_recall.assert_called_once_with(mock_device, None)

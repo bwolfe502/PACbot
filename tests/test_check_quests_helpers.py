@@ -448,7 +448,14 @@ class TestPvpDispatchIntegration:
                                               mock_nav, mock_gather,
                                               mock_tower, mock_pvp,
                                               mock_device):
-        """PVP quest triggers _attack_pvp_tower in dispatch."""
+        """PVP quest triggers _attack_pvp_tower; gather runs after successful dispatch."""
+        # Simulate successful PVP dispatch: sets _pvp_last_dispatch
+        from actions.quests import _pvp_last_dispatch
+        def pvp_side_effect(device, stop_check=None):
+            _pvp_last_dispatch[device] = time.time()
+            return True
+        mock_pvp.side_effect = pvp_side_effect
+
         mock_ocr.return_value = [
             {"quest_type": QuestType.PVP, "current": 0, "target": 1, "completed": False,
              "text": "PvP(0/1)"},
@@ -458,8 +465,31 @@ class TestPvpDispatchIntegration:
 
         check_quests(mock_device)
         mock_pvp.assert_called_once()
-        # Gather should still run (no pending rallies)
+        # Gather should run because PVP was successfully dispatched (on cooldown)
         mock_gather.assert_called_once()
+
+    @patch("actions.quests._attack_pvp_tower", return_value=False)
+    @patch("actions.quests._run_tower_quest")
+    @patch("actions.farming.gather_gold_loop")
+    @patch("actions.quests.navigate", return_value=True)
+    @patch("actions.quests._claim_quest_rewards", return_value=0)
+    @patch("actions.quests._ocr_quest_rows")
+    def test_pvp_failure_blocks_gold_mining(self, mock_ocr, mock_claim,
+                                              mock_nav, mock_gather,
+                                              mock_tower, mock_pvp,
+                                              mock_device):
+        """When PVP dispatch fails, gold mining should NOT run."""
+        mock_ocr.return_value = [
+            {"quest_type": QuestType.PVP, "current": 0, "target": 1, "completed": False,
+             "text": "PvP(0/1)"},
+            {"quest_type": QuestType.GATHER, "current": 0, "target": 1000000, "completed": False,
+             "text": "Gather(0/200,000)"},
+        ]
+
+        check_quests(mock_device)
+        mock_pvp.assert_called_once()
+        # Gather should NOT run — PVP is available but not dispatched
+        mock_gather.assert_not_called()
 
     @patch("actions.quests._attack_pvp_tower")
     @patch("actions.quests._run_rally_loop", return_value=False)
@@ -496,6 +526,8 @@ class TestPvpDispatchIntegration:
                                               mock_device):
         """PVP on cooldown falls through to gather."""
         mock_pvp.return_value = False  # cooldown skip
+        # Simulate PVP was dispatched recently (on cooldown)
+        _pvp_last_dispatch[mock_device] = time.time()
         mock_ocr.return_value = [
             {"quest_type": QuestType.PVP, "current": 0, "target": 1, "completed": False,
              "text": "PvP(0/1)"},
@@ -506,3 +538,171 @@ class TestPvpDispatchIntegration:
         check_quests(mock_device)
         mock_pvp.assert_called_once()
         mock_gather.assert_called_once()
+
+
+# ============================================================
+# _eg_troops_available
+# ============================================================
+
+class TestEgTroopsAvailable:
+    def test_all_home_passes(self, mock_device):
+        """5 troops at home — plenty available for EG."""
+        from actions.quests import _eg_troops_available
+        from troops import TroopStatus, TroopAction, DeviceTroopSnapshot
+        snapshot = DeviceTroopSnapshot(
+            device=mock_device,
+            troops=[TroopStatus(action=TroopAction.HOME) for _ in range(5)],
+        )
+        with patch("actions.quests.get_troop_status", return_value=snapshot):
+            assert _eg_troops_available(mock_device) is True
+
+    def test_four_gathering_one_home_fails(self, mock_device):
+        """4 gathering + 1 home = only 1 non-tied-up troop, need 2."""
+        from actions.quests import _eg_troops_available
+        from troops import TroopStatus, TroopAction, DeviceTroopSnapshot
+        troops = [TroopStatus(action=TroopAction.GATHERING) for _ in range(4)]
+        troops.append(TroopStatus(action=TroopAction.HOME))
+        snapshot = DeviceTroopSnapshot(device=mock_device, troops=troops)
+        with patch("actions.quests.get_troop_status", return_value=snapshot):
+            assert _eg_troops_available(mock_device) is False
+
+    def test_three_gathering_two_rallying_passes(self, mock_device):
+        """3 gathering + 2 rallying = 2 non-tied-up. Rallying counts as available."""
+        from actions.quests import _eg_troops_available
+        from troops import TroopStatus, TroopAction, DeviceTroopSnapshot
+        troops = [TroopStatus(action=TroopAction.GATHERING) for _ in range(3)]
+        troops += [TroopStatus(action=TroopAction.RALLYING) for _ in range(2)]
+        snapshot = DeviceTroopSnapshot(device=mock_device, troops=troops)
+        with patch("actions.quests.get_troop_status", return_value=snapshot):
+            assert _eg_troops_available(mock_device) is True
+
+    def test_defending_counts_as_tied_up(self, mock_device):
+        """3 gathering + 1 defending + 1 home = only 2 non-tied-up, but barely passes."""
+        from actions.quests import _eg_troops_available
+        from troops import TroopStatus, TroopAction, DeviceTroopSnapshot
+        troops = [TroopStatus(action=TroopAction.GATHERING) for _ in range(3)]
+        troops.append(TroopStatus(action=TroopAction.DEFENDING))
+        troops.append(TroopStatus(action=TroopAction.HOME))
+        snapshot = DeviceTroopSnapshot(device=mock_device, troops=troops)
+        with patch("actions.quests.get_troop_status", return_value=snapshot):
+            # 5 total - 3 gathering - 1 defending = 1 available → fails
+            assert _eg_troops_available(mock_device) is False
+
+    def test_marching_returning_count_as_available(self, mock_device):
+        """Marching + returning troops count as available."""
+        from actions.quests import _eg_troops_available
+        from troops import TroopStatus, TroopAction, DeviceTroopSnapshot
+        troops = [
+            TroopStatus(action=TroopAction.GATHERING),
+            TroopStatus(action=TroopAction.GATHERING),
+            TroopStatus(action=TroopAction.GATHERING),
+            TroopStatus(action=TroopAction.MARCHING),
+            TroopStatus(action=TroopAction.RETURNING),
+        ]
+        snapshot = DeviceTroopSnapshot(device=mock_device, troops=troops)
+        with patch("actions.quests.get_troop_status", return_value=snapshot):
+            assert _eg_troops_available(mock_device) is True
+
+    def test_no_snapshot_falls_back_to_troops_avail(self, mock_device):
+        """When no snapshot available, falls back to troops_avail."""
+        from actions.quests import _eg_troops_available
+        with patch("actions.quests.get_troop_status", return_value=None), \
+             patch("actions.quests.troops_avail", return_value=2):
+            assert _eg_troops_available(mock_device) is True
+
+    def test_no_snapshot_fallback_fails(self, mock_device):
+        """Fallback to troops_avail with only 1 troop available."""
+        from actions.quests import _eg_troops_available
+        with patch("actions.quests.get_troop_status", return_value=None), \
+             patch("actions.quests.troops_avail", return_value=1):
+            assert _eg_troops_available(mock_device) is False
+
+
+# ============================================================
+# _recall_stray_stationed
+# ============================================================
+
+class TestRecallStrayStationed:
+    def test_no_stationed_noop(self, mock_device):
+        """No stationed troops — should not tap anything."""
+        from actions.quests import _recall_stray_stationed
+        from troops import TroopStatus, TroopAction, DeviceTroopSnapshot
+        snapshot = DeviceTroopSnapshot(
+            device=mock_device,
+            troops=[TroopStatus(action=TroopAction.HOME) for _ in range(5)],
+        )
+        with patch("actions.quests.get_troop_status", return_value=snapshot), \
+             patch("actions.quests.tap_image") as mock_tap:
+            _recall_stray_stationed(mock_device)
+            mock_tap.assert_not_called()
+
+    def test_no_snapshot_noop(self, mock_device):
+        """No snapshot available — should not tap anything."""
+        from actions.quests import _recall_stray_stationed
+        with patch("actions.quests.get_troop_status", return_value=None), \
+             patch("actions.quests.tap_image") as mock_tap:
+            _recall_stray_stationed(mock_device)
+            mock_tap.assert_not_called()
+
+    def test_stationed_recall_success(self, mock_device):
+        """Stationed troop detected — full recall sequence."""
+        from actions.quests import _recall_stray_stationed
+        from troops import TroopStatus, TroopAction, DeviceTroopSnapshot
+        troops = [TroopStatus(action=TroopAction.HOME) for _ in range(4)]
+        troops.append(TroopStatus(action=TroopAction.STATIONING))
+        snapshot = DeviceTroopSnapshot(device=mock_device, troops=troops)
+
+        with patch("actions.quests.get_troop_status", return_value=snapshot), \
+             patch("actions.quests.tap_image", return_value=True) as mock_tap, \
+             patch("actions.quests.wait_for_image_and_tap", return_value=True) as mock_wait_tap, \
+             patch("time.sleep"):
+            _recall_stray_stationed(mock_device)
+            # Should tap stationing icon on panel
+            mock_tap.assert_called_once_with("statuses/stationing.png", mock_device)
+            # Should tap stationed marker then return button
+            assert mock_wait_tap.call_count == 2
+            mock_wait_tap.assert_any_call("stationed.png", mock_device, timeout=3)
+            mock_wait_tap.assert_any_call("return.png", mock_device, timeout=3)
+
+    def test_stationed_recall_no_panel_icon(self, mock_device):
+        """Stationing icon not found on panel — aborts early."""
+        from actions.quests import _recall_stray_stationed
+        from troops import TroopStatus, TroopAction, DeviceTroopSnapshot
+        troops = [TroopStatus(action=TroopAction.STATIONING)]
+        snapshot = DeviceTroopSnapshot(device=mock_device, troops=troops)
+
+        with patch("actions.quests.get_troop_status", return_value=snapshot), \
+             patch("actions.quests.tap_image", return_value=False), \
+             patch("actions.quests.wait_for_image_and_tap") as mock_wait_tap:
+            _recall_stray_stationed(mock_device)
+            mock_wait_tap.assert_not_called()
+
+    def test_stationed_recall_no_map_marker(self, mock_device):
+        """Stationing icon found but stationed marker not on map."""
+        from actions.quests import _recall_stray_stationed
+        from troops import TroopStatus, TroopAction, DeviceTroopSnapshot
+        troops = [TroopStatus(action=TroopAction.STATIONING)]
+        snapshot = DeviceTroopSnapshot(device=mock_device, troops=troops)
+
+        with patch("actions.quests.get_troop_status", return_value=snapshot), \
+             patch("actions.quests.tap_image", return_value=True), \
+             patch("actions.quests.wait_for_image_and_tap", return_value=False) as mock_wait_tap, \
+             patch("actions.quests.save_failure_screenshot"), \
+             patch("time.sleep"):
+            _recall_stray_stationed(mock_device)
+            # Only tried stationed.png, never got to return.png
+            mock_wait_tap.assert_called_once_with("stationed.png", mock_device, timeout=3)
+
+    def test_respects_stop_check(self, mock_device):
+        """Stop check after panel tap aborts before map marker tap."""
+        from actions.quests import _recall_stray_stationed
+        from troops import TroopStatus, TroopAction, DeviceTroopSnapshot
+        troops = [TroopStatus(action=TroopAction.STATIONING)]
+        snapshot = DeviceTroopSnapshot(device=mock_device, troops=troops)
+
+        with patch("actions.quests.get_troop_status", return_value=snapshot), \
+             patch("actions.quests.tap_image", return_value=True), \
+             patch("actions.quests.wait_for_image_and_tap") as mock_wait_tap, \
+             patch("time.sleep"):
+            _recall_stray_stationed(mock_device, stop_check=lambda: True)
+            mock_wait_tap.assert_not_called()
