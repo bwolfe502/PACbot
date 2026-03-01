@@ -17,7 +17,8 @@ Key exports:
     run_repeat            — Generic repeating task wrapper
     run_once              — Generic one-shot task wrapper
     launch_task           — Spawn a daemon thread for a task
-    stop_task             — Signal a task to stop
+    stop_task             — Signal a task to stop + set "Stopping ..." status
+    force_stop_all        — Force-kill all task threads immediately
     stop_all_tasks_matching — Stop all tasks with a given suffix
 """
 
