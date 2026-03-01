@@ -225,7 +225,10 @@ function getSelectedDevices() {
     if (checkboxes.length > 0) {
         return Array.prototype.map.call(checkboxes, function(cb) { return cb.value; });
     }
-    // Single device (no selector shown) — read from first form
+    // Single device (no selector shown) — read from device card
+    var card = document.querySelector('.device-card[data-device]');
+    if (card) return [card.getAttribute('data-device')];
+    // Last resort: read from first action form
     var input = document.querySelector('.device-form input[name="device"]');
     return input ? [input.value] : [];
 }

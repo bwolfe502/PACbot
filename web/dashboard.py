@@ -36,7 +36,8 @@ from vision import (adb_tap, load_screenshot, find_image, tap_image,
                     wait_for_image_and_tap, read_ap, warmup_ocr)
 from troops import troops_avail, heal_all, read_panel_statuses, get_troop_status
 from actions import (attack, phantom_clash_attack, reinforce_throne, target,
-                     check_quests, teleport, rally_titan, rally_eg,
+                     check_quests, teleport, teleport_benchmark,
+                     rally_titan, rally_eg,
                      search_eg_reset, join_rally, join_war_rallies,
                      reset_quest_tracking, reset_rally_blacklist,
                      mine_mithril, mine_mithril_if_due,
@@ -71,6 +72,7 @@ TASK_FUNCTIONS = {
     "Diagnose Grid": diagnose_grid,
     "Scan Corner Coords": scan_test_squares,
     "Test Teleport": lambda dev: teleport(dev, dry_run=True),
+    "Teleport Benchmark": teleport_benchmark,
     "Mine Mithril": mine_mithril,
     "Gather Gold": gather_gold,
     "Reinforce Tower": occupy_tower,
@@ -113,7 +115,7 @@ ONESHOT_FARM = ["Rally Evil Guard", "Join Titan Rally", "Join Evil Guard Rally",
 ONESHOT_WAR = ["Target", "Attack", "Phantom Clash Attack", "Reinforce Throne",
                "UP UP UP!", "Teleport", "Attack Territory"]
 ONESHOT_DEBUG = ["Check Screen", "Check Troops", "Diagnose Grid",
-                 "Scan Corner Coords", "Test Teleport"]
+                 "Scan Corner Coords", "Test Teleport", "Teleport Benchmark"]
 
 # ---------------------------------------------------------------------------
 # Task runners (shared module — no more duplication)
@@ -145,6 +147,10 @@ AUTO_RUNNERS = {
 
 def stop_all():
     """Stop every running task and clear device statuses."""
+    # Reset loop-control flags that bypass stop events
+    config.auto_occupy_running = False
+    config.MITHRIL_ENABLED = False
+    config.MITHRIL_DEPLOY_TIME.clear()
     for key in list(running_tasks.keys()):
         stop_task(key)
     config.DEVICE_STATUS.clear()
@@ -485,6 +491,12 @@ def create_app():
         """Stop all running tasks for a given auto-mode (across all devices)."""
         mode_key = request.form.get("mode_key")
         if mode_key:
+            # Reset loop-control flags for modes that use them
+            if mode_key == "auto_occupy":
+                config.auto_occupy_running = False
+            elif mode_key == "auto_mithril":
+                config.MITHRIL_ENABLED = False
+                config.MITHRIL_DEPLOY_TIME.clear()
             suffix = f"_{mode_key}"
             for key in list(running_tasks.keys()):
                 if key.endswith(suffix):

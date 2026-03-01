@@ -24,6 +24,7 @@ from navigation import check_screen, navigate
 from vision import adb_tap, tap_image, load_screenshot, find_image, wait_for_image_and_tap, read_ap, warmup_ocr
 from troops import troops_avail, heal_all, read_panel_statuses, get_troop_status, TroopAction
 from actions import (attack, phantom_clash_attack, reinforce_throne, target, check_quests, teleport,
+                     teleport_benchmark,
                      rally_titan, rally_eg, search_eg_reset, join_rally,
                      join_war_rallies, reset_quest_tracking, reset_rally_blacklist,
                      test_eg_positions, mine_mithril, mine_mithril_if_due,
@@ -1250,7 +1251,14 @@ def create_gui():
     def add_debug_button(parent, name, function):
         def do_run_once():
             for device in get_active_devices():
-                threading.Thread(target=function, args=(device,), daemon=True).start()
+                task_key = f"{device}_once:{name}"
+                if task_key in running_tasks:
+                    info = running_tasks[task_key]
+                    if isinstance(info, dict) and info.get("thread") and info["thread"].is_alive():
+                        continue
+                stop_event = threading.Event()
+                launch_task(device, f"once:{name}",
+                            run_once, stop_event, args=(device, name, function))
 
         ctk.CTkButton(parent, text=name, command=do_run_once,
                       font=ctk.CTkFont(family=_FONT_FAMILY, size=11),
@@ -1313,6 +1321,7 @@ def create_gui():
     add_debug_button(debug_tab, "Test EG Positions", test_eg_positions)
     add_debug_button(debug_tab, "Attack Territory (Debug)", lambda dev: attack_territory(dev, debug=True))
     add_debug_button(debug_tab, "Diagnose Grid", diagnose_grid)
+    add_debug_button(debug_tab, "Teleport Benchmark", teleport_benchmark)
     add_debug_button(debug_tab, "Mine Mithril", mine_mithril)
 
     ctk.CTkFrame(debug_tab, height=1, fg_color=THEME["border_subtle"]).pack(fill=tk.X, pady=6)
