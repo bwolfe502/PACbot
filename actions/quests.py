@@ -1020,37 +1020,31 @@ def occupy_tower(device, stop_check=None):
 
 
 def _recall_tap_sequence(device, log, stop_check=None):
-    """Execute the tower recall blind-tap sequence.
+    """Execute the tower recall tap sequence.
 
-    Steps: tap tower → Detail → Recall → Confirm → close.
+    Steps: tap tower → Detail (image match) → Recall → Confirm → close.
     Returns True if we completed the sequence (caller must verify outcome).
     """
-    # Tap the tower (try a few Y positions — centering isn't always exact)
-    for tower_y in (900, 960, 840):
-        logged_tap(device, 540, tower_y, "recall_tower_tap")
-        time.sleep(1.2)
-        screen = load_screenshot(device)
-        if screen is not None and find_image(screen, "close_x.png", threshold=0.6) is not None:
-            log.debug("Tower popup detected after tap at y=%d", tower_y)
-            break
-    else:
-        # No popup detected — still try the sequence in case close_x
-        # doesn't appear but the tower menu is open
-        log.debug("No popup detected after tower taps — trying sequence anyway")
+    # Tap the tower (centered on screen after defending icon tap)
+    logged_tap(device, 540, 900, "recall_tower_tap")
+    time.sleep(1.5)
 
     if stop_check and stop_check():
         return False
 
-    # Detail button
-    logged_tap(device, 360, 1430, "recall_detail")
+    # Detail button — image match (lower-left quadrant)
+    if not wait_for_image_and_tap("detail_button.png", device, timeout=3):
+        log.warning("Tower recall: detail_button.png not found after tower tap")
+        save_failure_screenshot(device, "recall_tower_no_detail")
+        return False
     time.sleep(1)
+
+    if stop_check and stop_check():
+        return False
 
     # Recall troops button
     logged_tap(device, 180, 330, "recall_troops_btn")
     time.sleep(1)
-
-    if stop_check and stop_check():
-        return False
 
     # Red Confirm button
     logged_tap(device, 315, 1080, "recall_confirm")

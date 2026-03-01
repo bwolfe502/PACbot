@@ -657,6 +657,9 @@ IMAGE_REGIONS = {
     "stationed.png":              (0, 0, 360, 1920),       # left third
     "defending.png":              (0, 0, 360, 1920),       # left third
 
+    # Tower popup
+    "detail_button.png":          (0, 960, 540, 1920),        # lower-left quadrant
+
     # Deploy screen
     "depart.png":                 (0, 800, 1080, 1650),       # mid-to-lower; hits at y:873-1586
 

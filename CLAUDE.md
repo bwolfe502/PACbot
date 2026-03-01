@@ -268,10 +268,12 @@ rally completion instead of deploying gather troops, preserving troop availabili
 2. **Pending rally gate**: If titan/EG rallies are in-flight, gold is blocked (preserves troop
    availability for retries).
 
-**Stray troop recovery**: `_recall_stray_stationed(device)` runs at the start of each `check_quests`
-cycle (on MAP screen). If the troop snapshot shows any STATIONING troops (stuck from a failed EG
-rally), it taps `statuses/stationing.png` on the panel to center the map, then taps `stationed.png`
-→ `return.png` to send the troop home.
+**Stray troop recovery**: Runs at the start of each `check_quests` cycle (on MAP screen), before
+quest OCR. Two checks in order:
+1. **Stray defender recall**: If a troop is DEFENDING but `_tower_quest_state` is empty (bot didn't
+   deploy it this session), `recall_tower_troop()` is called immediately — highest priority.
+2. **Stray stationed recall**: `_recall_stray_stationed(device)` checks for STATIONING troops (stuck
+   from a failed EG rally), taps `statuses/stationing.png` → `stationed.png` → `return.png`.
 
 **EG troop gate**: `_eg_troops_available(device)` requires 2 troops not gathering or defending.
 Troops that are rallying, marching, returning, etc. are counted as available since they'll free up.
@@ -279,10 +281,18 @@ Falls back to `troops_avail() >= 2` if no troop snapshot exists.
 
 **Tower quest**: `_navigate_to_tower()` opens target menu, taps **Friend tab** `(540, 330)`, looks for
 `friend_marker.png`, then taps the marker to center the map on the tower. `occupy_tower()` then
-taps the tower, reinforces, and departs. `recall_tower_troop()` recalls when the quest completes.
-`_run_tower_quest()` handles three cases: no tower quests (recall stray defender), all complete
-(recall), active quest (deploy if needed). Uses `_tower_quest_state` dict to track bot-deployed
-troops within a session.
+taps the tower, reinforces, and departs. `_run_tower_quest()` handles three cases: no tower quests
+(recall stray defender), all complete (recall), active quest (deploy if needed). Uses
+`_tower_quest_state` dict to track bot-deployed troops within a session.
+
+**Tower troop recall**: `recall_tower_troop()` recalls a defending troop via a verified multi-step
+sequence. `_recall_tap_sequence()` does: tap tower `(540, 900)` → `wait_for_image_and_tap`
+`detail_button.png` (lower-left quadrant) → blind taps for Recall/Confirm → close. The outer
+function tries two approaches with panel-status verification after each:
+1. Center via `statuses/defending.png` panel icon (2 attempts).
+2. Fallback: center via `_navigate_to_tower()` (friend marker).
+Returns `True` only when `read_panel_statuses` confirms no DEFENDING troop. Saves failure
+screenshots at each step for coordinate calibration.
 
 **Snapshot freshness & `_is_troop_defending_relaxed`**: `_is_troop_defending(device)` uses a 30s
 snapshot freshness window, which is too short for `_run_tower_quest` — quest OCR takes 60+ seconds,
@@ -547,7 +557,7 @@ task list, the stopping state is cleared. Applies to both full toggle switches a
 ## Tests
 
 ```bash
-py -m pytest          # run all ~737 tests
+py -m pytest          # run all ~739 tests
 py -m pytest -x       # stop on first failure
 py -m pytest -k name  # filter by test name
 ```
@@ -572,7 +582,7 @@ No fixtures require a running emulator — all use mocked ADB/vision.
 | `test_combat.py` | `_check_dead`, `_find_green_pixel`, `_detect_player_at_eg`, `teleport` (happy path, timeout, dead detection, cancel) (`actions.combat`) |
 | `test_territory.py` | `_classify_square_team` (exact/noisy colors, thresholds, team configs), `_get_border_color` (sampling, clock avoidance), `_has_flag` (red pixel detection), `_is_adjacent_to_my_territory` (adjacency, throne, edges), `attack_territory` (full workflow), `auto_occupy_loop` (cycle, stop signal), blue calibration (observed values, boundary distances), `set_territory_config` (auto-derived enemies, threshold changes), red edge cases (near-threshold values), clock overlay row 0 (dimming gaps), `diagnose_grid` (smoke tests) (`territory`) |
 | `test_gather_gold.py` | Gather gold flow (gather.png template tap, depart verification, retry logic), loop troop deployment with retry (`actions.farming`) |
-| `test_tower_quest.py` | Tower/fortress quest occupy, recall, navigation (friend tab + friend_marker) (`actions.quests`) |
+| `test_tower_quest.py` | Tower/fortress quest occupy, recall (verified, detail_button template, still-defending detection), navigation (friend tab + friend_marker) (`actions.quests`) |
 | `test_settings_validation.py` | `validate_settings` — type checks, range/choice validation, device_troops, warnings, schema sync |
 | `test_task_runner.py` | `sleep_interval`, `launch_task`/`stop_task` (stopping status), `force_stop_all`, run_once, run_repeat, consecutive error recovery, settings load/save (`runners`) |
 | `test_relay_config.py` | `get_relay_config` auto-derive (SHA256 bot name, stability, uniqueness), disabled states (no key, import error, toggle off), defaults integration (`startup`) |
@@ -652,7 +662,7 @@ No fixtures require a running emulator — all use mocked ADB/vision.
 │   └── relay_server.py  # asyncio WebSocket relay server
 ├── data/                # Persistent data files (territory coordinates)
 ├── updater.py           # Auto-update from GitHub releases (zip-slip protected)
-├── tests/               # pytest suite (~737 tests)
+├── tests/               # pytest suite (~739 tests)
 ├── logs/                # Log files
 ├── stats/               # Session stats JSON
 └── debug/               # Debug screenshots
