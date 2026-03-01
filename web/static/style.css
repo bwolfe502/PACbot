@@ -88,11 +88,47 @@ nav {
     cursor: default;
 }
 
+.nav-quit {
+    background: #424242;
+    color: #ccc;
+    border: none;
+    padding: 7px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    flex-shrink: 0;
+    margin-left: 4px;
+    transition: all 0.15s ease;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.nav-quit:active {
+    background: #616161;
+    transform: scale(0.95);
+}
+
+.nav-quit:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+
 /* Main content */
 main {
-    max-width: 480px;
+    max-width: 960px;
     margin: 0 auto;
     padding: 12px;
+}
+
+/* Device cards grid — side by side on wider screens */
+.device-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+    gap: 10px;
+}
+
+.device-grid > .device-card {
+    margin-bottom: 0;
 }
 
 h1 { font-size: 24px; margin-bottom: 16px; color: #fff; }
@@ -237,6 +273,92 @@ h3 { font-size: 15px; margin-bottom: 12px; color: #64d8ff; }
     color: #dde;
 }
 
+.share-modal-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 12px;
+}
+
+/* Share modal tab bar */
+.share-tab-bar {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 14px;
+    background: rgba(0,0,0,0.25);
+    border-radius: 8px;
+    padding: 3px;
+}
+
+.share-tab {
+    flex: 1;
+    padding: 7px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #667;
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.share-tab.active {
+    color: #fff;
+    background: rgba(100,216,255,0.15);
+}
+
+.share-tab:active {
+    opacity: 0.7;
+}
+
+.share-url {
+    font-size: 11px;
+    color: #64d8ff;
+    word-break: break-all;
+    background: rgba(0,0,0,0.3);
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin-bottom: 14px;
+    font-family: monospace;
+}
+
+.share-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    margin-top: 14px;
+}
+
+.share-action-btn {
+    padding: 10px 24px;
+    font-size: 13px;
+    font-weight: 600;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    -webkit-tap-highlight-color: transparent;
+    background: #141428;
+    border: 1px solid rgba(255,255,255,0.08);
+    color: #889;
+}
+
+.share-action-btn:active {
+    background: #1e3a5f;
+    color: #dde;
+}
+
+.share-action-btn.share-action-primary {
+    background: rgba(100,216,255,0.12);
+    border-color: rgba(100,216,255,0.25);
+    color: #64d8ff;
+}
+
+.share-action-btn.share-action-primary:active {
+    background: rgba(100,216,255,0.22);
+}
+
 /* Tunnel status indicator (inside remote banner) */
 .tunnel-status {
     display: inline-flex;
@@ -313,16 +435,47 @@ h3 { font-size: 15px; margin-bottom: 12px; color: #64d8ff; }
     background: linear-gradient(135deg, #181830 0%, #1a1e38 100%);
 }
 
-.device-header {
-    display: flex;
-    justify-content: space-between;
+.device-top {
+    display: grid;
+    grid-template-columns: 1fr auto;
     align-items: center;
+    row-gap: 2px;
+    column-gap: 12px;
 }
 
-.device-header strong {
+.device-name-row {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+}
+
+.device-name-row strong {
     font-size: 17px;
     color: #fff;
     letter-spacing: 0.3px;
+}
+
+.device-header-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    justify-self: end;
+}
+
+.share-btn {
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #64d8ff;
+    background: rgba(100,216,255,0.08);
+    border: 1px solid rgba(100,216,255,0.2);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.share-btn:active {
+    background: rgba(100,216,255,0.18);
 }
 
 .device-troops {
@@ -333,6 +486,7 @@ h3 { font-size: 15px; margin-bottom: 12px; color: #64d8ff; }
 
 /* Device status bar */
 .device-status-bar {
+    grid-column: 1;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -412,55 +566,66 @@ h3 { font-size: 15px; margin-bottom: 12px; color: #64d8ff; }
     gap: 6px;
     padding-top: 4px;
     align-items: center;
+    justify-content: center;
 }
 
-.troop-slot {
+.mithril-time {
+    color: #ce93d8;
+    font-weight: 700;
+}
+
+/* Troop summary pills (grouped, colored like quest pills) */
+.troop-summary {
     font-size: 11px;
-    padding: 4px 10px;
-    border-radius: 20px;
     font-weight: 600;
-    letter-spacing: 0.3px;
+    white-space: nowrap;
+    padding: 4px 12px;
+    border-radius: 20px;
+    border: 1px solid rgba(255,255,255,0.08);
+    background: #1e1e38;
+    flex: 1 1 0;
+    text-align: center;
+    min-width: 0;
 }
 
-.troop-home {
-    background: #222238;
-    color: #889;
-}
+.troop-home       { color: #667; border-color: rgba(102,102,119,0.2); background: rgba(102,102,119,0.06); }
+.troop-returning  { color: #66bb6a; border-color: rgba(102,187,106,0.25); background: rgba(102,187,106,0.08); }
+.troop-rallying   { color: #4dd9c0; border-color: rgba(77,217,192,0.25); background: rgba(77,217,192,0.08); }
+.troop-defending  { color: #b388ff; border-color: rgba(179,136,255,0.25); background: rgba(179,136,255,0.08); }
+.troop-marching   { color: #ffe082; border-color: rgba(255,224,130,0.25); background: rgba(255,224,130,0.08); }
+.troop-gathering  { color: #c9a030; border-color: rgba(201,160,48,0.25); background: rgba(201,160,48,0.08); }
+.troop-deployed   { color: #64b5f6; border-color: rgba(100,181,246,0.25); background: rgba(100,181,246,0.08); }
+.troop-battling   { color: #ef5350; border-color: rgba(239,83,80,0.25); background: rgba(239,83,80,0.08); }
+.troop-occupying  { color: #ff8a65; border-color: rgba(255,138,101,0.25); background: rgba(255,138,101,0.08); }
+.troop-stationing { color: #90caf9; border-color: rgba(144,202,249,0.25); background: rgba(144,202,249,0.08); }
+.troop-adventuring { color: #80cbc4; border-color: rgba(128,203,196,0.25); background: rgba(128,203,196,0.08); }
 
-.troop-returning {
-    background: #1a3520;
-    color: #66bb6a;
-}
-
-.troop-rallying {
-    background: #1a3535;
-    color: #4dd9c0;
-}
-
-.troop-defending {
-    background: #2a1a3a;
-    color: #b388ff;
-}
-
-.troop-marching {
-    background: #33301a;
-    color: #ffe082;
-}
-
-.troop-gathering {
-    background: #2e2510;
-    color: #c9a030;
-}
-
-.troop-deployed {
-    background: #1a2540;
-    color: #64b5f6;
+.troop-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
 }
 
 .troop-age {
-    font-size: 10px;
-    color: #556;
-    margin-left: auto;
+    font-size: 9px;
+    color: #445;
+    font-weight: 500;
+    text-transform: none;
+    letter-spacing: 0;
+}
+
+.quest-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+}
+
+.quest-age {
+    font-size: 9px;
+    color: #445;
+    font-weight: 500;
+    text-transform: none;
+    letter-spacing: 0;
 }
 
 /* Quest tracking */
@@ -473,9 +638,20 @@ h3 { font-size: 15px; margin-bottom: 12px; color: #64d8ff; }
     margin-top: 4px;
 }
 
+.dp-quests .quest-pill {
+    flex: 1 1 0;
+    min-width: 0;
+}
+
+/* 4+ pills: force 2 per row */
+.dp-quests.quests-wrap .quest-pill {
+    flex-basis: 40%;
+}
+
 .quest-pill {
     display: flex;
     align-items: center;
+    justify-content: center;
     gap: 6px;
     background: #1e1e38;
     border: 1px solid rgba(255,255,255,0.08);
@@ -484,14 +660,35 @@ h3 { font-size: 15px; margin-bottom: 12px; color: #64d8ff; }
     font-size: 11px;
 }
 
-.quest-label { color: #8899bb; font-weight: 600; }
+.quest-complete-msg {
+    grid-column: 1 / -1;
+    font-size: 11px;
+    font-weight: 600;
+    color: #4caf50;
+    text-align: center;
+    padding: 2px 0;
+}
+
+.quest-label { font-weight: 600; }
 .quest-val { color: #e8e8f0; font-weight: 700; font-variant-numeric: tabular-nums; }
 .quest-pend { color: #ffb74d; font-weight: 700; margin-left: 2px; }
+
+/* Quest type colors */
+.quest-titan        { border-color: rgba(255,183,77,0.25);  background: rgba(255,183,77,0.08); }
+.quest-titan .quest-label        { color: #ffb74d; }
+.quest-evil_guard   { border-color: rgba(239,83,80,0.25);   background: rgba(239,83,80,0.08); }
+.quest-evil_guard .quest-label   { color: #ef5350; }
+.quest-pvp          { border-color: rgba(206,147,216,0.25);  background: rgba(206,147,216,0.08); }
+.quest-pvp .quest-label          { color: #ce93d8; }
+.quest-gather       { border-color: rgba(201,160,48,0.25);  background: rgba(201,160,48,0.08); }
+.quest-gather .quest-label       { color: #c9a030; }
+.quest-tower        { border-color: rgba(100,181,246,0.25); background: rgba(100,181,246,0.08); }
+.quest-tower .quest-label        { color: #64b5f6; }
 
 /* Auto mode columns (side-by-side groups) */
 .auto-columns {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
     gap: 10px;
     margin-top: 8px;
 }
@@ -797,6 +994,26 @@ h3 { font-size: 15px; margin-bottom: 12px; color: #64d8ff; }
     color: #ef5350;
 }
 
+.bottom-btn-restart {
+    border-color: rgba(255,183,77,0.15);
+    color: #a97;
+}
+
+.bottom-btn-restart:active {
+    background: rgba(255,183,77,0.06);
+    color: #ffb74d;
+}
+
+.bottom-btn-quit {
+    border-color: rgba(255,255,255,0.04);
+    color: #667;
+}
+
+.bottom-btn-quit:active {
+    background: rgba(255,255,255,0.03);
+    color: #99a;
+}
+
 /* Summary bar */
 .summary-bar {
     display: flex;
@@ -1027,6 +1244,203 @@ h3 { font-size: 15px; margin-bottom: 12px; color: #64d8ff; }
 
 .footer-debug-link:active {
     color: #778;
+}
+
+/* Inline auto-modes inside device card */
+.device-auto-modes {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(255,255,255,0.04);
+}
+
+/* Collapsible controls header */
+.controls-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+    padding: 4px 0 8px;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.controls-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: #556;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.controls-arrow {
+    font-size: 10px;
+    color: #556;
+    transition: transform 0.15s ease;
+}
+
+/* Collapsed pills — only show active ones */
+.controls-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    padding-bottom: 2px;
+}
+
+.controls-pills .control-pill:not(.pill-on) {
+    display: none;
+}
+
+.control-pill {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 10px;
+    color: #556;
+    background: #181830;
+    border: 1px solid rgba(255,255,255,0.06);
+    white-space: nowrap;
+}
+
+.control-pill.pill-on {
+    color: #4cff8e;
+    background: rgba(76,255,142,0.1);
+    border-color: rgba(76,255,142,0.25);
+}
+
+/* Mithril timer (device-top grid, row 2 col 2) */
+.mithril-timer {
+    justify-self: end;
+    font-size: 11px;
+    font-weight: 600;
+    color: #b39ddb;
+    font-variant-numeric: tabular-nums;
+    padding: 1px 6px;
+    background: rgba(179,157,219,0.1);
+    border-radius: 4px;
+}
+
+.auto-subheader {
+    font-size: 11px;
+    font-weight: 700;
+    color: #556;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 6px;
+}
+
+/* Live View screenshot */
+.live-view-section {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(255,255,255,0.04);
+}
+
+.live-view-toggle {
+    width: 100%;
+    padding: 8px 14px;
+    font-size: 13px;
+    font-weight: 700;
+    color: #8af;
+    background: rgba(100,160,255,0.06);
+    border: 1px solid rgba(100,160,255,0.15);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.live-view-toggle.live-view-on {
+    color: #64d8ff;
+    background: rgba(100,216,255,0.1);
+    border-color: rgba(100,216,255,0.25);
+}
+
+.live-view-toggle:active {
+    opacity: 0.7;
+}
+
+.live-view-container {
+    margin-top: 8px;
+}
+
+.live-view-img {
+    width: 100%;
+    border-radius: 8px;
+    background: #111;
+    min-height: 80px;
+}
+
+/* Settings device tabs */
+.settings-tabs {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 16px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 2px;
+}
+
+.settings-tab {
+    padding: 6px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #889;
+    background: #1a1a30;
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 8px;
+    text-decoration: none;
+    white-space: nowrap;
+    transition: all 0.15s ease;
+}
+
+.settings-tab.active {
+    color: #64d8ff;
+    background: rgba(100,216,255,0.1);
+    border-color: rgba(100,216,255,0.25);
+}
+
+.settings-tab:active {
+    opacity: 0.7;
+}
+
+/* Per-device override rows */
+.override-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 4px 0;
+}
+
+.override-toggle {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+    padding-top: 2px;
+    cursor: pointer;
+}
+
+.override-toggle .override-cb {
+    accent-color: #64d8ff;
+}
+
+.override-label {
+    font-size: 10px;
+    font-weight: 600;
+    color: #64d8ff;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.override-row .setting-row {
+    flex: 1;
+    padding: 0;
+}
+
+.global-hint {
+    font-size: 11px;
+    color: #556;
+    font-style: italic;
+    margin-left: 4px;
 }
 
 /* Safe area for notched iPhones */

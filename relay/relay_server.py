@@ -5,6 +5,9 @@ Standalone aiohttp server deployed on a DigitalOcean Droplet (or any VPS).
 Accepts WebSocket connections from PACbot instances and proxies HTTP requests
 from browsers to the appropriate bot.
 
+Supports streaming responses (MJPEG) via stream_start/stream_chunk/stream_end
+protocol messages.
+
 Usage:
     RELAY_SECRET=your-secret python relay_server.py
     RELAY_SECRET=your-secret RELAY_PORT=8080 python relay_server.py
@@ -33,14 +36,17 @@ log = logging.getLogger("relay")
 SHARED_SECRET = os.environ.get("RELAY_SECRET", "")
 RELAY_PORT = int(os.environ.get("RELAY_PORT", "80"))
 REQUEST_TIMEOUT = 30  # seconds
+STREAM_CHUNK_TIMEOUT = 10  # seconds between stream chunks before giving up
 
 # ---------------------------------------------------------------------------
 # State
 # ---------------------------------------------------------------------------
 # {bot_name: websocket}
 _bots: dict[str, web.WebSocketResponse] = {}
-# {request_id: asyncio.Future}  — per-bot pending requests
+# {bot_name: {request_id: asyncio.Future}}  — per-bot pending requests
 _pending: dict[str, dict[str, asyncio.Future]] = {}
+# {bot_name: {request_id: asyncio.Queue}}  — per-bot active streams
+_streams: dict[str, dict[str, asyncio.Queue]] = {}
 
 # ---------------------------------------------------------------------------
 # HTML pages (inline, no external files needed)
@@ -122,9 +128,11 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
         log.info("Replacing existing connection for bot '%s'", bot_name)
         await old_ws.close()
     _cancel_pending(bot_name, "Bot reconnected")
+    _cancel_all_streams(bot_name)
 
     _bots[bot_name] = ws
     _pending[bot_name] = {}
+    _streams[bot_name] = {}
     log.info("Bot '%s' connected from %s", bot_name, request.remote)
 
     try:
@@ -135,8 +143,31 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
                 except json.JSONDecodeError:
                     log.warning("Malformed JSON from bot '%s'", bot_name)
                     continue
+
                 req_id = data.get("id")
-                if req_id and req_id in _pending.get(bot_name, {}):
+                stream_type = data.get("stream")
+
+                if stream_type:
+                    # Streaming protocol message
+                    if stream_type == "start":
+                        # Create stream queue and resolve pending future
+                        queue: asyncio.Queue = asyncio.Queue()
+                        _streams.setdefault(bot_name, {})[req_id] = queue
+                        fut = _pending.get(bot_name, {}).get(req_id)
+                        if fut and not fut.done():
+                            fut.set_result(data)
+                    elif stream_type == "chunk":
+                        queue = _streams.get(bot_name, {}).get(req_id)
+                        if queue:
+                            body = base64.b64decode(data.get("body_b64", ""))
+                            await queue.put(body)
+                    elif stream_type == "end":
+                        queue = _streams.get(bot_name, {}).get(req_id)
+                        if queue:
+                            await queue.put(None)  # sentinel
+                        _streams.get(bot_name, {}).pop(req_id, None)
+                elif req_id and req_id in _pending.get(bot_name, {}):
+                    # Normal request-response
                     _pending[bot_name][req_id].set_result(data)
             elif msg.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
                 break
@@ -144,6 +175,7 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
         if _bots.get(bot_name) is ws:
             del _bots[bot_name]
         _cancel_pending(bot_name, "Bot disconnected")
+        _cancel_all_streams(bot_name)
         log.info("Bot '%s' disconnected", bot_name)
 
     return ws
@@ -158,6 +190,33 @@ def _cancel_pending(bot_name: str, reason: str) -> None:
                 "headers": {"Content-Type": "text/plain"},
                 "body_b64": base64.b64encode(reason.encode()).decode("ascii"),
             })
+
+
+def _cancel_all_streams(bot_name: str) -> None:
+    """Cancel all active streams for a bot (push end sentinels)."""
+    streams = _streams.pop(bot_name, {})
+    for queue in streams.values():
+        try:
+            queue.put_nowait(None)
+        except Exception:
+            pass
+
+
+async def _send_cancel_stream(bot_name: str, req_id: str) -> None:
+    """Tell the bot to stop a stream."""
+    ws = _bots.get(bot_name)
+    if ws and not ws.closed:
+        try:
+            await ws.send_json({"cancel_stream": req_id})
+        except Exception:
+            pass
+    # Clean up stream queue
+    queue = _streams.get(bot_name, {}).pop(req_id, None)
+    if queue:
+        try:
+            queue.put_nowait(None)
+        except Exception:
+            pass
 
 # ---------------------------------------------------------------------------
 # HTTP handler (browser requests)
@@ -219,7 +278,11 @@ async def handle_http(request: web.Request) -> web.StreamResponse:
     finally:
         _pending.get(bot_name, {}).pop(req_id, None)
 
-    # Build response
+    # Check if this is a streaming response
+    if result.get("stream") == "start":
+        return await _handle_stream_response(request, bot_name, req_id, result)
+
+    # Build normal response
     resp_body = base64.b64decode(result.get("body_b64", ""))
     resp_headers = result.get("headers", {})
     # Filter headers that aiohttp manages itself
@@ -263,6 +326,51 @@ async def handle_http(request: web.Request) -> web.StreamResponse:
         status=result.get("status", 200),
         headers=resp_headers,
     )
+
+
+async def _handle_stream_response(
+    request: web.Request,
+    bot_name: str,
+    req_id: str,
+    start_msg: dict,
+) -> web.StreamResponse:
+    """Forward a streaming response (MJPEG) from bot to browser."""
+    resp_headers = start_msg.get("headers", {})
+    # Filter managed headers
+    for h in ("Transfer-Encoding", "Content-Length", "Content-Encoding"):
+        resp_headers.pop(h, None)
+        resp_headers.pop(h.lower(), None)
+
+    resp = web.StreamResponse(status=start_msg.get("status", 200))
+    for k, v in resp_headers.items():
+        resp.headers[k] = v
+    await resp.prepare(request)
+
+    queue = _streams.get(bot_name, {}).get(req_id)
+    if not queue:
+        return resp
+
+    try:
+        while True:
+            try:
+                chunk = await asyncio.wait_for(queue.get(),
+                                                timeout=STREAM_CHUNK_TIMEOUT)
+            except asyncio.TimeoutError:
+                break
+            if chunk is None:  # end sentinel
+                break
+            await resp.write(chunk)
+    except (ConnectionResetError, ConnectionAbortedError, asyncio.CancelledError):
+        pass
+    finally:
+        # Browser disconnected or stream ended — tell bot to stop
+        await _send_cancel_stream(bot_name, req_id)
+
+    try:
+        await resp.write_eof()
+    except Exception:
+        pass
+    return resp
 
 # ---------------------------------------------------------------------------
 # App setup

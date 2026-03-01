@@ -372,6 +372,16 @@ def _recover_to_known_screen(device):
                  "center tap + wait" if likely_map else "nuclear option", current)
         return current
 
+    # If we exhausted all strategies and still UNKNOWN, but the best match
+    # was MAP at 70%+ with a large gap over the runner-up, accept it.
+    # This handles emulator rendering differences that drop MAP confidence
+    # below threshold (e.g. march trails, AP bar variance) without any
+    # actual overlay to dismiss.
+    if likely_map:
+        log.info("Recovery: all strategies exhausted, no overlay found — "
+                 "accepting likely MAP (%.0f%%)", info["best_val"] * 100)
+        return Screen.MAP
+
     log.warning("Recovery FAILED after all strategies (including escalation)")
     _save_debug_screenshot(device, "recovery_fail")
     return Screen.UNKNOWN

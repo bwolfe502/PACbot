@@ -449,7 +449,7 @@ def create_gui():
             log.info("Stopping Reinforce Throne on all devices")
 
     def _stop_mithril():
-        config.MITHRIL_ENABLED = False
+        config.MITHRIL_ENABLED_DEVICES.clear()
         config.MITHRIL_DEPLOY_TIME.clear()
         if auto_mithril_var.get():
             auto_mithril_var.set(False)
@@ -616,7 +616,7 @@ def create_gui():
 
     def toggle_auto_mithril():
         if auto_mithril_var.get():
-            config.MITHRIL_ENABLED = True
+            config.MITHRIL_ENABLED_DEVICES.update(get_active_devices())
             config.MITHRIL_INTERVAL = int(mithril_interval_var.get())
             for device in get_active_devices():
                 task_key = f"{device}_auto_mithril"
@@ -1554,7 +1554,7 @@ def create_gui():
             auto_reinforce_var.set(False)
         if auto_mithril_var.get() and not any(k.endswith("_auto_mithril") for k in running_tasks):
             auto_mithril_var.set(False)
-            config.MITHRIL_ENABLED = False
+            config.MITHRIL_ENABLED_DEVICES.clear()
             config.MITHRIL_DEPLOY_TIME.clear()
         if auto_gold_var.get() and not any(k.endswith("_auto_gold") for k in running_tasks):
             auto_gold_var.set(False)

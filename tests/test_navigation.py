@@ -241,3 +241,41 @@ class TestRecoverToKnownScreen:
         mock_check.side_effect = [Screen.UNKNOWN] * 5 + [Screen.MAP]
         result = _recover_to_known_screen("dev1")
         assert result == Screen.MAP
+
+    @patch("navigation._save_debug_screenshot")
+    @patch("navigation.time.sleep")
+    @patch("navigation.adb_keyevent")
+    @patch("navigation.timed_wait")
+    @patch("navigation.adb_tap")
+    @patch("navigation.tap_image")
+    @patch("navigation.check_screen")
+    def test_likely_map_accepted_after_all_strategies_fail(
+            self, mock_check, mock_tap_img, mock_tap, mock_tw,
+            mock_keyevent, mock_sleep, mock_save):
+        """When MAP scores 70-79% and no overlay is found, accept it as MAP."""
+        from navigation import _last_unknown_info
+        _last_unknown_info["dev1"] = {"best_name": Screen.MAP, "best_val": 0.73}
+        mock_tap_img.return_value = False
+        mock_check.return_value = Screen.UNKNOWN
+        result = _recover_to_known_screen("dev1")
+        assert result == Screen.MAP
+        # BACK key should be skipped (likely MAP avoids quit dialog)
+        mock_keyevent.assert_not_called()
+
+    @patch("navigation._save_debug_screenshot")
+    @patch("navigation.time.sleep")
+    @patch("navigation.adb_keyevent")
+    @patch("navigation.timed_wait")
+    @patch("navigation.adb_tap")
+    @patch("navigation.tap_image")
+    @patch("navigation.check_screen")
+    def test_non_map_unknown_not_accepted(
+            self, mock_check, mock_tap_img, mock_tap, mock_tw,
+            mock_keyevent, mock_sleep, mock_save):
+        """When best match is NOT MAP, all-fail should still return UNKNOWN."""
+        from navigation import _last_unknown_info
+        _last_unknown_info["dev1"] = {"best_name": Screen.WAR, "best_val": 0.74}
+        mock_tap_img.return_value = False
+        mock_check.return_value = Screen.UNKNOWN
+        result = _recover_to_known_screen("dev1")
+        assert result == Screen.UNKNOWN

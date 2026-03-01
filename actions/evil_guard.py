@@ -52,7 +52,7 @@ def _handle_ap_popup(device, needed):
     log.warning("AP Recovery popup detected — attempting to restore AP")
     save_failure_screenshot(device, "eg_ap_popup_detected")
 
-    if not config.AUTO_RESTORE_AP_ENABLED:
+    if not config.get_device_config(device, "auto_restore_ap"):
         log.warning("AUTO_RESTORE_AP not enabled — closing popup and aborting")
         _close_ap_menu(device, double_close=False)
         return False
@@ -233,19 +233,19 @@ def rally_eg(device, stop_check=None):
     """
     log = get_logger("actions", device)
     log.debug("rally_eg() called")
-    if config.AUTO_HEAL_ENABLED:
+    if config.get_device_config(device, "auto_heal"):
         heal_all(device)
 
     troops = troops_avail(device)
-    if troops <= config.MIN_TROOPS_AVAILABLE:
-        log.warning("Not enough troops available (have %d, need more than %d)", troops, config.MIN_TROOPS_AVAILABLE)
+    if troops <= config.get_device_config(device, "min_troops"):
+        log.warning("Not enough troops available (have %d, need more than %d)", troops, config.get_device_config(device, "min_troops"))
         return False
 
     # AP check (if unreadable, proceed anyway — game handles low AP with its own prompt)
     ap = read_ap(device)
     log.debug("EG rally: AP = %s", ap)
     if ap is not None and ap[0] < config.AP_COST_EVIL_GUARD:
-        if config.AUTO_RESTORE_AP_ENABLED:
+        if config.get_device_config(device, "auto_restore_ap"):
             if not restore_ap(device, config.AP_COST_EVIL_GUARD):
                 log.warning("Could not restore enough AP for evil guard rally")
                 return False
@@ -419,10 +419,19 @@ def rally_eg(device, stop_check=None):
         """Poll map panel for stationed status. Returns True when stationed detected.
         Uses read_panel_statuses for rich status logging (marching → battling →
         stationed transitions), with fallback to raw template matching if panel
-        reading fails. Checks stop_check every 3s."""
+        reading fails. Checks stop_check every 3s.
+
+        Detects rally failure: tracks rally-specific troop states (Rallying,
+        Marching, Battling).  If those disappear without Stationing appearing,
+        the rally was cancelled or failed — returns False immediately instead of
+        waiting for the full timeout.  This correctly ignores permanent Defending
+        troops that stay deployed throughout.
+        """
         log.debug("P%d: polling for stationed (timeout=%ds)...", priest_num, timeout_seconds)
         start_time = time.time()
         last_summary = None
+        _RALLY_STATES = {TroopAction.RALLYING, TroopAction.MARCHING, TroopAction.BATTLING}
+        saw_rally_troop = False  # True once we see a troop in a rally state
         while time.time() - start_time < timeout_seconds:
             if stop_check and stop_check():
                 log.info("P%d: poll_troop_ready aborted (stop requested)", priest_num)
@@ -447,6 +456,17 @@ def rally_eg(device, stop_check=None):
                     elapsed = time.time() - start_time
                     log.debug("P%d: stationed detected via panel after %.1fs", priest_num, elapsed)
                     return True
+                # Track rally-specific states (ignores permanent Defending troops)
+                has_rally_troop = any(t.action in _RALLY_STATES for t in snapshot.troops)
+                if has_rally_troop:
+                    saw_rally_troop = True
+                elif saw_rally_troop:
+                    # Rally troop disappeared without Stationing = failed/cancelled
+                    elapsed = time.time() - start_time
+                    log.warning("P%d: rally failed — rally troop gone after %.1fs "
+                                "(no stationed)", priest_num, elapsed)
+                    save_failure_screenshot(device, f"eg_rally_failed_p{priest_num}")
+                    return False
             else:
                 # Fallback: raw template match (may not be on map screen yet)
                 screen = load_screenshot(device)
@@ -591,6 +611,18 @@ def rally_eg(device, stop_check=None):
                        1, "eg_depart_to_map")
             config.set_device_status(device, f"Killing Dark Priest ({pnum}/5)...")
             if not poll_troop_ready(60, pnum):
+                # Check if the troop is still marching — if so, the castle is
+                # far from the EG and continuing would waste more troops on
+                # multi-minute marches that all time out.
+                snapshot = read_panel_statuses(device)
+                if snapshot and snapshot.any_doing(TroopAction.MARCHING):
+                    log.warning("P%d: stationed timeout with troop still marching "
+                                "— castle too far from EG, stopping priest dispatch",
+                                pnum)
+                    save_failure_screenshot(device, f"eg_march_too_long_p{pnum}")
+                    attacks_completed += 1
+                    priests_dead += 1
+                    break
                 log.warning("P%d: stationed timeout — continuing anyway", pnum)
             log.info("P%d: rally completed", pnum)
             attacks_completed += 1
@@ -668,6 +700,15 @@ def rally_eg(device, stop_check=None):
                        1, "eg_depart_to_map")
             config.set_device_status(device, f"Killing Dark Priest ({pnum}/5)...")
             if not poll_troop_ready(60, pnum):
+                snapshot = read_panel_statuses(device)
+                if snapshot and snapshot.any_doing(TroopAction.MARCHING):
+                    log.warning("P%d retry: stationed timeout with troop still marching "
+                                "— castle too far from EG, stopping priest dispatch",
+                                pnum)
+                    save_failure_screenshot(device, f"eg_march_too_long_p{pnum}_retry")
+                    attacks_completed += 1
+                    priests_dead += 1
+                    break
                 log.warning("P%d retry: stationed timeout — continuing anyway", pnum)
             log.info("P%d retry: rally completed", pnum)
             attacks_completed += 1

@@ -331,13 +331,13 @@ class TestAllQuestsVisuallyCompletePVP:
 # ============================================================
 
 class TestAttackPvpTower:
-    @patch("actions.quests.tap_image", return_value=True)
+    @patch("actions.quests.wait_for_image_and_tap", return_value=True)
     @patch("actions.quests.tap_tower_until_attack_menu", return_value=True)
     @patch("actions.quests.save_failure_screenshot")
     @patch("actions.quests.config")
     @patch("actions.quests.troops_avail", return_value=3)
     def test_success_full_flow(self, mock_troops, mock_config, mock_save,
-                                mock_tap_tower, mock_tap_image, mock_device):
+                                mock_tap_tower, mock_wait_tap, mock_device):
         """Happy path: target succeeds, attack menu opens, depart found."""
         mock_config.set_device_status = MagicMock()
         with patch("actions.combat.target", return_value=True), \
@@ -356,20 +356,20 @@ class TestAttackPvpTower:
             assert result is False
             mock_target.assert_not_called()
 
+    @patch("actions.quests.tap_tower_until_attack_menu")
     @patch("actions.quests.config")
     @patch("actions.quests.troops_avail", return_value=0)
-    def test_no_troops_skips(self, mock_troops, mock_config, mock_device):
-        """Zero troops available — skip without calling target."""
+    def test_no_troops_skips(self, mock_troops, mock_config, mock_tap_tower, mock_device):
+        """Zero troops available — skip after target() but before tapping tower."""
         mock_config.set_device_status = MagicMock()
-        with patch("actions.combat.target") as mock_target:
+        with patch("actions.combat.target", return_value=True):
             result = _attack_pvp_tower(mock_device)
             assert result is False
-            mock_target.assert_not_called()
+            mock_tap_tower.assert_not_called()
 
     @patch("actions.quests.save_failure_screenshot")
     @patch("actions.quests.config")
-    @patch("actions.quests.troops_avail", return_value=3)
-    def test_target_fails(self, mock_troops, mock_config, mock_save, mock_device):
+    def test_target_fails(self, mock_config, mock_save, mock_device):
         """target() returns False — should save screenshot and return False."""
         mock_config.set_device_status = MagicMock()
         with patch("actions.combat.target", return_value=False):
@@ -379,8 +379,7 @@ class TestAttackPvpTower:
 
     @patch("actions.quests.save_failure_screenshot")
     @patch("actions.quests.config")
-    @patch("actions.quests.troops_avail", return_value=3)
-    def test_target_no_marker(self, mock_troops, mock_config, mock_save, mock_device):
+    def test_target_no_marker(self, mock_config, mock_save, mock_device):
         """target() returns 'no_marker' (truthy!) — should still fail."""
         mock_config.set_device_status = MagicMock()
         with patch("actions.combat.target", return_value="no_marker"):
@@ -401,16 +400,18 @@ class TestAttackPvpTower:
             assert result is False
             mock_save.assert_called_once_with(mock_device, "pvp_attack_menu_fail")
 
-    @patch("actions.quests.tap_image", return_value=False)
-    @patch("actions.quests.tap_tower_until_attack_menu", return_value=True)
     @patch("actions.quests.save_failure_screenshot")
+    @patch("actions.quests.wait_for_image_and_tap", return_value=False)
+    @patch("actions.quests.tap_tower_until_attack_menu", return_value=True)
     @patch("actions.quests.config")
     @patch("actions.quests.troops_avail", return_value=3)
-    def test_depart_miss(self, mock_troops, mock_config, mock_save,
-                          mock_tap_tower, mock_tap_image, mock_device):
+    def test_depart_miss(self, mock_troops, mock_config,
+                          mock_tap_tower, mock_wait_tap,
+                          mock_save, mock_device):
         """Depart button not found — save screenshot."""
         mock_config.set_device_status = MagicMock()
-        with patch("actions.combat.target", return_value=True):
+        with patch("actions.combat.target", return_value=True), \
+             patch("actions.quests.time.sleep"):
             result = _attack_pvp_tower(mock_device)
             assert result is False
             mock_save.assert_called_once_with(mock_device, "pvp_depart_fail")

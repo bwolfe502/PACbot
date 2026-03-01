@@ -8,7 +8,7 @@ Runs on Windows with BlueStacks or MuMu Player emulators. GUI built with tkinter
 | File | Purpose | Key exports |
 |------|---------|-------------|
 | `run_web.py` | Web-only entry point (primary) | `main` (pywebview + browser fallback) |
-| `startup.py` | Shared initialization & shutdown | `initialize`, `shutdown`, `apply_settings`, `create_bug_report_zip`, `get_relay_config` |
+| `startup.py` | Shared initialization & shutdown | `initialize`, `shutdown`, `apply_settings`, `create_bug_report_zip`, `get_relay_config`, `device_hash`, `generate_device_token`, `generate_device_ro_token`, `validate_device_token` |
 | `main.py` | Legacy GUI entry point (deprecated) | Tkinter app, `create_gui()` |
 | `runners.py` | Shared task runners | `run_auto_quest`, `run_auto_titan`, `run_repeat`, `run_once`, `launch_task`, `stop_task` |
 | `settings.py` | Settings persistence | `DEFAULTS`, `load_settings`, `save_settings`, `SETTINGS_FILE` |
@@ -250,8 +250,12 @@ taps the tower, reinforces, and departs. `recall_tower_troop()` recalls when the
 
 **PVP attack**: `_attack_pvp_tower()` uses `target()` (Enemy tab + `target_marker.png`) to navigate
 to an enemy tower, then `tap_tower_until_attack_menu()` to open the attack menu, and `depart.png`
-to send 1 troop. A 10-minute cooldown (`_PVP_COOLDOWN_S = 600`) prevents re-dispatch while the
-troop marches. PVP on cooldown doesn't block gold mining (`_all_quests_visually_complete` is aware).
+to send 1 troop. Troop availability is checked **after** `target()` (which navigates to MAP) —
+`troops_avail()` requires MAP screen pixels, so checking earlier would always read 0. The PVP
+attack panel renders depart at ~74% confidence (vs 80%+ for rally panels), so the depart tap
+uses threshold 0.7. A single march completes the full 500M quest target in one go. A 10-minute
+cooldown (`_PVP_COOLDOWN_S = 600`) prevents re-dispatch while the troop marches. PVP on cooldown
+doesn't block gold mining (`_all_quests_visually_complete` is aware).
 
 ### Titan Search Retry (actions/titans.py)
 `rally_titan` searches for the titan, which centers the map on it, then blind-taps (540, 900)
@@ -277,9 +281,10 @@ AP via `_restore_ap_from_open_menu`, and single-closes the popup. Used in `click
 
 ### Settings Persistence (settings.py)
 `settings.json` stores user preferences (auto-heal, AP options, intervals, territory teams,
-`remote_access` toggle). Loaded on startup, saved on quit/restart. `DEFAULTS` dict provides
-fallback values. Shared by both `main.py` (GUI) and `web/dashboard.py` (Flask).
-`updater.py` preserves `settings.json` across auto-updates (`PRESERVE_FILES`).
+`remote_access` toggle, `device_settings` per-device overrides). Loaded on startup, saved on
+quit/restart. `DEFAULTS` dict provides fallback values. Shared by both `main.py` (GUI) and
+`web/dashboard.py` (Flask). `updater.py` preserves `settings.json` across auto-updates
+(`PRESERVE_FILES`).
 
 ### Web Dashboard (web/dashboard.py)
 Mobile-friendly Flask app for remote control from any browser. `run_web.py` is now the primary
@@ -295,42 +300,55 @@ banner displays the LAN URL for mobile remote control.
 - `AUTO_RUNNERS` dict maps auto-mode keys → runner lambdas
 - `TASK_FUNCTIONS` dict maps one-shot action names → callable functions
 - Device list cached for 15s (`_DEVICE_CACHE_TTL`) to avoid spamming ADB on every poll
-- CSS cache busting: `style.css?v=23` in `base.html` — bump on every CSS change
+- CSS cache busting: `style.css?v=N` in `base.html` — bump on every CSS change
 - Device ID validation: `/tasks/start` rejects device IDs not in `get_devices()` whitelist
 - XSS prevention: dashboard JS uses `textContent` / DOM creation (no `innerHTML` for dynamic data)
 - Relay auto-config: index route calls `get_relay_config()` to show remote URL when relay is active
 
-**Pages**: Dashboard (`/`), Settings (`/settings`), Debug (`/debug`), Logs (`/logs`), Territory Grid (`/territory`)
+**Pages**: Dashboard (`/`), Settings (`/settings`), Debug (`/debug`), Logs (`/logs`), Territory Grid (`/territory`), Device View (`/d/<dhash>?token=...`)
 
 **API endpoints**:
-- `GET /api/status` — device statuses, troop snapshots, quest tracking, active tasks, tunnel status (polled every 3s)
+- `GET /api/status` — device statuses, troop snapshots, quest tracking, mithril timer, active tasks, tunnel status (polled every 3s)
 - `POST /api/devices/refresh` — reconnect ADB devices
 - `POST /tasks/start` — launch auto-mode or one-shot task
 - `POST /tasks/stop` — stop a specific task
 - `POST /tasks/stop-all` — stop all tasks
 - `POST /settings` — save settings form
 - `POST /api/restart` — save settings, stop all, `os.execv` restart
+- `POST /api/quit` — graceful process termination (`os._exit(0)`)
 - `GET /api/logs` — last 150 log lines as JSON
 - `POST /api/bug-report` — generate and download bug report ZIP
 - `GET /api/screenshot?device=<id>&download=1` — live device screenshot as PNG (download=1 forces file save)
+- `GET /api/stream?device=<id>&fps=5&quality=30` — MJPEG live video stream (`multipart/x-mixed-replace`)
 - `GET /api/qr?url=<encoded>` — generate QR code PNG (box_size=12, border=2) for dashboard modal
 - `GET /api/territory/grid` — territory grid state (colors, flags, adjacency)
 - `POST /api/territory/squares` — update manual attack/ignore squares
 
+**Device-scoped routes** (per-device access for shared users):
+- `GET /d/<dhash>?token=...` — filtered dashboard (single device)
+- `GET /d/<dhash>/api/status` — status for one device only
+- `GET /d/<dhash>/api/screenshot` — screenshot of this device
+- `GET /d/<dhash>/api/stream` — MJPEG stream of this device
+- `POST /d/<dhash>/tasks/start` — start task (full access only)
+- `POST /d/<dhash>/tasks/stop` — stop task (full access only)
+- `POST /d/<dhash>/tasks/stop-all` — stop all tasks (full access only)
+
 **Dashboard UI components**:
-- **Device card**: status dot (pulsing green when active), status text (color-coded), troop slots, quest pills
+- **Device card**: status dot (pulsing green when active), status text (color-coded), troop slots, quest pills, mithril countdown timer (purple accent)
 - **Access banners**: LAN + relay URL banners with tap-to-copy, QR code button, and tunnel status indicator (dot + label, updated via polling: green=connected, amber=connecting, red=disconnected, gray=disabled)
-- **Auto mode toggles**: iOS-style toggle switches in 2-column grid, grouped by category (Combat/Farming/Events)
+- **Share button**: per-device "Share" button in device header, opens modal with Full Control / View Only tabs, shareable URL + QR code
+- **Collapsible controls**: click "Controls" header to toggle between full toggle switches and compact colored status pills (green when active)
+- **Auto mode toggles**: iOS-style toggle switches in responsive grid (`auto-fit`), grouped by category (Combat/Farming/Events)
 - **Action chips**: minimal bordered buttons in 3-column grid, farm actions (blue accent), war actions (red accent), debug actions (purple accent, `.action-chip-debug`)
+- **Live View**: full-width button per device, MJPEG stream with polling fallback for older relay
 - **Running tasks list**: active task names with circular stop (×) buttons
-- **Nav bar restart**: red Restart button in top-right corner of nav (all pages), confirms before `os.execv`
-- **Bottom bar**: Stop All, Refresh, Bug Report — three equal compact buttons
+- **Bottom bar**: Stop All, Refresh, Restart (amber), Quit (muted gray) — owner only
 
 **Auto mode groups** (vary by game mode):
 - Broken Lands (`bl`): Combat (Pass Battle, Occupy Towers, Reinforce Throne) + Farming (Auto Quest, Rally Titans, Mine Mithril)
 - Home Server (`rw`): Events (Join Groot) + Farming (Rally Titans, Mine Mithril) + Combat (Reinforce Throne)
 
-**Templates**: `base.html` (nav, shared JS), `index.html` (dashboard), `settings.html`, `debug.html` (debug actions), `logs.html`
+**Templates**: `base.html` (nav, shared JS), `index.html` (dashboard + device view), `settings.html` (with per-device tabs), `debug.html` (debug actions), `logs.html`
 
 ### Relay Tunnel (tunnel.py + relay/)
 WebSocket relay for remote access — lets users control PACbot from outside the LAN.
@@ -354,8 +372,49 @@ Relay URL and secret are base64-obfuscated constants in `startup.py` (not in set
 **Status**: `tunnel_status()` returns `"disabled"` / `"connecting"` / `"connected"` / `"disconnected"`.
 Exposed in `/api/status` response and shown as a dot + label in the remote access banner.
 
+**MJPEG streaming**: Relay supports long-lived streaming responses via a custom protocol extension.
+`tunnel.py` detects `/api/stream` paths and sends `stream_start`/`stream_chunk`/`stream_end`
+messages over the WebSocket. The relay server (`relay_server.py`) uses `web.StreamResponse` to
+forward chunks to the browser. `cancel_stream` messages handle cleanup when the browser disconnects.
+
 **Relay server** (`relay/relay_server.py`): asyncio WebSocket server, routes `/bot_name/...`
 to the connected bot's tunnel. Landing page shows no bot names (prevents enumeration).
+
+### Per-Device Access Control (startup.py + web/dashboard.py)
+Token-based shareable URLs that give others access to a specific device.
+
+**Share link format**: `https://1453.life/{bot_name}/d/{device_hash}?token={token}`
+- `device_hash` = `SHA256(device_id)[:8]` — short, URL-safe, doesn't expose IP/port
+- Full control token = `SHA256(license_key + ":" + device_id)[:16]` — deterministic, no database
+- Read-only token = `SHA256(license_key + ":ro:" + device_id)[:16]` — monitoring only
+
+**Access levels**:
+- `"full"` — can start/stop tasks, toggle auto modes, use action chips
+- `"readonly"` — can view status, troops, quests, live view; no controls or actions
+- `None` — invalid token, returns 403
+
+**Implementation**:
+- `generate_device_token(device_id)` / `generate_device_ro_token(device_id)` in `startup.py`
+- `validate_device_token(device_id, token)` returns `"full"`, `"readonly"`, or `None`
+- `require_device_token` decorator validates token and injects `device`/`token`/`readonly` kwargs
+- `require_full_access` decorator rejects readonly tokens with 403 on write routes
+- Friend view: filtered dashboard (one device card), no settings/debug/restart/quit access
+- Readonly view: status pills only (no toggles), no actions section, no stop buttons, no bottom bar
+
+**Per-device settings overrides** (`settings.json`):
+```json
+{
+  "device_settings": {
+    "127.0.0.1:5585": {
+      "my_team": "blue",
+      "auto_restore_ap": false
+    }
+  }
+}
+```
+- `config.get_device_config(device, key)` checks per-device override, falls back to global
+- `config.get_device_enemy_teams(device)` derives enemies from per-device team color
+- Settings page has device tabs for editing per-device overrides (owner only)
 
 ### Device Status System (config.py + all runners)
 `config.DEVICE_STATUS[device]` holds the current status string displayed in both the tkinter GUI
@@ -398,7 +457,7 @@ and the web dashboard. Updated via `config.set_device_status(device, msg)`, clea
 ## Tests
 
 ```bash
-py -m pytest          # run all ~621 tests
+py -m pytest          # run all ~687 tests
 py -m pytest -x       # stop on first failure
 py -m pytest -k name  # filter by test name
 ```
@@ -427,6 +486,7 @@ No fixtures require a running emulator — all use mocked ADB/vision.
 | `test_settings_validation.py` | `validate_settings` — type checks, range/choice validation, device_troops, warnings, schema sync |
 | `test_task_runner.py` | `sleep_interval`, `launch_task`/`stop_task`, run_once, run_repeat, consecutive error recovery, settings load/save (`runners`) |
 | `test_relay_config.py` | `get_relay_config` auto-derive (SHA256 bot name, stability, uniqueness), disabled states (no key, import error, toggle off), defaults integration (`startup`) |
+| `test_device_token.py` | `device_hash` (deterministic, URL-safe), `generate_device_token` (per-device, per-key, no-license), `generate_device_ro_token` (different from full, deterministic), `validate_device_token` (full→"full", readonly→"readonly", wrong→None, no-license→None) (`startup`) |
 | `test_web_dashboard.py` | Route tests (index, settings, debug, logs, tasks), API tests (`/api/status` incl. tunnel status, `/api/logs`, device refresh), task start/stop/stop-all, auto-mode exclusivity, territory grid API, bug report, firewall helper, `sleep_interval`, `run_once`, `launch_task`, `cleanup_dead_tasks`, `apply_settings`, `create_bug_report_zip` (`web.dashboard`, `startup`) |
 
 ### Test Conventions
@@ -484,7 +544,7 @@ PACbot/
 │   └── statuses/        # Troop status icon templates
 ├── platform-tools/      # Bundled ADB executable
 ├── web/                 # Flask web dashboard
-│   ├── dashboard.py     # App factory, routes (~600 lines)
+│   ├── dashboard.py     # App factory, routes (~1100 lines)
 │   ├── static/
 │   │   └── style.css    # Mobile-first dark CSS (cache-busted ?v=N)
 │   └── templates/
@@ -497,7 +557,7 @@ PACbot/
 │   └── relay_server.py  # asyncio WebSocket relay server
 ├── data/                # Persistent data files (territory coordinates)
 ├── updater.py           # Auto-update from GitHub releases (zip-slip protected)
-├── tests/               # pytest suite (~621 tests)
+├── tests/               # pytest suite (~687 tests)
 ├── logs/                # Log files
 ├── stats/               # Session stats JSON
 └── debug/               # Debug screenshots

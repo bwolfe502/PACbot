@@ -639,3 +639,126 @@ class TestGetRamGb:
         assert isinstance(result, str)
         # Should be either "X.X GB" or "unknown"
         assert "GB" in result or result == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Device-scoped route tests (Phase 1: per-device access control)
+# ---------------------------------------------------------------------------
+
+class TestDeviceScopedRoutes:
+    """Routes under /d/<dhash>/ require a valid device token."""
+
+    DEVICE = "127.0.0.1:9999"
+
+    @staticmethod
+    def _get_hash_and_token(device_id):
+        from startup import device_hash, generate_device_token
+        return device_hash(device_id), generate_device_token(device_id)
+
+    @patch("license.get_license_key", return_value="test-key-xyz")
+    @patch("web.dashboard.get_devices", return_value=["127.0.0.1:9999"])
+    @patch("web.dashboard.get_emulator_instances", return_value={"127.0.0.1:9999": "MuMu"})
+    def test_device_index_valid_token(self, _inst, _devs, _key, client):
+        dhash, token = self._get_hash_and_token(self.DEVICE)
+        resp = client.get(f"/d/{dhash}?token={token}")
+        assert resp.status_code == 200
+        assert b"MuMu" in resp.data
+
+    @patch("license.get_license_key", return_value="test-key-xyz")
+    @patch("web.dashboard.get_devices", return_value=["127.0.0.1:9999"])
+    @patch("web.dashboard.get_emulator_instances", return_value={"127.0.0.1:9999": "MuMu"})
+    def test_device_index_invalid_token(self, _inst, _devs, _key, client):
+        dhash, _ = self._get_hash_and_token(self.DEVICE)
+        resp = client.get(f"/d/{dhash}?token=0000000000000000")
+        assert resp.status_code == 403
+
+    @patch("license.get_license_key", return_value="test-key-xyz")
+    @patch("web.dashboard.get_devices", return_value=["127.0.0.1:9999"])
+    @patch("web.dashboard.get_emulator_instances", return_value={"127.0.0.1:9999": "MuMu"})
+    def test_device_index_missing_token(self, _inst, _devs, _key, client):
+        dhash, _ = self._get_hash_and_token(self.DEVICE)
+        resp = client.get(f"/d/{dhash}")
+        assert resp.status_code == 403
+
+    @patch("license.get_license_key", return_value="test-key-xyz")
+    @patch("web.dashboard.get_devices", return_value=["127.0.0.1:9999"])
+    @patch("web.dashboard.get_emulator_instances", return_value={"127.0.0.1:9999": "MuMu"})
+    def test_device_index_unknown_hash(self, _inst, _devs, _key, client):
+        resp = client.get("/d/deadbeef?token=0000000000000000")
+        assert resp.status_code == 404
+
+    @patch("license.get_license_key", return_value="test-key-xyz")
+    @patch("web.dashboard.get_devices", return_value=["127.0.0.1:9999"])
+    @patch("web.dashboard.get_emulator_instances", return_value={"127.0.0.1:9999": "MuMu"})
+    def test_device_index_hides_settings_nav(self, _inst, _devs, _key, client):
+        """Friend view should not show Settings or Restart."""
+        dhash, token = self._get_hash_and_token(self.DEVICE)
+        resp = client.get(f"/d/{dhash}?token={token}")
+        assert b"/settings" not in resp.data
+        assert b"Restart" not in resp.data
+
+    @patch("license.get_license_key", return_value="test-key-xyz")
+    @patch("web.dashboard.get_devices", return_value=["127.0.0.1:9999"])
+    @patch("web.dashboard.get_emulator_instances", return_value={"127.0.0.1:9999": "MuMu"})
+    def test_device_api_status_valid(self, _inst, _devs, _key, client):
+        dhash, token = self._get_hash_and_token(self.DEVICE)
+        resp = client.get(f"/d/{dhash}/api/status?token={token}")
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert "devices" in data
+        # Should only have the one scoped device
+        assert len(data["devices"]) == 1
+        assert data["devices"][0]["id"] == self.DEVICE
+
+    @patch("license.get_license_key", return_value="test-key-xyz")
+    @patch("web.dashboard.get_devices", return_value=["127.0.0.1:9999"])
+    @patch("web.dashboard.get_emulator_instances", return_value={"127.0.0.1:9999": "MuMu"})
+    def test_device_stop_all(self, _inst, _devs, _key, client):
+        dhash, token = self._get_hash_and_token(self.DEVICE)
+        resp = client.post(f"/d/{dhash}/tasks/stop-all?token={token}")
+        # Should redirect (302) after stopping
+        assert resp.status_code in (200, 302)
+
+    @patch("license.get_license_key", return_value="test-key-xyz")
+    @patch("web.dashboard.get_devices", return_value=["127.0.0.1:9999"])
+    @patch("web.dashboard.get_emulator_instances", return_value={"127.0.0.1:9999": "MuMu"})
+    def test_owner_index_has_share_button(self, _inst, _devs, _key, client):
+        """Owner view should show Share button on device cards."""
+        resp = client.get("/")
+        assert b"Share" in resp.data
+
+
+class TestDeviceSettingsRoutes:
+    """Device-specific settings pages."""
+
+    @patch("web.dashboard.get_devices", return_value=["127.0.0.1:9999"])
+    @patch("web.dashboard.get_emulator_instances", return_value={"127.0.0.1:9999": "MuMu"})
+    def test_device_settings_page_200(self, _inst, _devs, client):
+        resp = client.get("/settings/device/127.0.0.1:9999")
+        assert resp.status_code == 200
+        assert b"Override" in resp.data
+
+    @patch("web.dashboard.get_devices", return_value=["127.0.0.1:9999"])
+    @patch("web.dashboard.get_emulator_instances", return_value={"127.0.0.1:9999": "MuMu"})
+    def test_device_settings_save(self, _inst, _devs, client):
+        resp = client.post("/settings/device/127.0.0.1:9999", data={
+            "override_auto_heal": "on",
+            "auto_heal": "on",
+            "override_min_troops": "on",
+            "min_troops": "3",
+        })
+        assert resp.status_code == 302  # redirect back
+
+    @patch("web.dashboard.get_devices", return_value=["127.0.0.1:9999"])
+    @patch("web.dashboard.get_emulator_instances", return_value={"127.0.0.1:9999": "MuMu"})
+    def test_device_settings_reset(self, _inst, _devs, client):
+        resp = client.post("/settings/device/127.0.0.1:9999/reset")
+        assert resp.status_code == 302
+
+    @patch("web.dashboard.get_devices", return_value=["127.0.0.1:9999"])
+    @patch("web.dashboard.get_emulator_instances", return_value={"127.0.0.1:9999": "MuMu"})
+    def test_global_settings_has_device_tabs(self, _inst, _devs, client):
+        """Global settings page should show device tabs."""
+        resp = client.get("/settings")
+        assert resp.status_code == 200
+        assert b"settings-tab" in resp.data

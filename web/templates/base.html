@@ -7,24 +7,44 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="theme-color" content="#1a1a2e">
     <title>PACbot{% block title_suffix %}{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=26">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=51">
 </head>
 <body class="{% block body_class %}{% endblock %}">
     <nav>
-        <a href="/" class="nav-brand">PACbot</a>
+        <a href="{% if device_filter is defined and device_filter %}/d/{{ device_hash }}?token={{ device_token }}{% else %}/{% endif %}" class="nav-brand" data-relay-href>PACbot</a>
+        {% if not (device_filter is defined and device_filter) %}
         <div class="nav-links">
-            <a href="/" class="{% if request.path == '/' %}active{% endif %}">Dashboard</a>
-            <a href="/settings" class="{% if request.path == '/settings' or request.path == '/territory' %}active{% endif %}">Settings</a>
+            <a href="/" class="{% if request.path == '/' %}active{% endif %}" data-relay-href>Dashboard</a>
+            <a href="/settings" class="{% if request.path == '/settings' or request.path == '/territory' %}active{% endif %}" data-relay-href>Settings</a>
         </div>
-        <button type="button" class="nav-restart" id="restart-btn" onclick="confirmRestart()">Restart</button>
+        {% endif %}
     </nav>
     <main>
         {% block content %}{% endblock %}
     </main>
+    {% if not (device_filter is defined and device_filter) %}
     <footer class="page-footer">
-        <a href="/debug" class="footer-debug-link">Debug</a>
+        <a href="/debug" class="footer-debug-link" data-relay-href>Debug</a>
     </footer>
+    {% endif %}
     <script>
+    // Detect relay path prefix (e.g. '/bot_name') from current URL vs Flask route
+    var RELAY_PREFIX = '';
+    (function() {
+        var flaskPath = '{{ request.path }}';
+        var actual = window.location.pathname;
+        if (flaskPath === '/') {
+            // Owner dashboard: pathname is '/' (local) or '/<bot_name>/' (relay)
+            if (actual.length > 1 && actual.endsWith('/')) {
+                RELAY_PREFIX = actual.slice(0, -1);
+            }
+        } else {
+            // Other pages: strip the known Flask path from the end
+            var idx = actual.lastIndexOf(flaskPath);
+            if (idx > 0) RELAY_PREFIX = actual.substring(0, idx);
+        }
+    })();
+
     function fmtTime(sec) {
         if (sec == null) return '';
         var m = Math.floor(sec / 60), s = sec % 60;
@@ -33,22 +53,25 @@
 
     var QUEST_LABELS = {
         'TITAN': 'Titans', 'EVIL_GUARD': 'Evil Guard', 'PVP': 'PvP',
-        'GATHER': 'Gather', 'FORTRESS': 'Fortress', 'TOWER': 'Towers'
+        'GATHER': 'Gold', 'TOWER': 'Fortress'
     };
+    // Fortress and Tower are the same quest — normalize
+    var QUEST_ALIASES = {'FORTRESS': 'TOWER'};
 
     var ACTION_CLASSES = {
         'Home': 'troop-home', 'Returning': 'troop-returning',
         'Rallying': 'troop-rallying', 'Defending': 'troop-defending',
         'Marching': 'troop-marching', 'Gathering': 'troop-gathering'
     };
+    {% if not (device_filter is defined and device_filter) %}
     function confirmRestart() {
         if (!confirm('Restart PACbot? All running tasks will be stopped.')) return;
         var btn = document.getElementById('restart-btn');
         btn.disabled = true;
         btn.textContent = 'Restarting...';
-        fetch('/api/restart', {method: 'POST'}).catch(function() {});
+        fetch(RELAY_PREFIX + '/api/restart', {method: 'POST'}).catch(function() {});
         function waitForServer() {
-            fetch('/api/status')
+            fetch(RELAY_PREFIX + '/api/status')
                 .then(function(r) {
                     if (r.ok) location.reload();
                     else setTimeout(waitForServer, 1000);
@@ -56,6 +79,32 @@
                 .catch(function() { setTimeout(waitForServer, 1000); });
         }
         setTimeout(waitForServer, 2000);
+    }
+    function confirmQuit() {
+        if (!confirm('Quit PACbot? The application will stop completely.')) return;
+        var btn = document.getElementById('quit-btn');
+        btn.disabled = true;
+        btn.textContent = 'Quitting...';
+        fetch(RELAY_PREFIX + '/api/quit', {method: 'POST'}).then(function() {
+            setTimeout(function() { window.close(); }, 1000);
+        }).catch(function() {
+            setTimeout(function() { window.close(); }, 1000);
+        });
+    }
+    {% endif %}
+    // Prefix relay-aware links and forms on load
+    if (RELAY_PREFIX) {
+        document.addEventListener('DOMContentLoaded', function() {
+            document.querySelectorAll('[data-relay-href]').forEach(function(el) {
+                el.href = RELAY_PREFIX + el.getAttribute('href');
+            });
+            document.querySelectorAll('form[action]').forEach(function(form) {
+                var action = form.getAttribute('action');
+                if (action && action.startsWith('/')) {
+                    form.action = RELAY_PREFIX + action;
+                }
+            });
+        });
     }
     </script>
     {% block scripts %}{% endblock %}

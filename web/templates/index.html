@@ -3,6 +3,7 @@
 
 {% block content %}
 
+{% if not device_filter %}
 <!-- Access -->
 {% if relay_url %}
 <div class="access-card">
@@ -31,6 +32,7 @@
     </div>
 </div>
 {% endif %}
+{% endif %}
 
 <!-- QR Code Modal -->
 <div class="qr-overlay" id="qr-overlay" onclick="closeQr()">
@@ -40,6 +42,25 @@
         <button type="button" class="qr-close" onclick="closeQr()">Close</button>
     </div>
 </div>
+
+{% if not device_filter %}
+<!-- Share Device Modal -->
+<div class="qr-overlay" id="share-overlay" onclick="closeShareModal()">
+    <div class="qr-modal" onclick="event.stopPropagation()">
+        <div class="share-modal-title">Share Device Access</div>
+        <div class="share-tab-bar">
+            <button type="button" class="share-tab active" onclick="switchShareTab('full')">Full Control</button>
+            <button type="button" class="share-tab" onclick="switchShareTab('readonly')">View Only</button>
+        </div>
+        <div class="share-url" id="share-url"></div>
+        <img class="qr-img" id="share-qr-img" alt="QR Code">
+        <div class="share-actions">
+            <button type="button" class="share-action-btn share-action-primary" id="share-copy-btn" onclick="copyShareUrl()">Copy Link</button>
+            <button type="button" class="share-action-btn" onclick="closeShareModal()">Close</button>
+        </div>
+    </div>
+</div>
+{% endif %}
 
 <!-- Device Cards -->
 {% if not devices %}
@@ -51,25 +72,96 @@
 </div>
 {% endif %}
 
+{% if devices %}<div class="device-grid">{% endif %}
 {% for dev in devices %}
 <div class="card device-card" data-device="{{ dev.id }}">
-    <div class="device-header">
-        <strong>{{ dev.name }}</strong>
-        <span class="device-troops">{{ dev.troops }} troops</span>
+    <div class="device-top">
+        <div class="device-name-row">
+            <strong>{{ dev.name }}</strong>
+            <span class="device-troops" title="Troops">&#9876; {{ dev.troops }}</span>
+        </div>
+        <div class="device-header-right">
+            {% if not device_filter and share_data and dev.id in share_data %}
+            <button type="button" class="share-btn" onclick="showShareModal('{{ share_data[dev.id].url }}', '{{ share_data[dev.id].ro_url or "" }}')" title="Share device access">Share</button>
+            {% endif %}
+        </div>
+        <div class="device-status-bar">
+            <span class="status-indicator {% if dev.status != 'Idle' %}active{% endif %}"></span>
+            <span class="status-text">{{ dev.status }}</span>
+        </div>
+        <span class="mithril-timer" style="display:none">&#9935; <span class="mithril-time"></span></span>
     </div>
-    <div class="device-status-bar">
-        <span class="status-indicator {% if dev.status != 'Idle' %}active{% endif %}"></span>
-        <span class="status-text">{{ dev.status }}</span>
-    </div>
-    <div class="section-label">Troops</div>
+    <div class="section-label troop-label">Troops <span class="troop-age"></span></div>
     <div class="troop-slots"></div>
-    <div class="section-label quest-header" style="display:none">Quests</div>
+    <div class="section-label quest-label quest-header" style="display:none">Quests <span class="quest-age"></span></div>
     <div class="quest-tracking"></div>
+
+    {% if not (device_readonly is defined and device_readonly) %}
+    <!-- Collapsible auto modes -->
+    <div class="device-auto-modes">
+        <div class="controls-header" onclick="toggleControls(this)">
+            <span class="controls-label">Controls</span>
+            <span class="controls-arrow">&#9660;</span>
+        </div>
+        <div class="controls-pills" style="display:none">
+            {% for group in auto_groups %}
+            {% for mode in group.modes %}
+            {% set task_key = dev.id ~ '_' ~ mode.key %}
+            <span class="control-pill{% if task_key in active_tasks %} pill-on{% endif %}"
+                  data-mode="{{ mode.key }}" data-device="{{ dev.id }}">{{ mode.label }}</span>
+            {% endfor %}
+            {% endfor %}
+        </div>
+        <div class="controls-body">
+            <div class="auto-columns">
+            {% for group in auto_groups %}
+            <div class="auto-column">
+                <div class="auto-subheader">{{ group.group }}</div>
+                <div class="auto-list">
+                {% for mode in group.modes %}
+                    {% set task_key = dev.id ~ '_' ~ mode.key %}
+                    <div class="auto-row" data-mode="{{ mode.key }}" data-device="{{ dev.id }}">
+                        <span class="auto-label">{{ mode.label }}</span>
+                        <button type="button" class="toggle{% if task_key in active_tasks %} on{% endif %}"
+                                onclick="toggleAutoMode('{{ mode.key }}', '{{ dev.id }}')"
+                                title="{{ mode.label }}"></button>
+                    </div>
+                {% endfor %}
+                </div>
+            </div>
+            {% endfor %}
+            </div>
+        </div>
+    </div>
+    {% else %}
+    <!-- Read-only: status pills only -->
+    {% if auto_groups %}
+    <div class="device-auto-modes">
+        <div class="controls-pills" style="display:flex">
+            {% for group in auto_groups %}
+            {% for mode in group.modes %}
+            {% set task_key = dev.id ~ '_' ~ mode.key %}
+            <span class="control-pill{% if task_key in active_tasks %} pill-on{% endif %}"
+                  data-mode="{{ mode.key }}" data-device="{{ dev.id }}">{{ mode.label }}</span>
+            {% endfor %}
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+    {% endif %}
+
+    <div class="live-view-section">
+        <button type="button" class="live-view-toggle" onclick="toggleLiveView(this, '{{ dev.id }}')" data-active="false">Live View</button>
+        <div class="live-view-container" style="display:none">
+            <img class="live-view-img" alt="Screenshot">
+        </div>
+    </div>
 </div>
 {% endfor %}
+{% if devices %}</div>{% endif %}
 
-<!-- Device Selector (multi-device) -->
-{% if devices|length > 1 %}
+<!-- Device Selector (multi-device, owner only — for one-shot actions) -->
+{% if devices|length > 1 and not device_filter %}
 <div class="card" style="padding:12px 16px">
     <div class="device-select">
         {% for dev in devices %}
@@ -84,31 +176,12 @@
 </div>
 {% endif %}
 
-<!-- Auto Modes -->
-<div class="auto-columns">
-{% for group in auto_groups %}
-<div class="auto-column">
-    <div class="section-header">{{ group.group }}</div>
-    <div class="auto-list">
-    {% for mode in group.modes %}
-        {% set mode_running = [] %}{% for t in active_tasks %}{% if t.endswith('_' + mode.key) %}{% if mode_running.append(t) %}{% endif %}{% endif %}{% endfor %}
-        <div class="auto-row" data-mode="{{ mode.key }}">
-            <span class="auto-label">{{ mode.label }}</span>
-            <button type="button" class="toggle{% if mode_running %} on{% endif %}"
-                    onclick="toggleAutoMode('{{ mode.key }}')"
-                    title="{{ mode.label }}"></button>
-        </div>
-    {% endfor %}
-    </div>
-</div>
-{% endfor %}
-</div>
-
+{% if not (device_readonly is defined and device_readonly) %}
 <!-- Quick Actions -->
 <div class="section-header" style="margin-top:24px">Actions</div>
 <div class="action-grid">
 {% for name in oneshot_farm %}
-<form method="post" action="/tasks/start" class="device-form">
+<form method="post" action="{% if device_filter %}/d/{{ device_hash }}/tasks/start?token={{ device_token }}{% else %}/tasks/start{% endif %}" class="device-form">
     <input type="hidden" name="device" value="{% if devices %}{{ devices[0].id }}{% endif %}">
     <input type="hidden" name="task_name" value="{{ name }}">
     <input type="hidden" name="task_type" value="oneshot">
@@ -116,7 +189,7 @@
 </form>
 {% endfor %}
 {% for name in oneshot_war %}
-<form method="post" action="/tasks/start" class="device-form">
+<form method="post" action="{% if device_filter %}/d/{{ device_hash }}/tasks/start?token={{ device_token }}{% else %}/tasks/start{% endif %}" class="device-form">
     <input type="hidden" name="device" value="{% if devices %}{{ devices[0].id }}{% endif %}">
     <input type="hidden" name="task_name" value="{{ name }}">
     <input type="hidden" name="task_type" value="oneshot">
@@ -124,6 +197,7 @@
 </form>
 {% endfor %}
 </div>
+{% endif %}
 
 <!-- Running Tasks -->
 {% if tasks %}
@@ -132,35 +206,64 @@
 {% for task in tasks %}
 <div class="running-row">
     <span class="running-name">{{ task }}</span>
-    <form method="post" action="/tasks/stop" class="inline-form">
+    {% if not (device_readonly is defined and device_readonly) %}
+    <form method="post" action="{% if device_filter %}/d/{{ device_hash }}/tasks/stop?token={{ device_token }}{% else %}/tasks/stop{% endif %}" class="inline-form">
         <input type="hidden" name="task_key" value="{{ task }}">
         <button type="submit" class="running-stop">&times;</button>
     </form>
+    {% endif %}
 </div>
 {% endfor %}
 </div>
 {% endif %}
 
 <!-- Bottom -->
+{% if not (device_readonly is defined and device_readonly) %}
 <div class="bottom-bar">
-    <form method="post" action="/tasks/stop-all" style="flex:1">
+    <form method="post" action="{% if device_filter %}/d/{{ device_hash }}/tasks/stop-all?token={{ device_token }}{% else %}/tasks/stop-all{% endif %}" style="flex:1">
         <button type="submit" class="bottom-btn bottom-btn-danger">Stop All</button>
     </form>
+    {% if not device_filter %}
     <form method="post" action="/api/devices/refresh" style="flex:1">
         <button type="submit" class="bottom-btn">Refresh</button>
     </form>
-    <button type="button" class="bottom-btn" style="flex:1" onclick="downloadBugReport()">Bug Report</button>
+    <button type="button" class="bottom-btn bottom-btn-restart" style="flex:1" id="restart-btn" onclick="confirmRestart()">Restart</button>
+    <button type="button" class="bottom-btn bottom-btn-quit" style="flex:1" id="quit-btn" onclick="confirmQuit()">Quit</button>
+    {% endif %}
 </div>
+{% endif %}
 
 {% endblock %}
 
 {% block scripts %}
 <script>
+// API URL prefix — includes relay prefix + device scope
+{% if device_filter %}
+var API_PREFIX = RELAY_PREFIX + '/d/{{ device_hash }}';
+var API_SUFFIX = '?token={{ device_token }}';
+var IS_FRIEND_VIEW = true;
+{% else %}
+var API_PREFIX = RELAY_PREFIX;
+var API_SUFFIX = '';
+var IS_FRIEND_VIEW = false;
+{% endif %}
+
 // Per-device troop data for client-side countdown between polls
 var _troopData = {};
 
 function renderTroops(container, troops, age, elapsed) {
     container.textContent = '';
+    // Update age in the section label
+    var card = container.closest('.device-card');
+    var ageEl = card ? card.querySelector('.troop-label .troop-age') : null;
+    if (ageEl) {
+        if (age != null) {
+            var displayAge = age + (elapsed || 0);
+            ageEl.textContent = displayAge < 60 ? displayAge + 's ago' : Math.floor(displayAge/60) + 'm ago';
+        } else {
+            ageEl.textContent = '';
+        }
+    }
     if (!troops || troops.length === 0) {
         var hint = document.createElement('span');
         hint.className = 'muted';
@@ -169,26 +272,30 @@ function renderTroops(container, troops, age, elapsed) {
         container.appendChild(hint);
         return;
     }
+    // Group troops by action, track soonest timer per group
+    var groups = {};
     troops.forEach(function(t) {
-        var isHome = t.action === 'Home';
-        var cls = ACTION_CLASSES[t.action] || 'troop-deployed';
-        var label = t.action;
-        if (!isHome && t.time_left != null) {
-            var adjusted = Math.max(0, t.time_left - (elapsed || 0));
-            label += ' ' + fmtTime(adjusted);
+        var key = t.action;
+        if (!groups[key]) groups[key] = { count: 0, soonest: null };
+        groups[key].count++;
+        if (t.time_left != null) {
+            var adj = Math.max(0, t.time_left - (elapsed || 0));
+            if (groups[key].soonest === null || adj < groups[key].soonest)
+                groups[key].soonest = adj;
         }
+    });
+    // Render as colored pills (grouped by action)
+    var keys = Object.keys(groups);
+    keys.forEach(function(action) {
+        var g = groups[action];
+        var cls = ACTION_CLASSES[action] || 'troop-deployed';
         var span = document.createElement('span');
-        span.className = 'troop-slot ' + cls;
-        span.textContent = label;
+        span.className = 'troop-summary ' + cls;
+        var text = g.count + ' ' + action;
+        if (action !== 'Home' && g.soonest !== null) text += ' ' + fmtTime(g.soonest);
+        span.textContent = text;
         container.appendChild(span);
     });
-    if (age != null) {
-        var displayAge = age + (elapsed || 0);
-        var ageSpan = document.createElement('span');
-        ageSpan.className = 'troop-age';
-        ageSpan.textContent = displayAge < 60 ? displayAge + 's ago' : Math.floor(displayAge/60) + 'm ago';
-        container.appendChild(ageSpan);
-    }
 }
 
 function tickTroopTimers() {
@@ -207,11 +314,22 @@ setInterval(tickTroopTimers, 1000);
 
 function fmtNum(n) {
     if (n == null) return '?';
+    if (n >= 1000000) return (n / 1000000).toFixed(n % 1000000 === 0 ? 0 : 1) + 'M';
+    if (n >= 10000) return (n / 1000).toFixed(n % 1000 === 0 ? 0 : 1) + 'K';
     return n.toLocaleString();
 }
 
-function renderQuests(container, quests) {
+function renderQuests(container, quests, questAge) {
     var header = container.previousElementSibling;
+    // Update quest age in section label
+    var ageEl = header ? header.querySelector('.quest-age') : null;
+    if (ageEl) {
+        if (questAge != null) {
+            ageEl.textContent = questAge < 60 ? questAge + 's ago' : Math.floor(questAge/60) + 'm ago';
+        } else {
+            ageEl.textContent = '';
+        }
+    }
     if (!quests || quests.length === 0) {
         container.textContent = '';
         if (header) header.style.display = 'none';
@@ -221,38 +339,53 @@ function renderQuests(container, quests) {
     container.textContent = '';
     var wrap = document.createElement('div');
     wrap.className = 'dp-quests';
+    var pillCount = 0;
     quests.forEach(function(q) {
         var raw = q.quest_type.replace('QuestType.', '');
+        raw = QUEST_ALIASES[raw] || raw;
         var label = QUEST_LABELS[raw] || raw;
         var seen = q.last_seen != null ? q.last_seen : 0;
         var target = q.target;
         var pend = q.pending || 0;
         if (target != null && seen >= target && pend === 0) return;
+        pillCount++;
         var pill = document.createElement('div');
-        pill.className = 'quest-pill';
+        pill.className = 'quest-pill quest-' + raw.toLowerCase();
         var lbl = document.createElement('span');
         lbl.className = 'quest-label';
         lbl.textContent = label;
         pill.appendChild(lbl);
-        var val = document.createElement('span');
-        val.className = 'quest-val';
-        var valText = fmtNum(seen);
-        if (target != null) valText += '/' + fmtNum(target);
-        val.textContent = valText;
-        if (pend > 0) {
-            var pendSpan = document.createElement('span');
-            pendSpan.className = 'quest-pend';
-            pendSpan.textContent = '+' + pend;
-            val.appendChild(pendSpan);
+        // PVP completes in one march — just show status, no numbers
+        if (raw !== 'PVP') {
+            var val = document.createElement('span');
+            val.className = 'quest-val';
+            var valText = fmtNum(seen);
+            if (target != null) valText += '/' + fmtNum(target);
+            val.textContent = valText;
+            if (pend > 0) {
+                var pendSpan = document.createElement('span');
+                pendSpan.className = 'quest-pend';
+                pendSpan.textContent = '+' + pend;
+                val.appendChild(pendSpan);
+            }
+            pill.appendChild(val);
         }
-        pill.appendChild(val);
         wrap.appendChild(pill);
     });
+    // All quests tracked but all complete
+    if (pillCount === 0) {
+        var msg = document.createElement('div');
+        msg.className = 'quest-complete-msg';
+        msg.textContent = 'All Quests Complete!';
+        wrap.appendChild(msg);
+    }
+    // 4+ pills: 2 per row; 3 or fewer: single row
+    if (pillCount >= 4) wrap.classList.add('quests-wrap');
     container.appendChild(wrap);
 }
 
 function refreshStatus() {
-    fetch('/api/status')
+    fetch(API_PREFIX + '/api/status' + API_SUFFIX)
         .then(function(r) { return r.json(); })
         .then(function(data) {
             if (!data.devices) return;
@@ -291,7 +424,19 @@ function refreshStatus() {
                     renderTroops(troopEl, dev.troops, dev.snapshot_age, 0);
                 }
                 var questEl = card.querySelector('.quest-tracking');
-                if (questEl) renderQuests(questEl, dev.quests);
+                if (questEl) renderQuests(questEl, dev.quests, dev.quest_age);
+
+                // Mithril timer
+                var mithTimer = card.querySelector('.mithril-timer');
+                if (mithTimer) {
+                    if (dev.mithril_next != null) {
+                        var timeSpan = mithTimer.querySelector('.mithril-time');
+                        if (timeSpan) timeSpan.textContent = dev.mithril_next > 0 ? fmtTime(dev.mithril_next) : 'Due';
+                        mithTimer.style.display = '';
+                    } else {
+                        mithTimer.style.display = 'none';
+                    }
+                }
             });
             // Update tunnel status
             var dot = document.getElementById('access-dot');
@@ -302,14 +447,30 @@ function refreshStatus() {
                 lbl.className = 'tunnel-label tunnel-label-' + data.tunnel;
                 lbl.textContent = labels[data.tunnel] || data.tunnel;
             }
-            // Update auto mode toggles
+            // Update auto mode toggles + pills (per-device aware)
             document.querySelectorAll('.auto-row[data-mode]').forEach(function(row) {
                 var key = row.getAttribute('data-mode');
+                var device = row.getAttribute('data-device');
                 var toggle = row.querySelector('.toggle');
                 if (!toggle) return;
-                var isRunning = data.tasks.some(function(t) { return t.endsWith('_' + key); });
+                var isRunning;
+                if (device) {
+                    isRunning = data.tasks.indexOf(device + '_' + key) !== -1;
+                } else {
+                    isRunning = data.tasks.some(function(t) { return t.endsWith('_' + key); });
+                }
                 if (isRunning) toggle.classList.add('on');
                 else toggle.classList.remove('on');
+            });
+            // Update collapsed pills
+            document.querySelectorAll('.control-pill[data-mode]').forEach(function(pill) {
+                var key = pill.getAttribute('data-mode');
+                var device = pill.getAttribute('data-device');
+                var isRunning = device
+                    ? data.tasks.indexOf(device + '_' + key) !== -1
+                    : data.tasks.some(function(t) { return t.endsWith('_' + key); });
+                if (isRunning) pill.classList.add('pill-on');
+                else pill.classList.remove('pill-on');
             });
         })
         .catch(function() {});
@@ -339,20 +500,23 @@ function updateDeviceForms() {
 }
 document.addEventListener('DOMContentLoaded', updateDeviceForms);
 
-function toggleAutoMode(modeKey) {
-    var row = document.querySelector('.auto-row[data-mode="' + modeKey + '"]');
+function toggleAutoMode(modeKey, deviceId) {
+    var selector = '.auto-row[data-mode="' + modeKey + '"]';
+    if (deviceId) selector += '[data-device="' + deviceId + '"]';
+    var row = document.querySelector(selector);
     if (!row) return;
     var toggle = row.querySelector('.toggle');
     var isRunning = toggle && toggle.classList.contains('on');
     var body;
     var url;
     if (isRunning) {
-        url = '/tasks/stop-mode';
+        url = API_PREFIX + '/tasks/stop-mode' + API_SUFFIX;
         body = 'mode_key=' + encodeURIComponent(modeKey);
+        if (deviceId) body += '&device=' + encodeURIComponent(deviceId);
     } else {
-        url = '/tasks/start';
-        var devices = getSelectedDevices();
-        body = 'device=' + encodeURIComponent(devices.join(','))
+        url = API_PREFIX + '/tasks/start' + API_SUFFIX;
+        var device = deviceId || getSelectedDevices().join(',');
+        body = 'device=' + encodeURIComponent(device)
              + '&task_name=' + encodeURIComponent(modeKey)
              + '&task_type=auto';
     }
@@ -363,6 +527,23 @@ function toggleAutoMode(modeKey) {
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
         body: body
     }).catch(function() {});
+}
+
+function toggleControls(header) {
+    var modes = header.closest('.device-auto-modes');
+    var body = modes.querySelector('.controls-body');
+    var pills = modes.querySelector('.controls-pills');
+    var arrow = header.querySelector('.controls-arrow');
+    var isOpen = body.style.display !== 'none';
+    if (isOpen) {
+        body.style.display = 'none';
+        pills.style.display = '';
+        arrow.textContent = '\u25B6';  // right arrow
+    } else {
+        body.style.display = '';
+        pills.style.display = 'none';
+        arrow.textContent = '\u25BC';  // down arrow
+    }
 }
 
 function copyAccessUrl(btn, url) {
@@ -378,7 +559,7 @@ function showQr(url) {
     var img = document.getElementById('qr-img');
     var title = document.getElementById('qr-title');
     title.textContent = url;
-    img.src = '/api/qr?url=' + encodeURIComponent(url);
+    img.src = RELAY_PREFIX + '/api/qr?url=' + encodeURIComponent(url);
     overlay.classList.add('visible');
 }
 function closeQr() {
@@ -386,7 +567,7 @@ function closeQr() {
 }
 
 function downloadBugReport() {
-    fetch('/api/bug-report', {method: 'POST'})
+    fetch(RELAY_PREFIX + '/api/bug-report', {method: 'POST'})
         .then(function(r) { return r.blob().then(function(b) { return {blob: b, r: r}; }); })
         .then(function(obj) {
             var a = document.createElement('a');
@@ -397,6 +578,104 @@ function downloadBugReport() {
             a.click();
             URL.revokeObjectURL(a.href);
         }).catch(function() {});
+}
+
+// Live View — MJPEG stream with polling fallback
+var _liveViewTimers = {};
+function toggleLiveView(btn, deviceId) {
+    var active = btn.getAttribute('data-active') === 'true';
+    var card = btn.closest('.device-card');
+    var container = card.querySelector('.live-view-container');
+    var img = container.querySelector('.live-view-img');
+    if (active) {
+        btn.setAttribute('data-active', 'false');
+        btn.classList.remove('live-view-on');
+        container.style.display = 'none';
+        img.src = '';
+        if (_liveViewTimers[deviceId]) {
+            clearInterval(_liveViewTimers[deviceId]);
+            delete _liveViewTimers[deviceId];
+        }
+    } else {
+        btn.setAttribute('data-active', 'true');
+        btn.classList.add('live-view-on');
+        container.style.display = '';
+        var streamUrl;
+        if (IS_FRIEND_VIEW) {
+            streamUrl = API_PREFIX + '/api/stream' + API_SUFFIX + '&fps=5&quality=30';
+        } else {
+            streamUrl = RELAY_PREFIX + '/api/stream?device=' + encodeURIComponent(deviceId) + '&fps=5&quality=30';
+        }
+        // Try MJPEG stream first; fall back to polling on error
+        img.onerror = function() {
+            if (btn.getAttribute('data-active') !== 'true') return;
+            img.onerror = null;  // prevent loop
+            startPollingFallback(img, deviceId);
+        };
+        img.src = streamUrl;
+    }
+}
+function startPollingFallback(img, deviceId) {
+    function poll() {
+        var url;
+        if (IS_FRIEND_VIEW) {
+            url = API_PREFIX + '/api/screenshot' + API_SUFFIX + '&quality=50&_t=' + Date.now();
+        } else {
+            url = RELAY_PREFIX + '/api/screenshot?device=' + encodeURIComponent(deviceId) + '&quality=50&_t=' + Date.now();
+        }
+        var preload = new Image();
+        preload.onload = function() { img.src = preload.src; };
+        preload.src = url;
+    }
+    poll();
+    _liveViewTimers[deviceId] = setInterval(poll, 3000);
+}
+
+var _shareUrls = { full: '', readonly: '' };
+var _shareMode = 'full';
+function showShareModal(fullUrl, roUrl) {
+    _shareUrls.full = fullUrl;
+    _shareUrls.readonly = roUrl || '';
+    _shareMode = 'full';
+    // Reset tabs
+    document.querySelectorAll('.share-tab').forEach(function(t) { t.classList.remove('active'); });
+    document.querySelector('.share-tab').classList.add('active');
+    _renderShareUrl();
+    document.getElementById('share-overlay').classList.add('visible');
+}
+function switchShareTab(mode) {
+    _shareMode = mode;
+    document.querySelectorAll('.share-tab').forEach(function(t) { t.classList.remove('active'); });
+    document.querySelectorAll('.share-tab').forEach(function(t) {
+        if ((mode === 'full' && t.textContent === 'Full Control') ||
+            (mode === 'readonly' && t.textContent === 'View Only'))
+            t.classList.add('active');
+    });
+    _renderShareUrl();
+}
+function _renderShareUrl() {
+    var url = _shareMode === 'readonly' ? _shareUrls.readonly : _shareUrls.full;
+    document.getElementById('share-url').textContent = url || 'Not available';
+    var img = document.getElementById('share-qr-img');
+    if (url) {
+        img.src = RELAY_PREFIX + '/api/qr?url=' + encodeURIComponent(url);
+        img.style.display = '';
+    } else {
+        img.style.display = 'none';
+    }
+}
+function closeShareModal() {
+    document.getElementById('share-overlay').classList.remove('visible');
+}
+function copyShareUrl() {
+    var url = _shareMode === 'readonly' ? _shareUrls.readonly : _shareUrls.full;
+    if (!url) return;
+    navigator.clipboard.writeText(url).then(function() {
+        var btn = document.getElementById('share-copy-btn');
+        var orig = btn.textContent;
+        btn.textContent = 'Copied!';
+        setTimeout(function() { btn.textContent = orig; }, 1500);
+    }).catch(function() {});
 }
 
 </script>

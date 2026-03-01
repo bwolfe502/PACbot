@@ -179,12 +179,12 @@ def join_rally(rally_types, device, skip_heal=False, stop_check=None):
         rally_types = [rally_types]
     log.info(">>> join_rally starting (types: %s)", "/".join(rally_types))
 
-    if config.AUTO_HEAL_ENABLED and not skip_heal:
+    if config.get_device_config(device, "auto_heal") and not skip_heal:
         heal_all(device)
 
     troops = troops_avail(device)
-    if troops <= config.MIN_TROOPS_AVAILABLE:
-        log.warning("Not enough troops available (have %d, need more than %d)", troops, config.MIN_TROOPS_AVAILABLE)
+    if troops <= config.get_device_config(device, "min_troops"):
+        log.warning("Not enough troops available (have %d, need more than %d)", troops, config.get_device_config(device, "min_troops"))
         return False
 
     # Capture a tighter baseline right before entering the war screen.
@@ -635,6 +635,19 @@ def join_rally(rally_types, device, skip_heal=False, stop_check=None):
         log.debug("Scroll down attempt %d/5", attempt + 1)
         adb_swipe(device, 560, 948, 560, 245, 500)
         timed_wait(device, lambda: False, 1.5, "jr_scroll_down_settle")
+
+        # If no join buttons in the bottom quarter of the screen, we've
+        # scrolled past all rallies into the marches section — stop early
+        quick_screen = load_screenshot(device)
+        if quick_screen is not None:
+            join_locs = find_all_matches(quick_screen, "rally/join.png")
+            screen_h = quick_screen.shape[0]
+            bottom_quarter = screen_h * 3 // 4  # y=1440 on 1920px screen
+            has_bottom_joins = any(jy >= bottom_quarter for _, jy in join_locs)
+            if not has_bottom_joins:
+                log.info("No join buttons in bottom quarter (below y=%d) — past rally section, stopping scroll", bottom_quarter)
+                break
+
         result = check_for_joinable_rally()
         if result not in (False, "lost"):
             return result
@@ -654,12 +667,12 @@ def join_rally(rally_types, device, skip_heal=False, stop_check=None):
 def join_war_rallies(device):
     """Try to join castle, pass, or tower rallies - checks all 3 on the same screenshot"""
     log = get_logger("actions", device)
-    if config.AUTO_HEAL_ENABLED:
+    if config.get_device_config(device, "auto_heal"):
         heal_all(device)
 
     troops = troops_avail(device)
-    if troops <= config.MIN_TROOPS_AVAILABLE:
-        log.warning("Not enough troops available (have %d, need more than %d)", troops, config.MIN_TROOPS_AVAILABLE)
+    if troops <= config.get_device_config(device, "min_troops"):
+        log.warning("Not enough troops available (have %d, need more than %d)", troops, config.get_device_config(device, "min_troops"))
         return
 
     if not navigate(Screen.WAR, device):
@@ -809,6 +822,19 @@ def join_war_rallies(device):
             return
         adb_swipe(device, 560, 948, 560, 245, 500)
         time.sleep(1.5)  # Wait for scroll momentum to settle
+
+        # If no join buttons in the bottom quarter of the screen, we've
+        # scrolled past all rallies into the marches section — stop early
+        quick_screen = load_screenshot(device)
+        if quick_screen is not None:
+            join_locs = find_all_matches(quick_screen, "rally/join.png")
+            screen_h = quick_screen.shape[0]
+            bottom_quarter = screen_h * 3 // 4
+            has_bottom_joins = any(jy >= bottom_quarter for _, jy in join_locs)
+            if not has_bottom_joins:
+                log.info("No join buttons in bottom quarter (below y=%d) — past rally section, stopping scroll", bottom_quarter)
+                break
+
         if check_all_rallies_on_screen():
             return
 

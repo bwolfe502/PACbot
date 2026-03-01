@@ -149,7 +149,7 @@ def _restore_ap_from_open_menu(device, needed):
         return True, current
 
     # Step 1: Try FREE restore (up to 2 attempts — 25 AP each, 2x daily max)
-    if config.AP_USE_FREE and current < needed:
+    if config.get_device_config(device, "ap_use_free") and current < needed:
         for free_attempt in range(2):
             if current >= needed:
                 break
@@ -169,10 +169,10 @@ def _restore_ap_from_open_menu(device, needed):
                 break
 
     # Step 2: Try AP potions (smallest first)
-    if config.AP_USE_POTIONS and current < needed:
+    if config.get_device_config(device, "ap_use_potions") and current < needed:
         potions = list(_AP_POTIONS_SMALL)
         potion_labels = ["10", "20", "50"]
-        if config.AP_ALLOW_LARGE_POTIONS:
+        if config.get_device_config(device, "ap_allow_large_potions"):
             potions += _AP_POTIONS_LARGE
             potion_labels += ["100", "200"]
         for i, (px, py) in enumerate(potions):
@@ -207,7 +207,7 @@ def _restore_ap_from_open_menu(device, needed):
 
     # Step 3: Try gem restore (50 AP per use, escalating gem cost, confirmation required)
     # When exhausted, button still shows 3500 but confirmation won't open.
-    if config.AP_USE_GEMS and config.AP_GEM_LIMIT > 0 and current < needed:
+    if config.get_device_config(device, "ap_use_gems") and config.get_device_config(device, "ap_gem_limit") > 0 and current < needed:
         gems_spent = 0
         gem_attempts = 0
         while current < needed and gem_attempts < 50:  # safety limit
@@ -222,9 +222,9 @@ def _restore_ap_from_open_menu(device, needed):
                 log.warning("Gem confirmation did not appear (exhausted or unreadable)")
                 break
 
-            if gems_spent + gem_cost > config.AP_GEM_LIMIT:
+            if gems_spent + gem_cost > config.get_device_config(device, "ap_gem_limit"):
                 log.warning("Gem cost %d would exceed limit (%d+%d > %d), cancelling",
-                            gem_cost, gems_spent, gem_cost, config.AP_GEM_LIMIT)
+                            gem_cost, gems_spent, gem_cost, config.get_device_config(device, "ap_gem_limit"))
                 tap_image("close_x.png", device)  # Close confirmation
                 time.sleep(0.5)
                 break
@@ -330,18 +330,18 @@ def restore_ap(device, needed):
 def rally_titan(device):
     """Start a titan rally from map screen"""
     log = get_logger("actions", device)
-    if config.AUTO_HEAL_ENABLED:
+    if config.get_device_config(device, "auto_heal"):
         heal_all(device)
 
     troops = troops_avail(device)
-    if troops <= config.MIN_TROOPS_AVAILABLE:
-        log.warning("Not enough troops available (have %d, need more than %d)", troops, config.MIN_TROOPS_AVAILABLE)
+    if troops <= config.get_device_config(device, "min_troops"):
+        log.warning("Not enough troops available (have %d, need more than %d)", troops, config.get_device_config(device, "min_troops"))
         return False
 
     # AP check (if unreadable, proceed anyway — game handles low AP with its own prompt)
     ap = read_ap(device)
     if ap is not None and ap[0] < config.AP_COST_RALLY_TITAN:
-        if config.AUTO_RESTORE_AP_ENABLED:
+        if config.get_device_config(device, "auto_restore_ap"):
             if not restore_ap(device, config.AP_COST_RALLY_TITAN):
                 log.warning("Could not restore enough AP for titan rally")
                 return False

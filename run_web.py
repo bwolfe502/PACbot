@@ -202,9 +202,12 @@ def main():
             window = webview.create_window(title, url,
                                            width=520, height=900,
                                            min_size=(400, 600))
+            config._quit_callback = window.destroy
             log.info("Opening native window...")
             print(f"\n  Dashboard: http://{local_ip}:8080  (phone access)\n")
             webview.start(func=_set_icon)  # blocks until window closed
+            _on_exit()
+            os._exit(0)  # force exit — daemon threads may linger
         except Exception as exc:
             log.warning("pywebview window failed (%s) — falling back to browser", exc)
             webview = None  # fall through to browser

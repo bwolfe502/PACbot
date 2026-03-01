@@ -15,7 +15,7 @@ Submodules:
 
 # -- quests --
 from actions.quests import (
-    check_quests, get_quest_tracking_state, reset_quest_tracking,
+    check_quests, get_quest_tracking_state, get_quest_last_checked, reset_quest_tracking,
     occupy_tower, recall_tower_troop,
     # State + internals (used by tests)
     _classify_quest_text, _deduplicate_quests, _get_actionable_quests,

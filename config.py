@@ -183,7 +183,7 @@ RALLY_PANEL_WAIT_ENABLED = True  # Use troop panel to wait for rallies (vs count
 RALLY_WAIT_POLL_INTERVAL = 5     # seconds between panel status polls while waiting
 
 # Mithril mining
-MITHRIL_ENABLED = False
+MITHRIL_ENABLED_DEVICES = set()   # {device_id, ...} — per-device mithril toggle
 MITHRIL_INTERVAL = 19        # minutes between refresh cycles
 LAST_MITHRIL_TIME = {}       # {device_id: timestamp} — last mine_mithril run
 MITHRIL_DEPLOY_TIME = {}     # {device_id: timestamp} — when troops were deployed to mines
@@ -224,6 +224,9 @@ def clear_device_status(device):
 
 auto_occupy_running = False
 auto_occupy_thread = None
+
+# Quit callback — set by run_web.py to close pywebview window cleanly
+_quit_callback = None
 
 # Thread-safe queue for alerts from task runners to GUI
 import queue
@@ -352,7 +355,122 @@ def validate_settings(settings, defaults):
                 clean_dt[dev_id] = count
             cleaned["device_troops"] = clean_dt
 
+    # Validate device_settings (per-device overrides)
+    ds = cleaned.get("device_settings")
+    if ds is not None:
+        if not isinstance(ds, dict):
+            warnings.append(f"device_settings: expected dict, got {type(ds).__name__} — removed")
+            cleaned["device_settings"] = {}
+        else:
+            from settings import DEVICE_OVERRIDABLE_KEYS
+            clean_ds = {}
+            for dev_id, overrides in ds.items():
+                if not isinstance(overrides, dict):
+                    warnings.append(f"device_settings[{dev_id}]: expected dict — skipped")
+                    continue
+                # Keys allowed in device_settings but not validated as config overrides
+                _ACCESS_CONTROL_KEYS = {"shared_modes", "shared_actions"}
+                clean_overrides = {}
+                for key, value in overrides.items():
+                    if key in _ACCESS_CONTROL_KEYS:
+                        # Pass through access control lists without validation
+                        if isinstance(value, list):
+                            clean_overrides[key] = value
+                        continue
+                    if key not in DEVICE_OVERRIDABLE_KEYS:
+                        warnings.append(f"device_settings[{dev_id}].{key}: not overridable — skipped")
+                        continue
+                    rule = SETTINGS_RULES.get(key)
+                    if rule is None:
+                        clean_overrides[key] = value
+                        continue
+                    expected = rule["type"]
+                    valid = True
+                    if expected is bool:
+                        if isinstance(value, bool):
+                            pass
+                        elif isinstance(value, int) and value in (0, 1):
+                            value = bool(value)
+                        else:
+                            warnings.append(f"device_settings[{dev_id}].{key}: bad type — skipped")
+                            valid = False
+                    elif expected is int:
+                        if isinstance(value, bool) or not isinstance(value, int):
+                            warnings.append(f"device_settings[{dev_id}].{key}: bad type — skipped")
+                            valid = False
+                        else:
+                            lo, hi = rule.get("min"), rule.get("max")
+                            if (lo is not None and value < lo) or (hi is not None and value > hi):
+                                warnings.append(f"device_settings[{dev_id}].{key}: out of range — skipped")
+                                valid = False
+                    elif expected is str:
+                        if not isinstance(value, str):
+                            warnings.append(f"device_settings[{dev_id}].{key}: bad type — skipped")
+                            valid = False
+                        elif "choices" in rule and value not in rule["choices"]:
+                            warnings.append(f"device_settings[{dev_id}].{key}: invalid choice — skipped")
+                            valid = False
+                    if valid:
+                        clean_overrides[key] = value
+                if clean_overrides:
+                    clean_ds[dev_id] = clean_overrides
+            cleaned["device_settings"] = clean_ds
+
     return cleaned, warnings
+
+
+# ============================================================
+# PER-DEVICE SETTING OVERRIDES
+# ============================================================
+
+# Maps setting keys to the global variable they control.
+_SETTINGS_TO_CONFIG = {
+    "auto_heal":             "AUTO_HEAL_ENABLED",
+    "auto_restore_ap":       "AUTO_RESTORE_AP_ENABLED",
+    "ap_use_free":           "AP_USE_FREE",
+    "ap_use_potions":        "AP_USE_POTIONS",
+    "ap_allow_large_potions":"AP_ALLOW_LARGE_POTIONS",
+    "ap_use_gems":           "AP_USE_GEMS",
+    "ap_gem_limit":          "AP_GEM_LIMIT",
+    "min_troops":            "MIN_TROOPS_AVAILABLE",
+    "eg_rally_own":          "EG_RALLY_OWN_ENABLED",
+    "titan_rally_own":       "TITAN_RALLY_OWN_ENABLED",
+    "gather_enabled":        "GATHER_ENABLED",
+    "gather_mine_level":     "GATHER_MINE_LEVEL",
+    "gather_max_troops":     "GATHER_MAX_TROOPS",
+    "tower_quest_enabled":   "TOWER_QUEST_ENABLED",
+    "my_team":               "MY_TEAM_COLOR",
+    "mithril_interval":      "MITHRIL_INTERVAL",
+}
+
+_DEVICE_CONFIG = {}  # {device_id: {setting_key: value}}
+
+
+def get_device_config(device, key):
+    """Check per-device override, fall back to global config value."""
+    dev = _DEVICE_CONFIG.get(device)
+    if dev and key in dev:
+        return dev[key]
+    global_name = _SETTINGS_TO_CONFIG.get(key)
+    if global_name is not None:
+        return globals()[global_name]
+    raise KeyError(f"Unknown device config key: {key}")
+
+
+def get_device_enemy_teams(device):
+    """Return enemy teams for a specific device."""
+    my_team = get_device_config(device, "my_team")
+    return [t for t in ALL_TEAMS if t != my_team]
+
+
+def set_device_overrides(device_id, overrides):
+    """Set per-device setting overrides (from settings.json device_settings)."""
+    _DEVICE_CONFIG[device_id] = dict(overrides)
+
+
+def clear_device_overrides():
+    """Clear all per-device overrides."""
+    _DEVICE_CONFIG.clear()
 
 
 # ============================================================

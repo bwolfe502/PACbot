@@ -19,8 +19,9 @@ import time
 import random
 import threading
 import socket
+import functools
 
-from flask import Flask, render_template, request, redirect, url_for, jsonify
+from flask import Flask, render_template, request, redirect, url_for, jsonify, abort
 
 # ---------------------------------------------------------------------------
 # PACbot imports (same as main.py)
@@ -39,7 +40,7 @@ from actions import (attack, phantom_clash_attack, reinforce_throne, target,
                      reset_quest_tracking, reset_rally_blacklist,
                      mine_mithril, mine_mithril_if_due,
                      gather_gold, gather_gold_loop,
-                     get_quest_tracking_state, occupy_tower)
+                     get_quest_tracking_state, get_quest_last_checked, occupy_tower)
 from territory import attack_territory, diagnose_grid, scan_test_squares
 from botlog import get_logger
 
@@ -93,7 +94,6 @@ AUTO_MODES_BL = [
     {"group": "Farming", "modes": [
         {"key": "auto_quest",     "label": "Auto Quest"},
         {"key": "auto_titan",     "label": "Rally Titans"},
-        {"key": "auto_gold",      "label": "Mine Gold"},
         {"key": "auto_mithril",   "label": "Mine Mithril"},
     ]},
 ]
@@ -104,7 +104,6 @@ AUTO_MODES_HS = [
     ]},
     {"group": "Farming", "modes": [
         {"key": "auto_titan",     "label": "Rally Titans"},
-        {"key": "auto_gold",      "label": "Mine Gold"},
         {"key": "auto_mithril",   "label": "Mine Mithril"},
     ]},
     {"group": "Combat", "modes": [
@@ -114,7 +113,7 @@ AUTO_MODES_HS = [
 
 # One-shot action names (grouped for display)
 ONESHOT_FARM = ["Rally Evil Guard", "Join Titan Rally", "Join Evil Guard Rally",
-                "Join Groot Rally", "Heal All"]
+                "Join Groot Rally", "Heal All", "Gather Gold"]
 ONESHOT_WAR = ["Target", "Attack", "Phantom Clash Attack", "Reinforce Throne",
                "UP UP UP!", "Teleport", "Attack Territory"]
 ONESHOT_DEBUG = ["Check Screen", "Check Troops", "Diagnose Grid",
@@ -152,7 +151,7 @@ def stop_all():
     """Stop every running task and clear device statuses."""
     # Reset loop-control flags that bypass stop events
     config.auto_occupy_running = False
-    config.MITHRIL_ENABLED = False
+    config.MITHRIL_ENABLED_DEVICES.clear()
     config.MITHRIL_DEPLOY_TIME.clear()
     for key in list(running_tasks.keys()):
         stop_task(key)
@@ -297,6 +296,22 @@ def create_app():
             scheme = "https" if is_secure else "http"
             relay_url = f"{scheme}://{host}/{bot_name}"
 
+        # Build per-device share data (device_hash + tokens)
+        from startup import device_hash, generate_device_token, generate_device_ro_token
+        share_data = {}
+        for d in devs:
+            dh = device_hash(d)
+            dt = generate_device_token(d)
+            dt_ro = generate_device_ro_token(d)
+            if dh and dt:
+                share_url_base = relay_url or f"http://{get_local_ip()}:8080"
+                share_data[d] = {
+                    "hash": dh,
+                    "token": dt,
+                    "url": f"{share_url_base}/d/{dh}?token={dt}",
+                    "ro_url": f"{share_url_base}/d/{dh}?token={dt_ro}" if dt_ro else None,
+                }
+
         return render_template("index.html",
                                devices=device_info,
                                tasks=active_tasks,
@@ -307,7 +322,9 @@ def create_app():
                                oneshot_war=ONESHOT_WAR,
                                active_tasks=active_tasks,
                                local_ip=get_local_ip(),
-                               relay_url=relay_url)
+                               relay_url=relay_url,
+                               share_data=share_data,
+                               device_filter=False)
 
     @app.route("/tasks")
     def tasks_page():
@@ -318,7 +335,7 @@ def create_app():
         settings = _load_settings()
         # Build device_troops: merge saved values with currently detected devices
         saved_dt = settings.get("device_troops", {})
-        detected, _ = _cached_devices()
+        detected, instances = _cached_devices()
         device_troops = {}
         for dev in detected:
             device_troops[dev] = saved_dt.get(dev, 5)
@@ -326,8 +343,12 @@ def create_app():
         for dev, count in saved_dt.items():
             if dev not in device_troops:
                 device_troops[dev] = count
+        # Build device list for tabs
+        all_devices = [{"id": d, "name": instances.get(d, d.split(":")[-1])}
+                       for d in detected]
         return render_template("settings.html", settings=settings,
-                               device_troops=device_troops)
+                               device_troops=device_troops,
+                               all_devices=all_devices)
 
     @app.route("/debug")
     def debug_page():
@@ -398,6 +419,20 @@ def create_app():
                         "action": t.action.value,
                         "time_left": t.time_left,
                     })
+            # Mithril timer: seconds until next cycle (None if never mined)
+            # Prefer MITHRIL_DEPLOY_TIME (set when first troop reaches a mine)
+            # so the timer appears immediately on deployment, not after the
+            # full cycle completes.  Fall back to LAST_MITHRIL_TIME for the
+            # case where deploy time was cleared but a previous cycle exists.
+            mithril_next = None
+            mithril_anchor = (config.MITHRIL_DEPLOY_TIME.get(d)
+                              or config.LAST_MITHRIL_TIME.get(d))
+            if mithril_anchor:
+                interval = config.get_device_config(d, "mithril_interval")
+                elapsed = time.time() - mithril_anchor
+                remaining = interval * 60 - elapsed
+                mithril_next = max(0, int(remaining))
+
             device_info.append({
                 "id": d,
                 "name": instances.get(d, d),
@@ -405,6 +440,8 @@ def create_app():
                 "troops": troops_list,
                 "snapshot_age": snapshot_age,
                 "quests": get_quest_tracking_state(d),
+                "quest_age": get_quest_last_checked(d),
+                "mithril_next": mithril_next,
             })
         active = []
         for key, info in list(running_tasks.items()):
@@ -465,7 +502,7 @@ def create_app():
                 if runner:
                     stop_event = threading.Event()
                     if mode_key == "auto_mithril":
-                        config.MITHRIL_ENABLED = True
+                        config.MITHRIL_ENABLED_DEVICES.add(device)
                     launch_task(device, mode_key,
                                 lambda d=device, se=stop_event, s=settings: runner(d, se, s),
                                 stop_event)
@@ -489,19 +526,33 @@ def create_app():
 
     @app.route("/tasks/stop-mode", methods=["POST"])
     def stop_mode_route():
-        """Stop all running tasks for a given auto-mode (across all devices)."""
+        """Stop running tasks for a given auto-mode.
+
+        If ``device`` is provided, only stop that device's task.
+        Otherwise stop all devices running this mode.
+        """
         mode_key = request.form.get("mode_key")
+        device = request.form.get("device")
         if mode_key:
             # Reset loop-control flags for modes that use them
             if mode_key == "auto_occupy":
                 config.auto_occupy_running = False
             elif mode_key == "auto_mithril":
-                config.MITHRIL_ENABLED = False
-                config.MITHRIL_DEPLOY_TIME.clear()
-            suffix = f"_{mode_key}"
-            for key in list(running_tasks.keys()):
-                if key.endswith(suffix):
-                    stop_task(key)
+                if device:
+                    config.MITHRIL_ENABLED_DEVICES.discard(device)
+                    config.MITHRIL_DEPLOY_TIME.pop(device, None)
+                else:
+                    config.MITHRIL_ENABLED_DEVICES.clear()
+                    config.MITHRIL_DEPLOY_TIME.clear()
+            if device:
+                task_key = f"{device}_{mode_key}"
+                if task_key in running_tasks:
+                    stop_task(task_key)
+            else:
+                suffix = f"_{mode_key}"
+                for key in list(running_tasks.keys()):
+                    if key.endswith(suffix):
+                        stop_task(key)
         return redirect(url_for("tasks_page"))
 
     @app.route("/tasks/stop-all", methods=["POST"])
@@ -549,6 +600,96 @@ def create_app():
         _save_settings(settings)
         return redirect(url_for("settings_page"))
 
+    @app.route("/settings/device/<device_id>")
+    def device_settings_page(device_id):
+        """Per-device settings page with override toggles."""
+        detected, instances = _cached_devices()
+        all_devices = [{"id": d, "name": instances.get(d, d.split(":")[-1])}
+                       for d in detected]
+        settings = _load_settings()
+        dev_overrides = settings.get("device_settings", {}).get(device_id, {})
+        mode = settings.get("mode", "bl")
+        auto_groups = AUTO_MODES_BL if mode == "bl" else AUTO_MODES_HS
+        return render_template("settings_device.html",
+                               device_id=device_id,
+                               device_name=instances.get(device_id, device_id.split(":")[-1]),
+                               all_devices=all_devices,
+                               overrides=dev_overrides,
+                               globals=settings,
+                               auto_groups=auto_groups,
+                               all_actions=ONESHOT_FARM + ONESHOT_WAR)
+
+    @app.route("/settings/device/<device_id>", methods=["POST"])
+    def save_device_settings(device_id):
+        """Save per-device setting overrides."""
+        from settings import DEVICE_OVERRIDABLE_KEYS
+        settings = _load_settings()
+        ds = settings.setdefault("device_settings", {})
+        overrides = {}
+
+        # Boolean overridable keys
+        bool_keys = {"auto_heal", "auto_restore_ap", "ap_use_free", "ap_use_potions",
+                      "ap_allow_large_potions", "ap_use_gems", "eg_rally_own",
+                      "titan_rally_own", "gather_enabled", "tower_quest_enabled"}
+        for key in bool_keys & DEVICE_OVERRIDABLE_KEYS:
+            if f"override_{key}" in request.form:
+                overrides[key] = key in request.form
+
+        # Integer overridable keys
+        int_keys = {"ap_gem_limit", "min_troops", "mithril_interval",
+                     "gather_mine_level", "gather_max_troops"}
+        for key in int_keys & DEVICE_OVERRIDABLE_KEYS:
+            if f"override_{key}" in request.form:
+                val = request.form.get(key, "")
+                if val.isdigit():
+                    overrides[key] = int(val)
+
+        # String overridable keys
+        str_keys = {"my_team"}
+        for key in str_keys & DEVICE_OVERRIDABLE_KEYS:
+            if f"override_{key}" in request.form:
+                val = request.form.get(key)
+                if val is not None:
+                    overrides[key] = val
+
+        # Shared permissions (not config overrides — access control)
+        if "permissions_enabled" in request.form:
+            # Collect checked auto-mode keys
+            shared_modes = []
+            for key in ALL_AUTO_MODE_KEYS:
+                if f"perm_mode_{key}" in request.form:
+                    shared_modes.append(key)
+            overrides["shared_modes"] = shared_modes
+
+            # Collect checked one-shot actions
+            shared_actions = []
+            for name in ONESHOT_FARM + ONESHOT_WAR:
+                safe = name.replace(" ", "_")
+                if f"perm_action_{safe}" in request.form:
+                    shared_actions.append(name)
+            overrides["shared_actions"] = shared_actions
+        # else: no shared_modes/shared_actions key = allow everything
+
+        ds[device_id] = overrides
+        from config import validate_settings
+        settings, warnings = validate_settings(settings, DEFAULTS)
+        for w in warnings:
+            _log.warning("Settings (device save): %s", w)
+        _apply_settings(settings)
+        _save_settings(settings)
+        return redirect(url_for("device_settings_page", device_id=device_id))
+
+    @app.route("/settings/device/<device_id>/reset", methods=["POST"])
+    def reset_device_settings(device_id):
+        """Remove all per-device overrides for a device."""
+        settings = _load_settings()
+        ds = settings.get("device_settings", {})
+        ds.pop(device_id, None)
+        settings["device_settings"] = ds
+        _apply_settings(settings)
+        _save_settings(settings)
+        return redirect(url_for("device_settings_page", device_id=device_id))
+
     @app.route("/api/restart", methods=["POST"])
     def api_restart():
         """Save settings, stop all tasks, and restart the process."""
@@ -559,6 +700,14 @@ def create_app():
         def _do_restart():
             time.sleep(0.5)  # let the HTTP response flush
             os.environ["PACBOT_RESTART"] = "1"  # skip opening new window
+            # Close pywebview window first so the new process can open one
+            cb = config._quit_callback
+            if cb:
+                try:
+                    cb()
+                    time.sleep(1)
+                except Exception:
+                    pass
             os.execv(sys.executable, [sys.executable] + sys.argv)
 
         threading.Thread(target=_do_restart, daemon=True).start()
@@ -576,6 +725,28 @@ def create_app():
             as_attachment=True,
             download_name=filename,
         )
+
+    @app.route("/api/quit", methods=["POST"])
+    def api_quit():
+        """Stop all tasks and terminate the process."""
+        _log.info("=== QUIT requested via web dashboard ===")
+        stop_all()
+
+        def _do_quit():
+            time.sleep(0.5)  # let the HTTP response flush
+            # Close pywebview window if available — triggers clean exit flow
+            cb = config._quit_callback
+            if cb:
+                try:
+                    cb()
+                    time.sleep(2)  # give main thread time to exit normally
+                except Exception:
+                    pass
+            # Hard exit fallback (browser mode, or if window.destroy didn't quit)
+            os._exit(0)
+
+        threading.Thread(target=_do_quit, daemon=True).start()
+        return jsonify({"ok": True, "message": "Shutting down..."})
 
     @app.route("/api/logs")
     def api_logs():
@@ -615,7 +786,7 @@ def create_app():
 
     @app.route("/api/screenshot")
     def api_screenshot():
-        """Take a live screenshot from a device and return it as PNG."""
+        """Take a live screenshot from a device. Returns JPEG if quality param set, else PNG."""
         device = request.args.get("device", "")
         if not device:
             return "Missing device parameter", 400
@@ -628,11 +799,47 @@ def create_app():
         screen = load_screenshot(device)
         if screen is None:
             return "Screenshot failed (ADB error)", 500
-        _, buf = cv2.imencode(".png", screen)
+        quality = request.args.get("quality")
         as_attachment = bool(request.args.get("download"))
+        if quality and not as_attachment:
+            q = max(10, min(95, int(quality)))
+            _, buf = cv2.imencode(".jpg", screen, [cv2.IMWRITE_JPEG_QUALITY, q])
+            return send_file(io.BytesIO(buf.tobytes()), mimetype="image/jpeg")
+        _, buf = cv2.imencode(".png", screen)
         return send_file(io.BytesIO(buf.tobytes()), mimetype="image/png",
                          as_attachment=as_attachment,
                          download_name=f"screenshot_{device.replace(':', '_')}.png")
+
+    @app.route("/api/stream")
+    def api_stream():
+        """MJPEG stream from a device. Query params: device, fps (1-10), quality (10-95)."""
+        device = request.args.get("device", "")
+        if not device:
+            return "Missing device parameter", 400
+        known = set(_cached_devices()[0])
+        if device not in known:
+            return "Unknown device", 404
+        import cv2
+        from flask import Response
+        fps = max(1, min(10, int(request.args.get("fps", "5"))))
+        quality = max(10, min(95, int(request.args.get("quality", "30"))))
+        interval = 1.0 / fps
+
+        def generate():
+            while True:
+                screen = load_screenshot(device)
+                if screen is not None:
+                    _, buf = cv2.imencode(".jpg", screen,
+                                          [cv2.IMWRITE_JPEG_QUALITY, quality])
+                    frame = buf.tobytes()
+                    yield (b"--frame\r\n"
+                           b"Content-Type: image/jpeg\r\n"
+                           b"Content-Length: " + str(len(frame)).encode() + b"\r\n"
+                           b"\r\n" + frame + b"\r\n")
+                time.sleep(interval)
+
+        return Response(generate(),
+                        mimetype="multipart/x-mixed-replace; boundary=frame")
 
     @app.route("/api/qr")
     def api_qr():
@@ -649,5 +856,300 @@ def create_app():
         buf = io.BytesIO()
         img.save(buf, format="PNG")
         return Response(buf.getvalue(), mimetype="image/png")
+
+    # --- Device-scoped routes (friend view) ---
+
+    def _resolve_device(dhash):
+        """Resolve a device hash to a device ID, or None."""
+        devs, _ = _cached_devices()
+        from startup import device_hash as _dh
+        for d in devs:
+            if _dh(d) == dhash:
+                return d
+        return None
+
+    def require_device_token(f):
+        """Decorator: validate token query param and inject device/token/readonly."""
+        @functools.wraps(f)
+        def wrapper(dhash, *args, **kwargs):
+            device = _resolve_device(dhash)
+            if device is None:
+                abort(404)
+            token = request.args.get("token", "")
+            from startup import validate_device_token
+            access = validate_device_token(device, token)
+            if access is None:
+                abort(403)
+            kwargs["device"] = device
+            kwargs["token"] = token
+            kwargs["readonly"] = (access == "readonly")
+            return f(dhash, *args, **kwargs)
+        return wrapper
+
+    def require_full_access(f):
+        """Decorator: reject read-only tokens for write operations."""
+        @functools.wraps(f)
+        def wrapper(*args, **kwargs):
+            if kwargs.get("readonly"):
+                abort(403)
+            return f(*args, **kwargs)
+        return wrapper
+
+    # All auto-mode keys (for shared permissions defaults)
+    ALL_AUTO_MODE_KEYS = []
+    for _grp in AUTO_MODES_BL + AUTO_MODES_HS:
+        for _m in _grp["modes"]:
+            if _m["key"] not in ALL_AUTO_MODE_KEYS:
+                ALL_AUTO_MODE_KEYS.append(_m["key"])
+
+    @app.route("/d/<dhash>")
+    @require_device_token
+    def device_index(dhash, device=None, token=None, readonly=False):
+        """Friend's filtered dashboard — single device only."""
+        cleanup_dead_tasks()
+        _, instances = _cached_devices()
+        device_info = [{
+            "id": device,
+            "name": instances.get(device, device),
+            "status": config.DEVICE_STATUS.get(device, "Idle"),
+            "troops": config.DEVICE_TOTAL_TROOPS.get(device, 5),
+        }]
+        active_tasks = []
+        for key, info in list(running_tasks.items()):
+            if isinstance(info, dict):
+                thread = info.get("thread")
+                if thread and thread.is_alive() and key.startswith(device):
+                    active_tasks.append(key)
+        settings = _load_settings()
+        mode = settings.get("mode", "bl")
+        auto_groups = AUTO_MODES_BL if mode == "bl" else AUTO_MODES_HS
+
+        # Filter by shared permissions
+        dev_settings = settings.get("device_settings", {}).get(device, {})
+        allowed_modes = dev_settings.get("shared_modes")  # None = all
+        allowed_actions = dev_settings.get("shared_actions")  # None = all
+
+        if allowed_modes is not None:
+            allowed_set = set(allowed_modes)
+            auto_groups = []
+            for grp in (AUTO_MODES_BL if mode == "bl" else AUTO_MODES_HS):
+                filtered = [m for m in grp["modes"] if m["key"] in allowed_set]
+                if filtered:
+                    auto_groups.append({"group": grp["group"], "modes": filtered})
+
+        farm = list(ONESHOT_FARM)
+        war = list(ONESHOT_WAR)
+        if allowed_actions is not None:
+            allowed_act = set(allowed_actions)
+            farm = [a for a in farm if a in allowed_act]
+            war = [a for a in war if a in allowed_act]
+
+        return render_template("index.html",
+                               devices=device_info,
+                               tasks=active_tasks,
+                               task_count=len(active_tasks),
+                               auto_groups=auto_groups,
+                               mode=mode,
+                               oneshot_farm=farm,
+                               oneshot_war=war,
+                               active_tasks=active_tasks,
+                               local_ip=get_local_ip(),
+                               relay_url=None,
+                               share_data={},
+                               device_filter=True,
+                               device_readonly=readonly,
+                               device_hash=dhash,
+                               device_token=token)
+
+    @app.route("/d/<dhash>/api/status")
+    @require_device_token
+    def device_api_status(dhash, device=None, token=None, readonly=False):
+        """Status for one device only."""
+        cleanup_dead_tasks()
+        _, instances = _cached_devices()
+        snapshot = get_troop_status(device)
+        troops_list = []
+        snapshot_age = None
+        if snapshot:
+            snapshot_age = round(snapshot.age_seconds)
+            for t in snapshot.troops:
+                troops_list.append({
+                    "action": t.action.value,
+                    "time_left": t.time_left,
+                })
+        mithril_next = None
+        mithril_anchor = (config.MITHRIL_DEPLOY_TIME.get(device)
+                          or config.LAST_MITHRIL_TIME.get(device))
+        if mithril_anchor:
+            interval = config.get_device_config(device, "mithril_interval")
+            elapsed = time.time() - mithril_anchor
+            remaining = interval * 60 - elapsed
+            mithril_next = max(0, int(remaining))
+
+        device_info = [{
+            "id": device,
+            "name": instances.get(device, device),
+            "status": config.DEVICE_STATUS.get(device, "Idle"),
+            "troops": troops_list,
+            "snapshot_age": snapshot_age,
+            "quests": get_quest_tracking_state(device),
+            "quest_age": get_quest_last_checked(device),
+            "mithril_next": mithril_next,
+        }]
+        active = []
+        for key, info in list(running_tasks.items()):
+            if isinstance(info, dict):
+                thread = info.get("thread")
+                if thread and thread.is_alive() and key.startswith(device):
+                    active.append(key)
+        return jsonify({"devices": device_info, "tasks": active,
+                        "tunnel": tunnel_status()})
+
+    @app.route("/d/<dhash>/tasks/start", methods=["POST"])
+    @require_device_token
+    @require_full_access
+    def device_start_task(dhash, device=None, token=None, readonly=False):
+        """Start task on this device only."""
+        task_name = request.form.get("task_name")
+        task_type = request.form.get("task_type", "oneshot")
+        settings = _load_settings()
+
+        # Validate device is known
+        known = set(_cached_devices()[0])
+        if device not in known:
+            abort(404)
+
+        # Enforce shared permissions
+        dev_settings = settings.get("device_settings", {}).get(device, {})
+        if task_type == "auto":
+            allowed_modes = dev_settings.get("shared_modes")
+            if allowed_modes is not None and task_name not in allowed_modes:
+                abort(403)
+        else:
+            allowed_actions = dev_settings.get("shared_actions")
+            if allowed_actions is not None and task_name not in allowed_actions:
+                abort(403)
+
+        if task_type == "auto":
+            mode_key = task_name
+            task_key = f"{device}_{mode_key}"
+            if task_key in running_tasks:
+                info = running_tasks[task_key]
+                if isinstance(info, dict) and info.get("thread") and info["thread"].is_alive():
+                    return redirect(f"/d/{dhash}?token={token}")
+
+            EXCLUSIVE = {
+                "auto_quest": ["auto_gold"],
+                "auto_titan": ["auto_gold"],
+                "auto_gold":  ["auto_quest", "auto_titan"],
+            }
+            for conflict in EXCLUSIVE.get(mode_key, []):
+                ckey = f"{device}_{conflict}"
+                if ckey in running_tasks:
+                    stop_task(ckey)
+
+            runner = AUTO_RUNNERS.get(mode_key)
+            if runner:
+                stop_event = threading.Event()
+                if mode_key == "auto_mithril":
+                    config.MITHRIL_ENABLED_DEVICES.add(device)
+                launch_task(device, mode_key,
+                            lambda d=device, se=stop_event, s=settings: runner(d, se, s),
+                            stop_event)
+        else:
+            func = TASK_FUNCTIONS.get(task_name)
+            if func:
+                stop_event = threading.Event()
+                launch_task(device, f"once:{task_name}",
+                            run_once, stop_event,
+                            args=(device, task_name, func))
+
+        return redirect(f"/d/{dhash}?token={token}")
+
+    @app.route("/d/<dhash>/tasks/stop", methods=["POST"])
+    @require_device_token
+    @require_full_access
+    def device_stop_task(dhash, device=None, token=None, readonly=False):
+        """Stop a specific task on this device."""
+        task_key = request.form.get("task_key", "")
+        # Only allow stopping tasks belonging to this device
+        if task_key and task_key.startswith(device):
+            stop_task(task_key)
+        return redirect(f"/d/{dhash}?token={token}")
+
+    @app.route("/d/<dhash>/tasks/stop-mode", methods=["POST"])
+    @require_device_token
+    @require_full_access
+    def device_stop_mode(dhash, device=None, token=None, readonly=False):
+        """Stop an auto-mode on this device."""
+        mode_key = request.form.get("mode_key")
+        if mode_key:
+            task_key = f"{device}_{mode_key}"
+            if mode_key == "auto_occupy":
+                config.auto_occupy_running = False
+            elif mode_key == "auto_mithril":
+                config.MITHRIL_ENABLED_DEVICES.discard(device)
+                config.MITHRIL_DEPLOY_TIME.pop(device, None)
+            if task_key in running_tasks:
+                stop_task(task_key)
+        return redirect(f"/d/{dhash}?token={token}")
+
+    @app.route("/d/<dhash>/tasks/stop-all", methods=["POST"])
+    @require_device_token
+    @require_full_access
+    def device_stop_all(dhash, device=None, token=None, readonly=False):
+        """Stop all tasks on this device only."""
+        for key in list(running_tasks.keys()):
+            if key.startswith(device):
+                stop_task(key)
+        config.DEVICE_STATUS.pop(device, None)
+        return redirect(f"/d/{dhash}?token={token}")
+
+    @app.route("/d/<dhash>/api/screenshot")
+    @require_device_token
+    def device_screenshot(dhash, device=None, token=None, readonly=False):
+        """Screenshot of this device. Returns JPEG if quality param set, else PNG."""
+        import io
+        import cv2
+        from flask import send_file
+        screen = load_screenshot(device)
+        if screen is None:
+            return "Screenshot failed (ADB error)", 500
+        quality = request.args.get("quality")
+        as_attachment = bool(request.args.get("download"))
+        if quality and not as_attachment:
+            q = max(10, min(95, int(quality)))
+            _, buf = cv2.imencode(".jpg", screen, [cv2.IMWRITE_JPEG_QUALITY, q])
+            return send_file(io.BytesIO(buf.tobytes()), mimetype="image/jpeg")
+        _, buf = cv2.imencode(".png", screen)
+        return send_file(io.BytesIO(buf.tobytes()), mimetype="image/png",
+                         as_attachment=as_attachment,
+                         download_name=f"screenshot_{device.replace(':', '_')}.png")
+
+    @app.route("/d/<dhash>/api/stream")
+    @require_device_token
+    def device_stream(dhash, device=None, token=None, readonly=False):
+        """MJPEG stream for this device (friend view)."""
+        import cv2
+        from flask import Response
+        fps = max(1, min(10, int(request.args.get("fps", "5"))))
+        quality = max(10, min(95, int(request.args.get("quality", "30"))))
+        interval = 1.0 / fps
+
+        def generate():
+            while True:
+                screen = load_screenshot(device)
+                if screen is not None:
+                    _, buf = cv2.imencode(".jpg", screen,
+                                          [cv2.IMWRITE_JPEG_QUALITY, quality])
+                    frame = buf.tobytes()
+                    yield (b"--frame\r\n"
+                           b"Content-Type: image/jpeg\r\n"
+                           b"Content-Length: " + str(len(frame)).encode() + b"\r\n"
+                           b"\r\n" + frame + b"\r\n")
+                time.sleep(interval)
+
+        return Response(generate(),
+                        mimetype="multipart/x-mixed-replace; boundary=frame")
 
     return app

@@ -8,6 +8,7 @@ import sys
 import json
 import base64
 import hashlib
+import hmac
 import logging
 import platform
 import subprocess
@@ -49,6 +50,55 @@ def get_relay_config(settings):
     return relay_url, relay_secret, bot_name
 
 
+def device_hash(device_id):
+    """Short URL-safe hash of a device ID (doesn't expose IP/port)."""
+    return hashlib.sha256(device_id.encode()).hexdigest()[:8]
+
+
+def _get_license_key():
+    try:
+        from license import get_license_key
+        return get_license_key()
+    except Exception:
+        return None
+
+
+def generate_device_token(device_id):
+    """Deterministic per-device token derived from the license key.
+
+    Returns a 16-char hex string, or ``None`` if no license key is available.
+    """
+    key = _get_license_key()
+    if not key:
+        return None
+    return hashlib.sha256(f"{key}:{device_id}".encode()).hexdigest()[:16]
+
+
+def generate_device_ro_token(device_id):
+    """Deterministic read-only token for a device.
+
+    Returns a 16-char hex string, or ``None`` if no license key is available.
+    """
+    key = _get_license_key()
+    if not key:
+        return None
+    return hashlib.sha256(f"{key}:ro:{device_id}".encode()).hexdigest()[:16]
+
+
+def validate_device_token(device_id, token):
+    """Validate a device token using constant-time comparison.
+
+    Returns ``"full"``, ``"readonly"``, or ``None`` (invalid).
+    """
+    full = generate_device_token(device_id)
+    if full and hmac.compare_digest(token, full):
+        return "full"
+    ro = generate_device_ro_token(device_id)
+    if ro and hmac.compare_digest(token, ro):
+        return "readonly"
+    return None
+
+
 def apply_settings(settings):
     """Push settings values into config globals.
 
@@ -81,6 +131,11 @@ def apply_settings(settings):
             config.DEVICE_TOTAL_TROOPS[dev_id] = int(count)
         except (ValueError, TypeError):
             config.DEVICE_TOTAL_TROOPS[dev_id] = 5
+
+    # Per-device setting overrides
+    config.clear_device_overrides()
+    for dev_id, overrides in settings.get("device_settings", {}).items():
+        config.set_device_overrides(dev_id, overrides)
 
 
 def initialize():
@@ -160,7 +215,7 @@ def shutdown():
     # Stop all running tasks
     try:
         config.auto_occupy_running = False
-        config.MITHRIL_ENABLED = False
+        config.MITHRIL_ENABLED_DEVICES.clear()
         config.MITHRIL_DEPLOY_TIME.clear()
         for key in list(running_tasks.keys()):
             from runners import stop_task

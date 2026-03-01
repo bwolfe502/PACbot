@@ -40,6 +40,7 @@ _quest_rallies_pending = {}   # e.g. {("127.0.0.1:5555", "titan"): 2}
 _quest_last_seen = {}         # e.g. {("127.0.0.1:5555", "titan"): 10}
 _quest_target = {}            # e.g. {("127.0.0.1:5555", "titan"): 20}
 _quest_pending_since = {}     # e.g. {("127.0.0.1:5555", "titan"): 1708123456.0}
+_quest_last_checked = {}      # {device: timestamp} — when check_quests last ran
 
 # Troop slot tracking — which troop slots are associated with pending rallies.
 # Set before depart, consumed by _record_rally_started.
@@ -157,6 +158,14 @@ def get_quest_tracking_state(device):
     return result
 
 
+def get_quest_last_checked(device):
+    """Return seconds since last check_quests run for device, or None."""
+    ts = _quest_last_checked.get(device)
+    if ts is None:
+        return None
+    return round(time.time() - ts)
+
+
 def reset_quest_tracking(device=None):
     """Clear rally tracking state. If device is given, clear only that device's state.
     If device is None, clear all state (backwards compatible)."""
@@ -169,6 +178,7 @@ def reset_quest_tracking(device=None):
         _last_depart_slot.clear()
         _tower_quest_state.clear()
         _pvp_last_dispatch.clear()
+        _quest_last_checked.clear()
     else:
         for d in list(_quest_rallies_pending):
             if d[0] == device:
@@ -188,6 +198,7 @@ def reset_quest_tracking(device=None):
         _last_depart_slot.pop(device, None)
         _tower_quest_state.pop(device, None)
         _pvp_last_dispatch.pop(device, None)
+        _quest_last_checked.pop(device, None)
 
 
 # ---- Quest OCR helpers ----
@@ -239,11 +250,13 @@ def _ocr_quest_rows(device):
 
     # Parse quest entries matching "Quest Name(X/Y)" pattern.
     # OCR often reads '0' as 'o'/'O', so accept those in the digit positions.
+    # Allow spaces in numbers — EasyOCR splits large numbers (e.g. "100,000,000")
+    # across text blocks, producing "100,000, 000" or "0/ 100,000,000".
     quests = []
-    for match in re.finditer(r"(.+?)\(([oO\d][\doO,]*)/([oO\d][\doO,]*)\)", raw_text):
+    for match in re.finditer(r"(.+?)\(\s*([oO\d][\doO, ]*)/\s*([oO\d][\doO, ]*?)\s*\)", raw_text):
         name = match.group(1).strip()
-        raw_cur = match.group(2).replace(",", "")
-        raw_tgt = match.group(3).replace(",", "")
+        raw_cur = match.group(2).replace(",", "").replace(" ", "")
+        raw_tgt = match.group(3).replace(",", "").replace(" ", "")
         # Fix OCR o/O -> 0
         raw_cur = raw_cur.replace("o", "0").replace("O", "0")
         raw_tgt = raw_tgt.replace("o", "0").replace("O", "0")
@@ -259,6 +272,8 @@ def _ocr_quest_rows(device):
             target = 15
         elif quest_type == QuestType.EVIL_GUARD:
             target = 3
+        elif quest_type == QuestType.PVP:
+            target = 500000000
         elif quest_type == QuestType.GATHER:
             target = 1000000
 
@@ -338,14 +353,14 @@ def _check_quests_legacy(device, stop_check):
 
             if not joined:
                 if quest_img == "eg.png":
-                    if config.EG_RALLY_OWN_ENABLED:
+                    if config.get_device_config(device, "eg_rally_own"):
                         log.info("No rally to join, starting own EG rally")
                         if navigate(Screen.MAP, device):
                             rally_eg(device, stop_check=stop_check)
                     else:
                         log.info("No EG rally to join — own rally disabled, skipping")
                 else:
-                    if config.TITAN_RALLY_OWN_ENABLED:
+                    if config.get_device_config(device, "titan_rally_own"):
                         log.info("No rally to join, starting own Titan rally")
                         if navigate(Screen.MAP, device):
                             rally_titan(device)
@@ -455,7 +470,7 @@ def _run_rally_loop(device, actionable, stop_check=None):
     navigate(Screen.MAP, device)
 
     # Heal once before the rally loop
-    if config.AUTO_HEAL_ENABLED:
+    if config.get_device_config(device, "auto_heal"):
         log.debug("Healing before rally loop...")
         heal_all(device)
 
@@ -493,7 +508,7 @@ def _run_rally_loop(device, actionable, stop_check=None):
         # No rally to join — start own rally
         started = False
         if titan_needed > 0:
-            if config.TITAN_RALLY_OWN_ENABLED:
+            if config.get_device_config(device, "titan_rally_own"):
                 log.info("No rally to join, starting own Titan rally")
                 config.set_device_status(device, "Rallying Titan...")
                 if navigate(Screen.MAP, device):
@@ -505,7 +520,7 @@ def _run_rally_loop(device, actionable, stop_check=None):
             if stop_check and stop_check():
                 return True
         elif eg_needed > 0:
-            if config.EG_RALLY_OWN_ENABLED:
+            if config.get_device_config(device, "eg_rally_own"):
                 log.info("No rally to join, starting own EG rally")
                 config.set_device_status(device, "Rallying Evil Guard...")
                 if navigate(Screen.MAP, device):
@@ -626,6 +641,7 @@ def check_quests(device, stop_check=None):
 
     # Try OCR-based quest detection
     quests = _ocr_quest_rows(device)
+    _quest_last_checked[device] = time.time()
 
     if quests is not None:
         original_count = len(quests)
@@ -642,11 +658,11 @@ def check_quests(device, stop_check=None):
 
         if not actionable:
             # Recall tower troop if all tower quests are done
-            if config.TOWER_QUEST_ENABLED:
+            if config.get_device_config(device, "tower_quest_enabled"):
                 _run_tower_quest(device, quests, stop_check)
 
             # Gold fallback: use visual OCR counters, not pending rally tracking
-            if config.GATHER_ENABLED and _all_quests_visually_complete(device, quests):
+            if config.get_device_config(device, "gather_enabled") and _all_quests_visually_complete(device, quests):
                 log.info("All quests visually complete — gathering gold as fallback")
                 if navigate(Screen.MAP, device):
                     gather_gold_loop(device, stop_check)
@@ -673,8 +689,8 @@ def check_quests(device, stop_check=None):
         has_eg = QuestType.EVIL_GUARD in types_active
         has_titan = QuestType.TITAN in types_active
         has_pvp = QuestType.PVP in types_active
-        has_gather = QuestType.GATHER in types_active and config.GATHER_ENABLED
-        has_tower = (QuestType.TOWER in types_active or QuestType.FORTRESS in types_active) and config.TOWER_QUEST_ENABLED
+        has_gather = QuestType.GATHER in types_active and config.get_device_config(device, "gather_enabled")
+        has_tower = (QuestType.TOWER in types_active or QuestType.FORTRESS in types_active) and config.get_device_config(device, "tower_quest_enabled")
 
         # PVP attack first — send 1 troop, then continue other quests while it marches
         if has_pvp:
@@ -752,13 +768,8 @@ def _attack_pvp_tower(device, stop_check=None):
         log.info("PVP on cooldown (%ds remaining), skipping", remaining)
         return False
 
-    # Check troop availability
-    avail = troops_avail(device)
-    if avail < 1:
-        log.info("PVP: no troops available (%d), skipping", avail)
-        return False
-
-    # Navigate to enemy tower via target menu (Enemy tab + target_marker)
+    # Navigate to enemy tower via target menu (Enemy tab + target_marker).
+    # target() navigates to MAP first, so troop check happens after that.
     config.set_device_status(device, "Attacking PVP Tower...")
     result = target(device)
     if result is not True:
@@ -770,6 +781,12 @@ def _attack_pvp_tower(device, stop_check=None):
     if stop_check and stop_check():
         return False
 
+    # Check troop availability (now on MAP screen after target())
+    avail = troops_avail(device)
+    if avail < 1:
+        log.info("PVP: no troops available (%d), skipping", avail)
+        return False
+
     # Tap the tower to open attack menu
     if not tap_tower_until_attack_menu(device, timeout=10):
         log.warning("PVP: attack menu did not open")
@@ -779,8 +796,13 @@ def _attack_pvp_tower(device, stop_check=None):
     if stop_check and stop_check():
         return False
 
-    # Depart — send the troop
-    if not tap_image("depart.png", device):
+    # Wait for troop deployment panel to animate in after attack button tap
+    time.sleep(2)
+
+    # Depart — try PVP-specific template first, fall back to rally template.
+    # Both panels show "DEPART" but render slightly differently.
+    if not (wait_for_image_and_tap("depart_pvp.png", device, timeout=3) or
+            wait_for_image_and_tap("depart.png", device, timeout=3)):
         log.warning("PVP: depart button not found")
         save_failure_screenshot(device, "pvp_depart_fail")
         return False

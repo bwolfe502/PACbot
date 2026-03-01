@@ -11,6 +11,9 @@ Key exports:
 
 import time
 
+import cv2
+import numpy as np
+
 import config
 from config import Screen
 from botlog import get_logger, timed_action
@@ -34,12 +37,41 @@ _MITHRIL_SLOT_Y = 1760
 _MITHRIL_SLOTS_X = [138, 339, 540, 741, 942]
 
 _MITHRIL_MINES = [
-    (240, 720),   # Mine 1
-    (540, 820),   # Mine 2
-    (850, 730),   # Mine 3
-    (230, 1080),  # Mine 4
-    (540, 1200),  # Mine 5
+    (240, 720),   # Mine 1 — top-left
+    (540, 820),   # Mine 2 — top-center
+    (850, 730),   # Mine 3 — top-right
+    (230, 1080),  # Mine 4 — bottom-left
+    (540, 1200),  # Mine 5 — bottom-center
+    (850, 1080),  # Mine 6 — bottom-right
 ]
+
+# Region above each mine to check for the red crossed-swords "occupied" icon.
+# Icon appears ~130-140px above mine center, within ~80px horizontally.
+_OCCUPIED_CHECK_OFFSET_Y = (-180, -60)   # y range relative to mine center
+_OCCUPIED_CHECK_OFFSET_X = (-80, 80)     # x range relative to mine center
+_OCCUPIED_RED_THRESHOLD = 500            # min red pixels to consider occupied
+
+_MITHRIL_SEARCH_BTN = (410, 1380)       # blue SEARCH button below mines
+_MAX_SEARCH_REFRESHES = 3               # max times to refresh for safe mines
+
+
+def _is_mine_occupied(screen, mine_x, mine_y):
+    """Check if a mine has the red crossed-swords icon indicating enemy occupation.
+
+    Scans a region above the mine center for bright red pixels (the swords icon
+    is a red circle with crossed swords).  Returns True if enough red pixels are
+    found, meaning the mine is occupied by an enemy and should be skipped.
+    """
+    y1 = max(0, mine_y + _OCCUPIED_CHECK_OFFSET_Y[0])
+    y2 = min(screen.shape[0], mine_y + _OCCUPIED_CHECK_OFFSET_Y[1])
+    x1 = max(0, mine_x + _OCCUPIED_CHECK_OFFSET_X[0])
+    x2 = min(screen.shape[1], mine_x + _OCCUPIED_CHECK_OFFSET_X[1])
+    region = screen[y1:y2, x1:x2]
+    if region.size == 0:
+        return False
+    # Red swords icon: high R, low G, low B (OpenCV uses BGR)
+    red_mask = (region[:, :, 2] > 180) & (region[:, :, 1] < 100) & (region[:, :, 0] < 100)
+    return int(np.sum(red_mask)) >= _OCCUPIED_RED_THRESHOLD
 
 
 @timed_action("mine_mithril")
@@ -53,7 +85,7 @@ def mine_mithril(device, stop_check=None):
 
     def _stopped():
         """Check both explicit stop signal and global mithril toggle."""
-        return (stop_check and stop_check()) or not config.MITHRIL_ENABLED
+        return (stop_check and stop_check()) or device not in config.MITHRIL_ENABLED_DEVICES
 
     # Step 1: Navigate to kingdom_screen
     if not navigate(Screen.KINGDOM, device):
@@ -93,23 +125,20 @@ def mine_mithril(device, stop_check=None):
         navigate(Screen.MAP, device)
         return False
 
-    # Step 5: Recall occupied slots — troops are always left-aligned, so
-    # returning slot 1 causes the rest to shift left.  Just tap slot 1
-    # up to 5 times; stop early when it's empty.
+    # Step 5: Recall troops — tap each slot right-to-left so that plundered
+    # or empty slots don't interfere (no dependency on left-shift behavior).
     recalled_count = 0
-    slot_x = _MITHRIL_SLOTS_X[0]
-    for i in range(5):
+    for i, slot_x in enumerate(reversed(_MITHRIL_SLOTS_X)):
         if _stopped():
             break
         adb_tap(device, slot_x, _MITHRIL_SLOT_Y)
         timed_wait(device, lambda: False, 1, "mithril_slot_tap")
         if wait_for_image_and_tap("mithril_return.png", device, timeout=2, threshold=0.7):
-            log.debug("Recall %d: RETURN found, recalled", i + 1)
+            log.debug("Recall slot %d: RETURN found, recalled", 5 - i)
             recalled_count += 1
             timed_wait(device, lambda: False, 1.5, "mithril_recall_anim")
         else:
-            log.debug("Recall %d: slot empty, all troops recalled", i + 1)
-            break
+            log.debug("Recall slot %d: empty or plundered, skipping", 5 - i)
 
     if recalled_count > 0:
         log.info("Recalled %d troops from mithril mines", recalled_count)
@@ -122,47 +151,85 @@ def mine_mithril(device, stop_check=None):
         navigate(Screen.MAP, device)
         return False
 
-    # Step 6: Deploy to mines — use device total troops from UI spinbox,
-    # fall back to recalled_count if troops were in mines.
+    # Step 6: Deploy to mines — scan for safe mines, deploy what we can,
+    # then SEARCH to refresh and deploy remaining troops if needed.
     total = config.DEVICE_TOTAL_TROOPS.get(device, 5)
     max_deploys = min(recalled_count if recalled_count > 0 else total, total)
-    mines_to_deploy = _MITHRIL_MINES[:max_deploys]
     deployed_count = 0
-    for i, (mine_x, mine_y) in enumerate(mines_to_deploy):
-        if _stopped():
+
+    for page in range(_MAX_SEARCH_REFRESHES + 1):  # 0 = initial, 1..N = refreshes
+        if _stopped() or deployed_count >= max_deploys:
             break
-        log.debug("Deploying to mine %d at (%d, %d)", i + 1, mine_x, mine_y)
-        adb_tap(device, mine_x, mine_y)  # Tap mine
-        timed_wait(device, lambda: False, 3, "mithril_mine_popup")
 
-        # Look for ATTACK button in the mine popup
-        if not wait_for_image_and_tap("mithril_attack.png", device, timeout=5, threshold=0.7):
-            save_failure_screenshot(device, f"mithril_no_attack_mine{i+1}")
-            if recalled_count == 0:
-                # First run — no recall data; no ATTACK likely means no troops left
-                log.info("Mine %d: no ATTACK button, no more troops available", i + 1)
-                adb_tap(device, 900, 500)  # dismiss popup
-                timed_wait(device, lambda: False, 1, "mithril_dismiss_no_attack")
+        # Screenshot and find safe (unoccupied) mines on this page
+        screen = load_screenshot(device)
+        safe_mines = []
+        for i, (mine_x, mine_y) in enumerate(_MITHRIL_MINES):
+            if _is_mine_occupied(screen, mine_x, mine_y):
+                log.debug("Mine %d (%d, %d): enemy occupied — skipping",
+                          i + 1, mine_x, mine_y)
+            else:
+                safe_mines.append((i, mine_x, mine_y))
+        remaining = max_deploys - deployed_count
+        log.info("Page %d: %d safe mines, %d troops remaining",
+                 page + 1, len(safe_mines), remaining)
+
+        # Deploy to safe mines on this page
+        for mine_idx, mine_x, mine_y in safe_mines:
+            if _stopped() or deployed_count >= max_deploys:
                 break
-            log.warning("Mine %d: no ATTACK button (occupied or missed)", i + 1)
-            adb_tap(device, 900, 500)  # dismiss popup
-            timed_wait(device, lambda: False, 1, "mithril_dismiss_occupied")
-            continue
-        timed_wait(device, lambda: False, 2, "mithril_attack_to_depart")
+            log.debug("Deploying to mine %d at (%d, %d)",
+                      mine_idx + 1, mine_x, mine_y)
+            adb_tap(device, mine_x, mine_y)
+            timed_wait(device, lambda: False, 3, "mithril_mine_popup")
 
-        # Wait for troop selection screen and tap DEPART
-        if wait_for_image_and_tap("mithril_depart.png", device, timeout=4, threshold=0.7):
-            deployed_count += 1
-            if deployed_count == 1:
-                config.MITHRIL_DEPLOY_TIME[device] = time.time()
-            timed_wait(device, lambda: False, 2, "mithril_deploy_anim")
-        else:
-            log.warning("Mine %d: depart button not found after ATTACK", i + 1)
-            save_failure_screenshot(device, f"mithril_depart_fail_mine{i+1}")
-            adb_tap(device, 900, 500)  # dismiss overlay
-            timed_wait(device, lambda: False, 1, "mithril_dismiss_depart_fail")
+            # Look for ATTACK button in the mine popup
+            if not wait_for_image_and_tap(
+                    "mithril_attack.png", device, timeout=5, threshold=0.7):
+                save_failure_screenshot(
+                    device, f"mithril_no_attack_mine{mine_idx+1}")
+                if recalled_count == 0 and deployed_count == 0:
+                    log.info("Mine %d: no ATTACK button, no troops available",
+                             mine_idx + 1)
+                    adb_tap(device, 900, 500)
+                    timed_wait(device, lambda: False, 1,
+                               "mithril_dismiss_no_attack")
+                    break
+                log.warning("Mine %d: no ATTACK button (missed tap?)",
+                            mine_idx + 1)
+                adb_tap(device, 900, 500)
+                timed_wait(device, lambda: False, 1,
+                           "mithril_dismiss_occupied")
+                continue
+            timed_wait(device, lambda: False, 2, "mithril_attack_to_depart")
 
-    log.info("Deployed %d/%d troops to mithril mines", deployed_count, max_deploys)
+            # Wait for troop selection screen and tap DEPART
+            if wait_for_image_and_tap(
+                    "mithril_depart.png", device, timeout=4, threshold=0.7):
+                deployed_count += 1
+                if deployed_count == 1:
+                    config.MITHRIL_DEPLOY_TIME[device] = time.time()
+                timed_wait(device, lambda: False, 2, "mithril_deploy_anim")
+            else:
+                log.warning("Mine %d: depart not found after ATTACK",
+                            mine_idx + 1)
+                save_failure_screenshot(
+                    device, f"mithril_depart_fail_mine{mine_idx+1}")
+                adb_tap(device, 900, 500)
+                timed_wait(device, lambda: False, 1,
+                           "mithril_dismiss_depart_fail")
+
+        # If still more troops to deploy, SEARCH for a fresh page
+        if deployed_count < max_deploys and page < _MAX_SEARCH_REFRESHES:
+            if _stopped():
+                break
+            log.info("Deployed %d/%d so far — refreshing mines",
+                     deployed_count, max_deploys)
+            adb_tap(device, *_MITHRIL_SEARCH_BTN)
+            timed_wait(device, lambda: False, 3, "mithril_search_refresh")
+
+    log.info("Deployed %d/%d troops to mithril mines",
+             deployed_count, max_deploys)
 
     # Step 7: Navigate back to map screen
     tap_image("back_arrow.png", device, threshold=0.7)  # Back from Advanced Mithril
@@ -181,11 +248,11 @@ def mine_mithril_if_due(device, stop_check=None):
     Safe to call frequently — returns immediately if not due.
     Designed to be called from other auto task runners between action cycles.
     """
-    if not config.MITHRIL_ENABLED:
+    if device not in config.MITHRIL_ENABLED_DEVICES:
         return
     last = config.LAST_MITHRIL_TIME.get(device, 0)
     elapsed = time.time() - last
-    if elapsed < config.MITHRIL_INTERVAL * 60:
+    if elapsed < config.get_device_config(device, "mithril_interval") * 60:
         return
     log = get_logger("actions", device)
     log.info("Mithril mining due (%.0f min since last) — running between actions",
@@ -227,13 +294,14 @@ def gather_gold(device, stop_check=None):
     """
     log = get_logger("actions", device)
 
-    if config.AUTO_HEAL_ENABLED:
+    if config.get_device_config(device, "auto_heal"):
         heal_all(device)
 
     troops = troops_avail(device)
-    if troops <= config.MIN_TROOPS_AVAILABLE:
+    min_troops = config.get_device_config(device, "min_troops")
+    if troops <= min_troops:
         log.warning("Not enough troops (have %d, need more than %d)",
-                    troops, config.MIN_TROOPS_AVAILABLE)
+                    troops, min_troops)
         return False
 
     if not navigate(Screen.MAP, device):
@@ -252,7 +320,7 @@ def gather_gold(device, stop_check=None):
     timed_wait(device, lambda: False, 0.8, "gather_tab_load")
 
     # Step 3: Set mine level
-    _set_gather_level(device, config.GATHER_MINE_LEVEL)
+    _set_gather_level(device, config.get_device_config(device, "gather_mine_level"))
 
     if stop_check and stop_check():
         return False
@@ -316,7 +384,7 @@ def gather_gold_loop(device, stop_check=None):
     """Deploy up to GATHER_MAX_TROOPS troops to gold mines.
     Returns the number of troops successfully deployed."""
     log = get_logger("actions", device)
-    max_troops = config.GATHER_MAX_TROOPS
+    max_troops = config.get_device_config(device, "gather_max_troops")
     deployed = 0
 
     for i in range(max_troops):
@@ -328,9 +396,10 @@ def gather_gold_loop(device, stop_check=None):
             navigate(Screen.MAP, device)
 
         troops = troops_avail(device)
-        if troops <= config.MIN_TROOPS_AVAILABLE:
+        min_troops = config.get_device_config(device, "min_troops")
+        if troops <= min_troops:
             log.info("Not enough troops for more gathers (%d available, min %d)",
-                     troops, config.MIN_TROOPS_AVAILABLE)
+                     troops, min_troops)
             break
 
         log.info("Deploying gather troop %d/%d", i + 1, max_troops)

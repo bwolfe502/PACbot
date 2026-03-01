@@ -4,6 +4,16 @@
 {% block content %}
 <h1>Settings</h1>
 
+<!-- Device Tabs -->
+{% if all_devices %}
+<div class="settings-tabs">
+    <a href="/settings" class="settings-tab active">Global</a>
+    {% for dev in all_devices %}
+    <a href="/settings/device/{{ dev.id }}" class="settings-tab">{{ dev.name }}</a>
+    {% endfor %}
+</div>
+{% endif %}
+
 <form method="post" action="/settings">
     <!-- General -->
     <div class="card">

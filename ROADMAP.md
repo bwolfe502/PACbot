@@ -101,6 +101,12 @@ Clean up the interface and codebase structure for long-term maintainability.
 
 - [x] Web dashboard — mobile-friendly Flask remote control (toggle switches, action chips, device cards)
 - [x] Status text system — Title Case, expanded abbreviations, phase-specific statuses for rally_eg
+- [x] Multi-device sharing — token-based per-device URLs with full control and read-only access levels
+- [x] Per-device settings — device_settings overrides in settings.json, device tabs on settings page
+- [x] Live View — MJPEG streaming with polling fallback (works through relay tunnel)
+- [x] Collapsible controls — toggle between full switches and compact status pills
+- [x] Mithril countdown timer — purple accent timer in device header
+- [x] Quit button + clean process exit — `os._exit(0)` after pywebview closes
 - [ ] Clean up settings layout — currently cluttered
 - [ ] Reorganize "More Actions" section
 - [ ] Clean up file and folder structure — organize `elements/`, consolidate debug dirs
@@ -131,7 +137,7 @@ Entirely new game automations.
 Quality-of-life features that make the bot feel polished.
 
 ### Quick Wins
-- [ ] QR code for phone connection — render scannable QR in console/pywebview window on startup (LAN URL). No more typing IP addresses. (`qrcode` library, ~3 lines)
+- [x] QR code for phone connection — QR code button on access banner + share modal, generates via `/api/qr` endpoint
 - [ ] Session summary — on stop or on demand, show recap: runtime, rally count, gathers, heals, errors. Data already in `StatsTracker`, just needs a `summarize()` method and a dashboard card/endpoint
 
 ### Notifications
