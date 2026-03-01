@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+{% block title_suffix %} - Quick Start{% endblock %}
+
+{% block content %}
+
+<div class="guide">
+
+<h1 class="guide-title">Quick Start Guide</h1>
+<p class="guide-subtitle">Get up and running in a few minutes.</p>
+
+<!-- Step 1 -->
+<div class="guide-step">
+    <div class="guide-step-num">1</div>
+    <div class="guide-step-body">
+        <h2>Set Up Your Emulator</h2>
+        <p>Before launching 9Bot, your emulator needs two settings:</p>
+        <div class="guide-checklist">
+            <div class="guide-check">
+                <span class="guide-check-icon">&#9744;</span>
+                <div>
+                    <strong>Screen resolution</strong> &mdash; set to <span class="guide-code">1080 x 1920</span> (portrait)
+                    <div class="guide-hint">BlueStacks: Settings &rarr; Display &rarr; Resolution &rarr; Custom<br>
+                    MuMu: Settings &rarr; Display &rarr; 1080x1920</div>
+                </div>
+            </div>
+            <div class="guide-check">
+                <span class="guide-check-icon">&#9744;</span>
+                <div>
+                    <strong>ADB enabled</strong> &mdash; allows 9Bot to control the emulator
+                    <div class="guide-hint">BlueStacks: Settings &rarr; Advanced &rarr; Enable Android Debug Bridge<br>
+                    MuMu: Already enabled by default</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Step 2 -->
+<div class="guide-step">
+    <div class="guide-step-num">2</div>
+    <div class="guide-step-body">
+        <h2>Launch 9Bot</h2>
+        <p>Double-click <span class="guide-code">run.bat</span> in the 9Bot folder.</p>
+        <div class="guide-note">
+            First launch takes a few minutes &mdash; it downloads some files automatically. Future launches are fast.
+        </div>
+    </div>
+</div>
+
+<!-- Step 3 -->
+<div class="guide-step">
+    <div class="guide-step-num">3</div>
+    <div class="guide-step-body">
+        <h2>Open the Game</h2>
+        <p>In your emulator, open the game and wait until you're on the <strong>map screen</strong> (the main world view where you can see your castle).</p>
+        <div class="guide-note">
+            9Bot needs the game to be on the map screen before starting any tasks.
+        </div>
+    </div>
+</div>
+
+<!-- Step 4 -->
+<div class="guide-step">
+    <div class="guide-step-num">4</div>
+    <div class="guide-step-body">
+        <h2>Turn On What You Need</h2>
+        <p>On the Dashboard, find the <strong>Controls</strong> section under your device and tap the toggles:</p>
+        <div class="guide-modes">
+            <div class="guide-mode">
+                <span class="guide-mode-dot guide-mode-farming"></span>
+                <div>
+                    <strong>Auto Quest</strong>
+                    <div class="guide-hint">Automatically does your alliance quests &mdash; titans, evil guards, gold, and more</div>
+                </div>
+            </div>
+            <div class="guide-mode">
+                <span class="guide-mode-dot guide-mode-farming"></span>
+                <div>
+                    <strong>Mine Mithril</strong>
+                    <div class="guide-hint">Sends all troops to advanced mithril on a timer &mdash; pulls them out before the 20-minute vulnerability window</div>
+                </div>
+            </div>
+            <div class="guide-mode">
+                <span class="guide-mode-dot guide-mode-combat"></span>
+                <div>
+                    <strong>Pass Battle</strong>
+                    <div class="guide-hint">Reinforces the pass and joins pass rallies during Broken Lands</div>
+                </div>
+            </div>
+            <div class="guide-mode">
+                <span class="guide-mode-dot guide-mode-combat"></span>
+                <div>
+                    <strong>Occupy Towers</strong>
+                    <div class="guide-hint">Attacks and captures enemy territory towers on the Broken Lands grid</div>
+                </div>
+            </div>
+            <div class="guide-mode">
+                <span class="guide-mode-dot guide-mode-combat"></span>
+                <div>
+                    <strong>Reinforce Throne</strong>
+                    <div class="guide-hint">Keeps troops reinforcing the throne so your alliance holds it</div>
+                </div>
+            </div>
+        </div>
+        <div class="guide-note">
+            Just turn on what you need &mdash; you don't have to use everything at once.
+        </div>
+    </div>
+</div>
+
+<!-- Step 5 -->
+<div class="guide-step">
+    <div class="guide-step-num">5</div>
+    <div class="guide-step-body">
+        <h2>Control from Your Phone</h2>
+        <p>Want to check on things from your phone? Tap <strong>Copy</strong> or <strong>QR</strong> at the top of the Dashboard to get the link.</p>
+        <div class="guide-note">
+            If you're on the same Wi-Fi, use the local link. If you're away from home, remote access works automatically.
+        </div>
+        <p style="margin-top:10px">You can also run someone else's account on your computer and share just that device with them. Tap the <strong>Share</strong> button on a device card to get a link they can use from their phone to control or monitor their own account.</p>
+    </div>
+</div>
+
+<div class="guide-divider"></div>
+
+<!-- Tips -->
+<h2 class="guide-section-title">Good to Know</h2>
+
+<div class="guide-tips">
+    <div class="guide-tip">
+        <span class="guide-tip-icon">&#128161;</span>
+        <div>
+            <strong>Stop All</strong> button at the bottom instantly stops everything. Use it anytime.
+        </div>
+    </div>
+    <div class="guide-tip">
+        <span class="guide-tip-icon">&#128161;</span>
+        <div>
+            <strong>Settings</strong> page lets you customize intervals, AP restoration, team color, and more. Changes are saved when you click Save.
+        </div>
+    </div>
+    <div class="guide-tip">
+        <span class="guide-tip-icon">&#128161;</span>
+        <div>
+            <strong>Live View</strong> button on each device card shows what your emulator screen looks like right now.
+        </div>
+    </div>
+    <div class="guide-tip">
+        <span class="guide-tip-icon">&#128161;</span>
+        <div>
+            <strong>Status colors</strong> tell you what's happening: <span style="color:#64d8ff">cyan</span> = working, <span style="color:#ffb74d">amber</span> = waiting, <span style="color:#ff6b6b">red</span> = stopping, <span style="color:#667">gray</span> = idle.
+        </div>
+    </div>
+    <div class="guide-tip">
+        <span class="guide-tip-icon">&#128161;</span>
+        <div>
+            <strong>Something wrong?</strong> Check the <a href="/debug" data-relay-href style="color:#64d8ff">Debug</a> page for screenshots and logs, or use the bug report button to send a report.
+        </div>
+    </div>
+</div>
+
+</div>
+
+{% endblock %}

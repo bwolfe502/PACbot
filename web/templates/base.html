@@ -10,7 +10,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:ital,wght@1,700&text=9&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=56">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=57">
 </head>
 <body class="{% block body_class %}{% endblock %}">
     <nav>
@@ -25,6 +25,7 @@
         <div class="nav-links">
             <a href="/" class="{% if request.path == '/' %}active{% endif %}" data-relay-href>Dashboard</a>
             <a href="/settings" class="{% if request.path == '/settings' or request.path == '/territory' %}active{% endif %}" data-relay-href>Settings</a>
+            <a href="/guide" class="{% if request.path == '/guide' %}active{% endif %}" data-relay-href>Guide</a>
         </div>
         {% endif %}
     </nav>

@@ -349,6 +349,10 @@ def create_app():
                                device_troops=device_troops,
                                all_devices=all_devices)
 
+    @app.route("/guide")
+    def guide_page():
+        return render_template("guide.html")
+
     @app.route("/debug")
     def debug_page():
         detected, _ = _cached_devices()
