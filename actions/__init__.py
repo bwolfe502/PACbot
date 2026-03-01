@@ -41,7 +41,7 @@ from actions.rallies import (
 # -- combat --
 from actions.combat import (
     attack, phantom_clash_attack, reinforce_throne,
-    target, teleport,
+    target, teleport, teleport_benchmark,
     _detect_player_at_eg,
 )
 

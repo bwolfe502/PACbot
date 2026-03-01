@@ -4,13 +4,23 @@ Covers: _check_dead, _find_green_pixel, _detect_player_at_eg, teleport.
 All ADB and vision calls are mocked — no emulator needed.
 """
 
+import json
+import os
 import time
 import numpy as np
 from unittest.mock import patch, MagicMock, call
 
 import config
 from config import Screen
-from actions.combat import _check_dead, _find_green_pixel, _detect_player_at_eg, teleport
+from actions.combat import (
+    _check_dead, _find_green_pixel, _detect_player_at_eg, teleport,
+    _check_green_at_current_position,
+    _strategy_random_pan, _strategy_big_pan, _strategy_edge_pan,
+    _strategy_territory_guided, _COMPASS_DIRS,
+    _run_trial, _print_benchmark_summary, teleport_benchmark,
+    TeleportAttempt, TeleportTrial,
+    _STRATEGIES, _DEFAULT_STRATEGIES,
+)
 
 
 # ============================================================
@@ -464,3 +474,513 @@ class TestTeleport:
 
         result = teleport(mock_device)
         assert result is False
+
+
+# ============================================================
+# _check_green_at_current_position
+# ============================================================
+
+class TestCheckGreenAtCurrentPosition:
+    """Tests for the extracted helper that long-presses, taps TELEPORT,
+    and polls for the green boundary circle."""
+
+    @patch("actions.combat.save_failure_screenshot", return_value="/tmp/green.png")
+    @patch("actions.combat.find_image")
+    @patch("actions.combat.time.sleep")
+    @patch("actions.combat.time.time")
+    @patch("actions.combat.logged_tap")
+    @patch("actions.combat.adb_swipe")
+    @patch("actions.combat.load_screenshot")
+    @patch("actions.combat._check_dead", return_value=False)
+    def test_green_found_first_check(
+        self, mock_dead, mock_screenshot, mock_swipe, mock_tap,
+        mock_time, mock_sleep, mock_find, mock_save, mock_device
+    ):
+        """Green circle on first poll → returns (True, path, elapsed)."""
+        mock_time.side_effect = _make_time_counter(step=0.1)
+        green_screen = np.zeros((1920, 1080, 3), dtype=np.uint8)
+        green_screen[350:380, 200:400] = [0, 255, 0]
+        mock_screenshot.return_value = green_screen
+
+        result, ss_path, elapsed = _check_green_at_current_position(
+            mock_device, np.zeros((50, 50, 3), dtype=np.uint8))
+
+        assert result is True
+        assert ss_path == "/tmp/green.png"
+        # Long-press opens context menu
+        mock_swipe.assert_called_once_with(mock_device, 540, 1400, 540, 1400, 1000)
+        # TELEPORT button tapped
+        mock_tap.assert_called_once_with(mock_device, 780, 1400, "tp_search_btn")
+
+    @patch("actions.combat.save_failure_screenshot")
+    @patch("actions.combat.find_image")
+    @patch("actions.combat.time.sleep")
+    @patch("actions.combat.time.time")
+    @patch("actions.combat.logged_tap")
+    @patch("actions.combat.adb_swipe")
+    @patch("actions.combat.load_screenshot")
+    @patch("actions.combat._check_dead", return_value=False)
+    def test_no_green_cancel_visible(
+        self, mock_dead, mock_screenshot, mock_swipe, mock_tap,
+        mock_time, mock_sleep, mock_find, mock_save, mock_device
+    ):
+        """No green found, cancel.png visible → taps cancel, returns (False, None, elapsed)."""
+        mock_time.side_effect = _make_time_counter(step=1.5)
+        mock_screenshot.return_value = np.zeros((1920, 1080, 3), dtype=np.uint8)
+        # find_image returns cancel match: (score, (x, y), h, w)
+        mock_find.return_value = (0.9, (300, 1600), 50, 120)
+
+        result, ss_path, elapsed = _check_green_at_current_position(
+            mock_device, np.zeros((50, 50, 3), dtype=np.uint8))
+
+        assert result is False
+        assert ss_path is None
+        # Verify cancel was tapped: x=300+60=360, y=1600+25=1625
+        cancel_calls = [c for c in mock_tap.call_args_list
+                        if len(c.args) >= 4 and c.args[3] == "tp_cancel"]
+        assert len(cancel_calls) == 1
+        assert cancel_calls[0].args[1:3] == (360, 1625)
+
+    @patch("actions.combat.save_failure_screenshot")
+    @patch("actions.combat.find_image", return_value=None)
+    @patch("actions.combat.time.sleep")
+    @patch("actions.combat.time.time")
+    @patch("actions.combat.logged_tap")
+    @patch("actions.combat.adb_swipe")
+    @patch("actions.combat.load_screenshot")
+    @patch("actions.combat._check_dead", return_value=False)
+    def test_no_green_no_cancel(
+        self, mock_dead, mock_screenshot, mock_swipe, mock_tap,
+        mock_time, mock_sleep, mock_find, mock_save, mock_device
+    ):
+        """No green found, no cancel button → returns (False, None, elapsed)."""
+        mock_time.side_effect = _make_time_counter(step=1.5)
+        mock_screenshot.return_value = np.zeros((1920, 1080, 3), dtype=np.uint8)
+
+        result, ss_path, elapsed = _check_green_at_current_position(
+            mock_device, np.zeros((50, 50, 3), dtype=np.uint8))
+
+        assert result is False
+        assert ss_path is None
+        # No tp_cancel tap since cancel.png wasn't found
+        cancel_calls = [c for c in mock_tap.call_args_list
+                        if len(c.args) >= 4 and c.args[3] == "tp_cancel"]
+        assert len(cancel_calls) == 0
+
+    @patch("actions.combat.save_failure_screenshot")
+    @patch("actions.combat.find_image")
+    @patch("actions.combat.time.sleep")
+    @patch("actions.combat.time.time")
+    @patch("actions.combat.logged_tap")
+    @patch("actions.combat.adb_swipe")
+    @patch("actions.combat.load_screenshot")
+    @patch("actions.combat._check_dead", return_value=True)
+    def test_dead_detected(
+        self, mock_dead, mock_screenshot, mock_swipe, mock_tap,
+        mock_time, mock_sleep, mock_find, mock_save, mock_device
+    ):
+        """dead.png found → returns (None, None, elapsed)."""
+        mock_time.side_effect = _make_time_counter(step=0.1)
+        mock_screenshot.return_value = np.zeros((1920, 1080, 3), dtype=np.uint8)
+
+        result, ss_path, elapsed = _check_green_at_current_position(
+            mock_device, np.zeros((50, 50, 3), dtype=np.uint8))
+
+        assert result is None
+        assert ss_path is None
+
+    @patch("actions.combat.save_failure_screenshot")
+    @patch("actions.combat.find_image", return_value=None)
+    @patch("actions.combat.time.sleep")
+    @patch("actions.combat.time.time")
+    @patch("actions.combat.logged_tap")
+    @patch("actions.combat.adb_swipe")
+    @patch("actions.combat.load_screenshot", return_value=None)
+    @patch("actions.combat._check_dead", return_value=False)
+    def test_none_screenshot_no_crash(
+        self, mock_dead, mock_screenshot, mock_swipe, mock_tap,
+        mock_time, mock_sleep, mock_find, mock_save, mock_device
+    ):
+        """load_screenshot returns None every time → returns (False, None, elapsed).
+        Does not try to find cancel.png since screen is None."""
+        mock_time.side_effect = _make_time_counter(step=1.5)
+
+        result, ss_path, elapsed = _check_green_at_current_position(
+            mock_device, np.zeros((50, 50, 3), dtype=np.uint8))
+
+        assert result is False
+        assert ss_path is None
+        # find_image should not be called since screen stayed None
+        mock_find.assert_not_called()
+
+
+# ============================================================
+# teleport dry_run mode
+# ============================================================
+
+class TestTeleportDryRun:
+    """Tests for teleport(device, dry_run=True)."""
+
+    @patch("actions.combat._check_green_at_current_position")
+    @patch("actions.combat._check_dead", return_value=False)
+    @patch("actions.combat.tap_image")
+    @patch("actions.combat.save_failure_screenshot")
+    @patch("actions.combat.time.sleep")
+    @patch("actions.combat.time.time")
+    @patch("actions.combat.adb_swipe")
+    @patch("actions.combat.logged_tap")
+    @patch("actions.combat.load_screenshot")
+    @patch("actions.combat.get_template")
+    @patch("actions.combat.check_screen", return_value=Screen.MAP)
+    @patch("actions.combat.heal_all")
+    @patch("actions.combat.all_troops_home")
+    @patch("actions.combat.clear_click_trail")
+    def test_dry_run_skips_troop_check_and_heal(
+        self, mock_clear, mock_troops, mock_heal, mock_check,
+        mock_template, mock_screenshot, mock_tap, mock_swipe,
+        mock_time, mock_sleep, mock_save_fail, mock_tap_img,
+        mock_dead, mock_green, mock_device
+    ):
+        """dry_run=True → all_troops_home and heal_all NOT called."""
+        config.AUTO_HEAL_ENABLED = True
+        mock_time.side_effect = _make_time_counter(step=0.1)
+        mock_template.return_value = np.zeros((50, 50, 3), dtype=np.uint8)
+        mock_screenshot.return_value = np.zeros((1920, 1080, 3), dtype=np.uint8)
+        mock_green.return_value = (True, "/tmp/green.png", 1.0)
+
+        result = teleport(mock_device, dry_run=True)
+
+        assert result is True
+        mock_troops.assert_not_called()
+        mock_heal.assert_not_called()
+
+    @patch("actions.combat._check_green_at_current_position")
+    @patch("actions.combat._check_dead", return_value=False)
+    @patch("actions.combat.tap_image")
+    @patch("actions.combat.save_failure_screenshot")
+    @patch("actions.combat.time.sleep")
+    @patch("actions.combat.time.time")
+    @patch("actions.combat.adb_swipe")
+    @patch("actions.combat.logged_tap")
+    @patch("actions.combat.load_screenshot")
+    @patch("actions.combat.get_template")
+    @patch("actions.combat.check_screen", return_value=Screen.MAP)
+    @patch("actions.combat.heal_all")
+    @patch("actions.combat.all_troops_home")
+    @patch("actions.combat.clear_click_trail")
+    def test_dry_run_cancels_on_green(
+        self, mock_clear, mock_troops, mock_heal, mock_check,
+        mock_template, mock_screenshot, mock_tap, mock_swipe,
+        mock_time, mock_sleep, mock_save_fail, mock_tap_img,
+        mock_dead, mock_green, mock_device
+    ):
+        """dry_run=True + green found → taps cancel.png, returns True."""
+        config.AUTO_HEAL_ENABLED = False
+        mock_time.side_effect = _make_time_counter(step=0.1)
+        mock_template.return_value = np.zeros((50, 50, 3), dtype=np.uint8)
+        mock_screenshot.return_value = np.zeros((1920, 1080, 3), dtype=np.uint8)
+        mock_green.return_value = (True, "/tmp/green.png", 1.0)
+
+        result = teleport(mock_device, dry_run=True)
+
+        assert result is True
+        mock_tap_img.assert_called_once_with("cancel.png", mock_device)
+        # Confirm tap should NOT be called (no tp_confirm logged_tap)
+        confirm_calls = [c for c in mock_tap.call_args_list
+                         if len(c.args) >= 4 and c.args[3] == "tp_confirm"]
+        assert len(confirm_calls) == 0
+
+    @patch("actions.combat.check_screen", return_value=Screen.BATTLE_LIST)
+    @patch("actions.combat.clear_click_trail")
+    def test_dry_run_not_on_map_returns_false(
+        self, mock_clear, mock_check, mock_device
+    ):
+        """dry_run=True but not on MAP → returns False."""
+        result = teleport(mock_device, dry_run=True)
+        assert result is False
+
+
+# ============================================================
+# Strategy functions
+# ============================================================
+
+class TestStrategies:
+    """Tests for teleport benchmark camera-positioning strategies."""
+
+    @patch("actions.combat.time.sleep")
+    @patch("actions.combat.adb_swipe")
+    def test_random_pan_coordinates_in_range(self, mock_swipe, mock_sleep,
+                                              mock_device):
+        """random_pan: swipe endpoint within x:[100,980], y:[500,1400]."""
+        _strategy_random_pan(mock_device, 0)
+        mock_swipe.assert_called_once()
+        _, x_end, y_end, _ = mock_swipe.call_args.args[2:]
+        assert 100 <= x_end <= 980
+        assert 500 <= y_end <= 1400
+
+    @patch("actions.combat.time.sleep")
+    @patch("actions.combat.adb_swipe")
+    def test_big_pan_coordinates_in_range(self, mock_swipe, mock_sleep,
+                                           mock_device):
+        """big_pan: swipe endpoint within x:[100,980], y:[300,1600]."""
+        _strategy_big_pan(mock_device, 0)
+        mock_swipe.assert_called_once()
+        _, x_end, y_end, _ = mock_swipe.call_args.args[2:]
+        assert 100 <= x_end <= 980
+        assert 300 <= y_end <= 1600
+
+    @patch("actions.combat.time.sleep")
+    @patch("actions.combat.adb_swipe")
+    def test_edge_pan_cycles_compass_directions(self, mock_swipe, mock_sleep,
+                                                  mock_device):
+        """edge_pan: attempt_num 0 uses N, 8 wraps back to N."""
+        # Attempt 0 → direction N = (0, -1) → x stays at 540, y goes up
+        _strategy_edge_pan(mock_device, 0)
+        args = mock_swipe.call_args.args
+        assert args[1] == 540  # start_x
+        assert args[2] == 960  # start_y
+        assert args[3] == 540  # end_x stays centered (dx=0)
+        assert args[4] < 960   # end_y goes up (dy=-1)
+
+        mock_swipe.reset_mock()
+
+        # Attempt 2 → direction E = (1, 0) → x goes right, y stays
+        _strategy_edge_pan(mock_device, 2)
+        args = mock_swipe.call_args.args
+        assert args[3] > 540   # end_x goes right (dx=1)
+        assert args[4] == 960  # end_y stays centered (dy=0)
+
+    @patch("actions.combat.time.sleep")
+    @patch("actions.combat.adb_tap")
+    @patch("actions.combat.navigate")
+    def test_territory_guided_happy_path(self, mock_nav, mock_tap,
+                                          mock_sleep, mock_device):
+        """territory_guided: navigates to TERRITORY, taps square, returns to MAP."""
+        mock_nav.return_value = True
+
+        with patch("actions.combat.random.randint") as mock_rand:
+            # First two calls: row=5, col=5 (not throne)
+            mock_rand.side_effect = [5, 5, 450]
+            _strategy_territory_guided(mock_device, 0)
+
+        assert mock_nav.call_count == 2
+        mock_nav.assert_any_call(Screen.TERRITORY, mock_device)
+        mock_nav.assert_any_call(Screen.MAP, mock_device)
+        mock_tap.assert_called_once()  # tapped the grid square
+
+    @patch("actions.combat._strategy_random_pan")
+    @patch("actions.combat.time.sleep")
+    @patch("actions.combat.navigate")
+    def test_territory_guided_nav_failure_falls_back(
+        self, mock_nav, mock_sleep, mock_fallback, mock_device
+    ):
+        """territory_guided: TERRITORY nav fails → falls back to random_pan."""
+        mock_nav.side_effect = [False, True]  # TERRITORY fails, MAP succeeds
+
+        _strategy_territory_guided(mock_device, 0)
+
+        mock_fallback.assert_called_once_with(mock_device, 0)
+
+
+# ============================================================
+# _run_trial
+# ============================================================
+
+class TestRunTrial:
+    """Tests for the benchmark trial runner."""
+
+    @patch("actions.combat.tap_image")
+    @patch("actions.combat._check_green_at_current_position")
+    @patch("actions.combat._check_dead", return_value=False)
+    @patch("actions.combat.time.sleep")
+    @patch("actions.combat.time.time")
+    @patch("actions.combat.logged_tap")
+    @patch("actions.combat.load_screenshot")
+    @patch("actions.combat.get_template")
+    @patch("actions.combat.navigate", return_value=True)
+    def test_success_first_attempt(
+        self, mock_nav, mock_template, mock_screenshot, mock_tap,
+        mock_time, mock_sleep, mock_dead, mock_green, mock_tap_img,
+        mock_device
+    ):
+        """Green found on first attempt → TeleportTrial with success=True."""
+        mock_time.side_effect = _make_time_counter(step=0.1)
+        mock_template.return_value = np.zeros((50, 50, 3), dtype=np.uint8)
+        mock_screenshot.return_value = np.zeros((1920, 1080, 3), dtype=np.uint8)
+        mock_green.return_value = (True, "/tmp/ss.png", 1.0)
+
+        strategy_fn = MagicMock()
+        trial = _run_trial(mock_device, "test_strat", strategy_fn, 1)
+
+        assert trial.success is True
+        assert trial.strategy == "test_strat"
+        assert trial.trial_num == 1
+        assert trial.total_attempts == 1
+        assert len(trial.attempts) == 1
+        assert trial.attempts[0].success is True
+        # Cancel tapped (benchmark always dry-runs)
+        mock_tap_img.assert_called_with("cancel.png", mock_device)
+
+    @patch("actions.combat._check_green_at_current_position")
+    @patch("actions.combat._check_dead", return_value=False)
+    @patch("actions.combat.time.sleep")
+    @patch("actions.combat.time.time")
+    @patch("actions.combat.logged_tap")
+    @patch("actions.combat.load_screenshot")
+    @patch("actions.combat.get_template")
+    @patch("actions.combat.navigate", return_value=True)
+    def test_all_attempts_fail(
+        self, mock_nav, mock_template, mock_screenshot, mock_tap,
+        mock_time, mock_sleep, mock_dead, mock_green, mock_device
+    ):
+        """No green found after max attempts → TeleportTrial with success=False."""
+        mock_time.side_effect = _make_time_counter(step=0.5)
+        mock_template.return_value = np.zeros((50, 50, 3), dtype=np.uint8)
+        mock_screenshot.return_value = np.zeros((1920, 1080, 3), dtype=np.uint8)
+        mock_green.return_value = (False, None, 1.0)
+
+        strategy_fn = MagicMock()
+        trial = _run_trial(mock_device, "test_strat", strategy_fn, 1,
+                           max_attempts=3, timeout_s=90)
+
+        assert trial.success is False
+        assert trial.total_attempts == 3
+        assert len(trial.attempts) == 3
+        assert all(not a.success for a in trial.attempts)
+
+    @patch("actions.combat._check_green_at_current_position")
+    @patch("actions.combat._check_dead", return_value=False)
+    @patch("actions.combat.time.sleep")
+    @patch("actions.combat.time.time")
+    @patch("actions.combat.logged_tap")
+    @patch("actions.combat.load_screenshot")
+    @patch("actions.combat.get_template")
+    @patch("actions.combat.navigate", return_value=True)
+    def test_dead_aborts_trial(
+        self, mock_nav, mock_template, mock_screenshot, mock_tap,
+        mock_time, mock_sleep, mock_dead, mock_green, mock_device
+    ):
+        """dead.png detected during trial → abort with success=False."""
+        mock_time.side_effect = _make_time_counter(step=0.1)
+        mock_template.return_value = np.zeros((50, 50, 3), dtype=np.uint8)
+        mock_screenshot.return_value = np.zeros((1920, 1080, 3), dtype=np.uint8)
+        mock_green.return_value = (None, None, 1.0)  # dead detected
+
+        strategy_fn = MagicMock()
+        trial = _run_trial(mock_device, "test_strat", strategy_fn, 1)
+
+        assert trial.success is False
+        assert trial.total_attempts == 1
+
+    @patch("actions.combat.navigate", return_value=False)
+    def test_nav_failure_returns_empty_trial(self, mock_nav, mock_device):
+        """Failed to navigate to MAP → trial with 0 attempts."""
+        strategy_fn = MagicMock()
+        trial = _run_trial(mock_device, "test_strat", strategy_fn, 1)
+
+        assert trial.success is False
+        assert trial.total_attempts == 0
+        assert trial.strategy == "test_strat"
+        strategy_fn.assert_not_called()
+
+
+# ============================================================
+# teleport_benchmark + _print_benchmark_summary
+# ============================================================
+
+class TestTeleportBenchmark:
+    """Tests for the benchmark orchestrator and summary printer."""
+
+    @patch("actions.combat._run_trial")
+    def test_invalid_strategy_logs_error(self, mock_trial, mock_device):
+        """Unknown strategy name → logs error, returns without running."""
+        teleport_benchmark(mock_device, strategies=["nonexistent"])
+        mock_trial.assert_not_called()
+
+    @patch("actions.combat._print_benchmark_summary")
+    @patch("actions.combat._run_trial")
+    def test_runs_correct_number_of_trials(self, mock_trial, mock_summary,
+                                            mock_device, tmp_path):
+        """2 strategies × 2 trials = 4 _run_trial calls."""
+        mock_trial.return_value = TeleportTrial(
+            strategy="random_pan", trial_num=1, success=True,
+            total_attempts=3, total_time_s=10.0)
+
+        with patch("actions.combat.os.makedirs"), \
+             patch("builtins.open", MagicMock()):
+            teleport_benchmark(mock_device, trials_per_strategy=2,
+                               strategies=["random_pan", "big_pan"])
+
+        assert mock_trial.call_count == 4
+        mock_summary.assert_called_once()
+
+    @patch("actions.combat._print_benchmark_summary")
+    @patch("actions.combat._run_trial")
+    def test_saves_json_results(self, mock_trial, mock_summary,
+                                 mock_device, tmp_path):
+        """Results are saved to stats/teleport_benchmark_*.json."""
+        mock_trial.return_value = TeleportTrial(
+            strategy="random_pan", trial_num=1, success=True,
+            total_attempts=1, total_time_s=5.0)
+
+        stats_dir = str(tmp_path / "stats")
+        with patch("actions.combat.os.makedirs") as mock_mkdir:
+            # Capture the actual json.dump call
+            import builtins
+            written = {}
+            original_open = builtins.open
+            def fake_open(path, mode="r", **kwargs):
+                if "teleport_benchmark" in str(path) and mode == "w":
+                    written["path"] = path
+                    return MagicMock(__enter__=lambda s: MagicMock(
+                        write=lambda d: written.update({"data": d})),
+                        __exit__=lambda *a: None)
+                return original_open(path, mode, **kwargs)
+
+            with patch("builtins.open", side_effect=fake_open):
+                teleport_benchmark(mock_device, trials_per_strategy=1,
+                                   strategies=["random_pan"])
+
+        assert "path" in written
+        assert "teleport_benchmark" in written["path"]
+
+
+class TestPrintBenchmarkSummary:
+    """Tests for _print_benchmark_summary output."""
+
+    def test_formats_summary_table(self, capsys):
+        """Summary table includes strategy name, win count, and percentages."""
+        trials = [
+            TeleportTrial(strategy="random_pan", trial_num=1, success=True,
+                          total_attempts=3, total_time_s=15.0),
+            TeleportTrial(strategy="random_pan", trial_num=2, success=False,
+                          total_attempts=15, total_time_s=90.0),
+            TeleportTrial(strategy="big_pan", trial_num=1, success=True,
+                          total_attempts=1, total_time_s=5.0),
+            TeleportTrial(strategy="big_pan", trial_num=2, success=True,
+                          total_attempts=2, total_time_s=8.0),
+        ]
+
+        _print_benchmark_summary(trials)
+
+        output = capsys.readouterr().out
+        assert "random_pan" in output
+        assert "big_pan" in output
+        assert "Teleport Benchmark Results" in output
+        # random_pan: 1/2 = 50%
+        assert "50%" in output
+        # big_pan: 2/2 = 100%
+        assert "100%" in output
+
+    def test_handles_all_failures(self, capsys):
+        """All trials failed → 0% win rate, 0.0s avg time."""
+        trials = [
+            TeleportTrial(strategy="random_pan", trial_num=1, success=False,
+                          total_attempts=15, total_time_s=90.0),
+        ]
+
+        _print_benchmark_summary(trials)
+
+        output = capsys.readouterr().out
+        assert "random_pan" in output
+        assert "0%" in output

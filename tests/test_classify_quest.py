@@ -18,6 +18,8 @@ class TestClassifyQuestText:
     def test_pvp(self):
         assert _classify_quest_text("PvP Battle") == QuestType.PVP
         assert _classify_quest_text("Attack enemies") == QuestType.PVP
+        assert _classify_quest_text("Defeat the Enemy") == QuestType.PVP
+        assert _classify_quest_text("Defeat the Enemv") == QuestType.PVP  # OCR 'y'->'v'
 
     def test_gather(self):
         assert _classify_quest_text("Gather Resources") == QuestType.GATHER

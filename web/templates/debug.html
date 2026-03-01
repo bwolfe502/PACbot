@@ -7,7 +7,7 @@
 <div class="action-grid">
 {% for name in debug_actions %}
 <form method="post" action="/tasks/start" class="device-form">
-    <input type="hidden" name="device" value="{% if devices %}{{ devices[0].id }}{% endif %}">
+    <input type="hidden" name="device" value="{{ devices|map(attribute='id')|join(',') }}">
     <input type="hidden" name="task_name" value="{{ name }}">
     <input type="hidden" name="task_type" value="oneshot">
     <button type="submit" class="action-chip action-chip-debug">{{ name }}</button>
