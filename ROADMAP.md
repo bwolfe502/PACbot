@@ -1,6 +1,6 @@
 # 9Bot Roadmap
 
-Forward-looking development plan from **v1.3.0**.
+Forward-looking development plan (current: **v2.0.0**).
 Priority: bug fixes, clean code, maintainability, usability — then new features.
 
 ---
@@ -26,8 +26,8 @@ Harden existing features before adding new ones.
 Build confidence that everything works before shipping updates.
 
 ### Critical Test Gaps (P0)
-- [x] `test_combat.py` — _check_dead, _find_green_pixel, _detect_player_at_eg, teleport (28 tests). Still missing: attack, phantom_clash, reinforce_throne, target
-- [ ] `test_evil_guard.py` — rally_eg 7-phase state machine, _handle_ap_popup, probe_priest (850 LOC, 0% coverage)
+- [x] `test_combat.py` — _check_dead, _find_green_pixel, _detect_player_at_eg, teleport (49 tests). Still missing: attack, phantom_clash, reinforce_throne, target
+- [ ] `test_evil_guard.py` — rally_eg 7-phase state machine, _handle_ap_popup, probe_priest (963 LOC, 7 tests — expand coverage)
 - [ ] `test_titans.py` — rally_titan, restore_ap flow, gem limit logic, _close_ap_menu (425 LOC, 0% coverage)
 - [x] `test_territory.py` — _classify_square_team, _get_border_color, _has_flag, _is_adjacent_to_my_territory, attack_territory, auto_occupy_loop (66 tests)
 
@@ -37,7 +37,7 @@ Build confidence that everything works before shipping updates.
 - [ ] `test_farming.py` — mine_mithril, mine_mithril_if_due interval logic, _set_gather_level, gather.png template tap (gather_gold updated to use wait_for_image_and_tap)
 
 ### Infrastructure
-- [x] Audit existing test suite — no bloat found, 418 tests in 40s, well-structured
+- [x] Audit existing test suite — 658 tests, well-structured
 - [ ] Add live testing suite — integration tests that run against a real emulator
 - [ ] Establish pre-release checklist — full test pass, live smoke test, version bump verification
 - [ ] Actionable test data — coverage reports, structured failure output, clear pass/fail signals
@@ -119,11 +119,11 @@ Clean up the interface and codebase structure for long-term maintainability.
 Extend auto quest to handle more quest types. The classification infrastructure already exists
 (`_classify_quest_text` recognizes all types) — they just need to be wired up.
 
-- [ ] Add TOWER quests to auto quest loop
-- [ ] Add GATHER (gold mining) to auto quest loop
-- [ ] Add PVP to auto quest loop
-- [ ] Expand `_classify_quest_text` and `_get_actionable_quests` for new types
-- [ ] New template images for tower/gather/PvP quest UI elements
+- [x] Add TOWER quests to auto quest loop
+- [x] Add GATHER (gold mining) to auto quest loop
+- [x] Add PVP to auto quest loop
+- [x] Expand `_classify_quest_text` and `_get_actionable_quests` for new types
+- [x] New template images for tower/gather/PvP quest UI elements
 
 ## Phase 5 — New Automations (v1.7.0)
 

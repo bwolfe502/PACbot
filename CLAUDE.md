@@ -10,15 +10,15 @@ Runs on Windows with BlueStacks or MuMu Player emulators. GUI built with tkinter
 | `run_web.py` | Web-only entry point (primary) | `main` (pywebview + browser fallback) |
 | `startup.py` | Shared initialization & shutdown | `initialize`, `shutdown`, `apply_settings`, `create_bug_report_zip`, `get_relay_config`, `device_hash`, `generate_device_token`, `generate_device_ro_token`, `validate_device_token` |
 | `main.py` | Legacy GUI entry point (deprecated) | Tkinter app, `create_gui()` |
-| `runners.py` | Shared task runners | `run_auto_quest`, `run_auto_titan`, `run_repeat`, `run_once`, `launch_task`, `stop_task` |
+| `runners.py` | Shared task runners | `run_auto_quest`, `run_auto_titan`, `run_auto_groot`, `run_auto_pass`, `run_auto_occupy`, `run_auto_reinforce`, `run_auto_mithril`, `run_auto_gold`, `run_repeat`, `run_once`, `launch_task`, `stop_task`, `stop_all_tasks_matching` |
 | `settings.py` | Settings persistence | `DEFAULTS`, `load_settings`, `save_settings`, `SETTINGS_FILE` |
 | `actions/` | Game actions package (7 submodules) | Re-exports all public functions via `__init__.py` |
-| `actions/quests.py` | Quest system + tower quest + PVP attack | `check_quests`, `get_quest_tracking_state`, `reset_quest_tracking`, `occupy_tower`, `recall_tower_troop` |
+| `actions/quests.py` | Quest system + tower quest + PVP attack | `check_quests`, `get_quest_tracking_state`, `get_quest_last_checked`, `reset_quest_tracking`, `occupy_tower`, `recall_tower_troop` |
 | `actions/rallies.py` | Rally joining + blacklist | `join_rally`, `join_war_rallies`, `reset_rally_blacklist` |
-| `actions/combat.py` | Attacks, targeting, teleport | `attack`, `phantom_clash_attack`, `reinforce_throne`, `target`, `teleport` |
+| `actions/combat.py` | Attacks, targeting, teleport | `attack`, `phantom_clash_attack`, `reinforce_throne`, `target`, `teleport`, `teleport_benchmark` |
 | `actions/titans.py` | Titan rally + AP restore | `rally_titan`, `restore_ap`, `_restore_ap_from_open_menu`, `_close_ap_menu`, `_MAX_TITAN_SEARCH_ATTEMPTS` |
 | `actions/evil_guard.py` | Evil Guard attack sequence | `rally_eg`, `search_eg_reset`, `test_eg_positions`, `_handle_ap_popup` |
-| `actions/farming.py` | Gold + mithril gathering | `mine_mithril`, `gather_gold`, `gather_gold_loop` |
+| `actions/farming.py` | Gold + mithril gathering | `mine_mithril`, `mine_mithril_if_due`, `gather_gold`, `gather_gold_loop` |
 | `actions/_helpers.py` | Shared state + utilities | `_interruptible_sleep`, `_last_depart_slot` |
 | `vision.py` | Screenshots, template matching, OCR, ADB input | `load_screenshot`, `find_image`, `find_all_matches`, `tap_image`, `wait_for_image_and_tap`, `read_text`, `read_number`, `read_ap`, `adb_tap`, `adb_swipe`, `adb_keyevent`, `timed_wait`, `tap`, `logged_tap`, `get_last_best`, `save_failure_screenshot`, `tap_tower_until_attack_menu` |
 | `navigation.py` | Screen detection + state-machine navigation | `check_screen`, `navigate` |
@@ -102,8 +102,6 @@ Screen:    MAP, BATTLE_LIST, ALLIANCE_QUEST, TROOP_DETAIL, TERRITORY,
 | `THRONE_SQUARES` | (11,11), (11,12), (12,11), (12,12) | Untouchable throne cells |
 | `AP_COST_RALLY_TITAN` | 20 | AP cost per titan rally |
 | `AP_COST_EVIL_GUARD` | 70 | AP cost per evil guard rally |
-| `MAX_CONSECUTIVE_ERRORS` | 5 | Stop task after N consecutive action exceptions |
-| `MAX_CONSECUTIVE_NAV_FAILURES` | 10 | Stop task after N consecutive navigate() failures |
 | `ALL_TEAMS` | ["yellow", "green", "red", "blue"] | All territory team colors |
 
 ## Mutable Global State (config.py)
@@ -118,7 +116,12 @@ All session-scoped, reset on restart:
 - `MY_TEAM_COLOR`, `ENEMY_TEAMS` — Territory team config (`set_territory_config(my_team)` auto-derives enemies from `ALL_TEAMS`)
 - `running_tasks` — Dict of active task_key → threading.Event (stop signals)
 - `auto_occupy_running`, `auto_occupy_thread` — Territory auto-occupy state
-- `MITHRIL_ENABLED`, `MITHRIL_INTERVAL`, `LAST_MITHRIL_TIME`, `MITHRIL_DEPLOY_TIME` — Mithril mining state
+- `MITHRIL_ENABLED_DEVICES` — Set of device IDs with mithril mining active (per-device toggle)
+- `MITHRIL_INTERVAL`, `LAST_MITHRIL_TIME`, `MITHRIL_DEPLOY_TIME` — Mithril mining timing state
+- `EG_RALLY_OWN_ENABLED`, `TITAN_RALLY_OWN_ENABLED` — If False, only join rallies — never start own
+- `GATHER_ENABLED`, `GATHER_MINE_LEVEL`, `GATHER_MAX_TROOPS` — Gold gathering config
+- `TOWER_QUEST_ENABLED` — Occupy tower for alliance quest
+- `CLICK_TRAIL_ENABLED` — Save click trail screenshots
 - `BUTTONS` — Dict mapping button names to `{"x": int, "y": int}` coordinates (used by `vision.tap()`)
 
 ## Architecture Patterns
@@ -135,7 +138,7 @@ All session-scoped, reset on restart:
 - Looping is managed by `runners.py` task runners (`run_once` / `run_repeat`), not by actions. Actions accept a `stop_check` callback for cooperative cancellation
 - `runners.py` is shared by both `main.py` (GUI) and `web/dashboard.py` (Flask) — no duplication
 - Thread-local storage in vision.py for `get_last_best()` template scores
-- **Error recovery**: All auto runners track consecutive failures. After `MAX_CONSECUTIVE_ERRORS` (5) consecutive exceptions, the task stops. After `MAX_CONSECUTIVE_NAV_FAILURES` (10) consecutive navigate() failures, the task stops. Counters reset on any success. Backoff: `10 + N*5` seconds between retries.
+- **Error recovery**: Auto runners wrap their main loop in try/except, logging errors and continuing. Navigation failures retry after a short delay.
 - **Smart idle status**: `_deployed_status(device)` in `run_auto_quest` reads the troop snapshot and shows "Gathering/Defending..." instead of generic "Waiting for Troops..." when all troops are deployed.
 - **Periodic quest check**: `run_auto_quest` calls `check_quests` every 60s (`_QUEST_CHECK_INTERVAL`) even when all troops are deployed, to detect quest completion and recall troops promptly.
 - **ADB auto-reconnect**: `_try_reconnect(device)` in vision.py runs `adb connect` on TCP devices when `load_screenshot`/`adb_tap`/`adb_swipe` timeout. One retry after reconnect.
@@ -341,6 +344,10 @@ banner displays the LAN URL for mobile remote control.
 - `GET /api/qr?url=<encoded>` — generate QR code PNG (box_size=12, border=2) for dashboard modal
 - `GET /api/territory/grid` — territory grid state (colors, flags, adjacency)
 - `POST /api/territory/squares` — update manual attack/ignore squares
+- `POST /tasks/stop-mode` — stop all tasks for an auto-mode
+- `GET /settings/device/<device_id>` — per-device settings form
+- `POST /settings/device/<device_id>` — save per-device settings
+- `POST /settings/device/<device_id>/reset` — reset per-device settings to defaults
 
 **Device-scoped routes** (per-device access for shared users):
 - `GET /d/<dhash>?token=...` — filtered dashboard (single device)
@@ -350,6 +357,7 @@ banner displays the LAN URL for mobile remote control.
 - `POST /d/<dhash>/tasks/start` — start task (full access only)
 - `POST /d/<dhash>/tasks/stop` — stop task (full access only)
 - `POST /d/<dhash>/tasks/stop-all` — stop all tasks (full access only)
+- `POST /d/<dhash>/tasks/stop-mode` — stop auto-mode tasks (full access only)
 
 **Dashboard UI components**:
 - **Device card**: status dot (pulsing green when active), status text (color-coded), troop summary pills (grouped by action, colored, centered), quest pills with age timer, mithril countdown timer (purple accent)
@@ -475,7 +483,7 @@ and the web dashboard. Updated via `config.set_device_status(device, msg)`, clea
 ## Tests
 
 ```bash
-py -m pytest          # run all ~708 tests
+py -m pytest          # run all ~658 tests
 py -m pytest -x       # stop on first failure
 py -m pytest -k name  # filter by test name
 ```
@@ -505,6 +513,9 @@ No fixtures require a running emulator — all use mocked ADB/vision.
 | `test_task_runner.py` | `sleep_interval`, `launch_task`/`stop_task`, run_once, run_repeat, consecutive error recovery, settings load/save (`runners`) |
 | `test_relay_config.py` | `get_relay_config` auto-derive (SHA256 bot name, stability, uniqueness), disabled states (no key, import error, toggle off), defaults integration (`startup`) |
 | `test_device_token.py` | `device_hash` (deterministic, URL-safe), `generate_device_token` (per-device, per-key, no-license), `generate_device_ro_token` (different from full, deterministic), `validate_device_token` (full→"full", readonly→"readonly", wrong→None, no-license→None) (`startup`) |
+| `test_device_config.py` | Per-device configuration overrides (`config`) |
+| `test_evil_guard.py` | Evil Guard rally, `_handle_ap_popup`, probe priest (`actions.evil_guard`) |
+| `test_tunnel.py` | WebSocket relay tunnel (`tunnel`) |
 | `test_web_dashboard.py` | Route tests (index, settings, debug, logs, tasks), API tests (`/api/status` incl. tunnel status, `/api/logs`, device refresh), task start/stop/stop-all, auto-mode exclusivity, territory grid API, bug report, firewall helper, `sleep_interval`, `run_once`, `launch_task`, `cleanup_dead_tasks`, `apply_settings`, `create_bug_report_zip` (`web.dashboard`, `startup`) |
 
 ### Test Conventions
@@ -518,7 +529,7 @@ No fixtures require a running emulator — all use mocked ADB/vision.
 
 ## Git Workflow
 
-- `master` — tagged releases only (v1.1.0, v1.2.0, v1.3.0)
+- `master` — tagged releases only (v1.1.0, ..., v2.0.0)
 - `dev` — integration branch, always working
 - Feature branches: `feature/*`, `fix/*`, `cleanup/*` → PR into dev
 - Conventional commits: `feat:`, `fix:`, `refactor:`, `test:` prefix
@@ -539,12 +550,12 @@ No fixtures require a running emulator — all use mocked ADB/vision.
 ├── actions/             # Game actions package
 │   ├── __init__.py      # Re-exports all public functions
 │   ├── _helpers.py      # Shared state (_last_depart_slot, _interruptible_sleep)
-│   ├── quests.py        # Quest system + tower quest (~1100 lines)
-│   ├── rallies.py       # Rally joining + blacklist (~810 lines)
-│   ├── combat.py        # Attacks, targeting, teleport (~390 lines)
-│   ├── titans.py        # Titan rally + AP restore (~456 lines)
-│   ├── evil_guard.py    # Evil Guard attack sequence (~850 lines)
-│   └── farming.py       # Gold + mithril gathering (~350 lines)
+│   ├── quests.py        # Quest system + tower quest
+│   ├── rallies.py       # Rally joining + blacklist
+│   ├── combat.py        # Attacks, targeting, teleport
+│   ├── titans.py        # Titan rally + AP restore
+│   ├── evil_guard.py    # Evil Guard attack sequence
+│   └── farming.py       # Gold + mithril gathering
 ├── vision.py            # CV + OCR + ADB input
 ├── navigation.py        # Screen detection + nav
 ├── troops.py            # Troop counting/status/healing
@@ -562,7 +573,7 @@ No fixtures require a running emulator — all use mocked ADB/vision.
 │   └── statuses/        # Troop status icon templates
 ├── platform-tools/      # Bundled ADB executable
 ├── web/                 # Flask web dashboard
-│   ├── dashboard.py     # App factory, routes (~1100 lines)
+│   ├── dashboard.py     # App factory, routes
 │   ├── static/
 │   │   └── style.css    # Mobile-first dark CSS (cache-busted ?v=N)
 │   └── templates/
@@ -575,7 +586,7 @@ No fixtures require a running emulator — all use mocked ADB/vision.
 │   └── relay_server.py  # asyncio WebSocket relay server
 ├── data/                # Persistent data files (territory coordinates)
 ├── updater.py           # Auto-update from GitHub releases (zip-slip protected)
-├── tests/               # pytest suite (~708 tests)
+├── tests/               # pytest suite (~658 tests)
 ├── logs/                # Log files
 ├── stats/               # Session stats JSON
 └── debug/               # Debug screenshots
