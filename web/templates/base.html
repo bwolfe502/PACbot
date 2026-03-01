@@ -7,11 +7,20 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="theme-color" content="#1a1a2e">
     <title>9Bot{% block title_suffix %}{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=52">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:ital,wght@1,700&text=9&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=55">
 </head>
 <body class="{% block body_class %}{% endblock %}">
     <nav>
-        <a href="{% if device_filter is defined and device_filter %}/d/{{ device_hash }}?token={{ device_token }}{% else %}/{% endif %}" class="nav-brand" data-relay-href>9Bot</a>
+        <a href="{% if device_filter is defined and device_filter %}/d/{{ device_hash }}?token={{ device_token }}{% else %}/{% endif %}" class="nav-brand" data-relay-href>
+            <span class="logo-line"></span>
+            <span class="logo-group">
+                <span class="logo-main"><span class="logo-nine">9</span><span class="logo-text">BOT</span></span>
+                <span class="logo-sub">SYSTEM v2.0</span>
+            </span>
+        </a>
         {% if not (device_filter is defined and device_filter) %}
         <div class="nav-links">
             <a href="/" class="{% if request.path == '/' %}active{% endif %}" data-relay-href>Dashboard</a>

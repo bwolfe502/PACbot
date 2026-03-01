@@ -36,11 +36,65 @@ nav {
 }
 
 .nav-brand {
-    font-size: 18px;
-    font-weight: 700;
+    display: inline-flex;
+    align-items: stretch;
+    gap: 8px;
     color: #64d8ff;
     text-decoration: none;
-    letter-spacing: 0.5px;
+}
+
+.logo-line {
+    display: flex;
+    gap: 3px;
+}
+
+.logo-line::before,
+.logo-line::after {
+    content: '';
+    width: 1px;
+}
+
+.logo-line::before {
+    background: linear-gradient(180deg, #64d8ff22, #64d8ff88, #64d8ff22);
+}
+
+.logo-line::after {
+    background: linear-gradient(180deg, #64d8ff44, #64d8ff, #64d8ff44);
+}
+
+.logo-group {
+    display: flex;
+    flex-direction: column;
+}
+
+.logo-main {
+    display: flex;
+    align-items: baseline;
+}
+
+.logo-nine {
+    font-family: 'Bodoni Moda', serif;
+    font-style: italic;
+    font-weight: 700;
+    font-size: 28px;
+    line-height: 1;
+    text-shadow: 0 0 15px rgba(100, 216, 255, 0.3);
+}
+
+.logo-text {
+    font-family: system-ui, sans-serif;
+    font-weight: 300;
+    font-size: 11px;
+    letter-spacing: 4px;
+    margin-left: 1px;
+}
+
+.logo-sub {
+    font-family: system-ui, sans-serif;
+    font-size: 7px;
+    letter-spacing: 4px;
+    color: rgba(100, 216, 255, 0.25);
+    margin-top: 1px;
 }
 
 .nav-links {
