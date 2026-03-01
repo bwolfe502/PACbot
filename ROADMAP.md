@@ -50,6 +50,49 @@ Build confidence that everything works before shipping updates.
 - [ ] Clear submitted data from local machine after successful upload (no duplicates)
 - [ ] Settings UI for telemetry — tier selection, "View queued data" button, opt-out
 
+## Security Hardening (ongoing)
+
+Audit performed Feb 2026. No critical vulnerabilities — no shell injection, no eval/exec/pickle,
+Jinja2 auto-escaping active, all subprocess calls use list args without shell=True.
+
+### Completed
+- [x] Redact `relay_secret` from bug report ZIPs (shows `***REDACTED***`)
+- [x] Validate device IDs in `/tasks/start` against known devices whitelist
+- [x] Fix DOM XSS — replace `innerHTML` with `textContent`/DOM creation in dashboard JS
+- [x] Switch `/api/bug-report` from GET to POST (prevent prefetch/crawler triggers)
+- [x] Pin all dependency versions in `requirements.txt`
+- [x] Add zip-slip protection to auto-updater `extractall()`
+- [x] Zero-config relay — auto-derive URL/secret/bot-name from license key, no user-facing config
+- [x] Remove bot enumeration from relay landing page
+- [x] Fix settings.json wipe on update — added to `PRESERVE_FILES` in updater.py
+
+### Remaining (prioritized)
+- [ ] Switch relay tunnel to `wss://` (TLS) — traffic currently plaintext over `ws://`
+- [ ] Move relay secret from URL query param to WebSocket header
+- [ ] Add CSRF protection to POST endpoints
+- [ ] Run relay server as non-root user in systemd
+- [ ] Add integrity verification (SHA-256) to auto-updater downloads
+- [x] Atomic settings write — temp file + `os.replace()` prevents corruption on crash
+
+## Monetization Prep (when needed)
+
+Not urgent — current license system (machine-bound keys + Google Sheets) is sufficient for
+a small trusted user base. Revisit when charging money or user count grows significantly.
+
+### Distribution
+- [ ] Make GitHub repo private (prevents unlicensed downloads of source)
+- [ ] Private download server — users authenticate with license key to get release ZIPs
+- [ ] Update `updater.py` to send license key as auth header instead of hitting GitHub API
+- [ ] Consider Nuitka compilation for releases (native .exe, no Python install needed) — blocked by AV false positive risk; revisit when code-signing certificate is affordable
+
+### IP Protection (current state)
+- [x] Machine-bound license keys (HMAC + hardware fingerprint) — can't copy `.license_key` between PCs
+- [x] Remote key validation against Google Sheets (instant revoke)
+- [x] License check on startup with 3-attempt limit
+- [x] Dev mode bypass for `.git` repos (doesn't affect end users)
+- [ ] Replace Google Sheets with server-side API (when: need usage tracking, auto-provisioning, or professional storefront)
+- [ ] Periodic re-validation during runtime (when: piracy becomes an actual problem, not preemptively)
+
 ## Phase 3 — UI & Project Cleanup (v1.5.0)
 
 Clean up the interface and codebase structure for long-term maintainability.
@@ -80,3 +123,19 @@ Entirely new game automations.
 
 - [ ] Automatic frost giant function
 - [ ] Automatic lava haka spawning
+
+## Phase 6 — UX & Notifications
+
+Quality-of-life features that make the bot feel polished.
+
+### Quick Wins
+- [ ] QR code for phone connection — render scannable QR in console/pywebview window on startup (LAN URL). No more typing IP addresses. (`qrcode` library, ~3 lines)
+- [ ] Session summary — on stop or on demand, show recap: runtime, rally count, gathers, heals, errors. Data already in `StatsTracker`, just needs a `summarize()` method and a dashboard card/endpoint
+
+### Notifications
+- [ ] Discord webhook alerts — POST to a user-configured webhook URL on key events (bot stopped on errors, EG complete, license issues). No bot token needed, just a URL in settings
+- [ ] Push notifications via ntfy.sh — free, no-account push notifications to phone. One HTTP POST per alert. Users subscribe to their own topic. Lighter than Discord, easier opt-in/out
+- [ ] Notification settings — let users pick which events trigger alerts (errors only, rally completions, all activity) and which channel (Discord, ntfy, both, none)
+
+### Security
+- [ ] Auto-screenshot on license fail — save console screenshot + timestamp after 3 invalid key attempts. Breadcrumb trail for key sharing/brute-force detection
