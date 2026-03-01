@@ -4,9 +4,16 @@
 {% block content %}
 
 <!-- Phone Access -->
-<div class="phone-access" onclick="copyUrl(this)">
+{% if relay_url %}
+<div class="phone-access" onclick="copyUrl(this)" data-url="{{ relay_url }}">
+    <span class="phone-icon">&#127760;</span>
+    <span>Remote: <strong>{{ relay_url }}</strong></span>
+    <span class="copy-hint">tap to copy</span>
+</div>
+{% endif %}
+<div class="phone-access" onclick="copyUrl(this)" data-url="http://{{ local_ip }}:8080">
     <span class="phone-icon">&#128241;</span>
-    <span>Phone access: <strong>http://{{ local_ip }}:8080</strong></span>
+    <span>LAN: <strong>http://{{ local_ip }}:8080</strong></span>
     <span class="copy-hint">tap to copy</span>
 </div>
 
@@ -305,7 +312,7 @@ function toggleAutoMode(modeKey) {
 }
 
 function copyUrl(el) {
-    var url = 'http://{{ local_ip }}:8080';
+    var url = el.getAttribute('data-url') || 'http://{{ local_ip }}:8080';
     navigator.clipboard.writeText(url).then(function() {
         var hint = el.querySelector('.copy-hint');
         if (hint) { hint.textContent = 'copied!'; setTimeout(function() { hint.textContent = 'tap to copy'; }, 1500); }
