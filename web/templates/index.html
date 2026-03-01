@@ -574,7 +574,7 @@ function downloadBugReport() {
             a.href = URL.createObjectURL(obj.blob);
             var cd = obj.r.headers.get('Content-Disposition') || '';
             var m = cd.match(/filename="?([^"]+)"?/);
-            a.download = m ? m[1] : 'pacbot_bugreport.zip';
+            a.download = m ? m[1] : '9bot_bugreport.zip';
             a.click();
             URL.revokeObjectURL(a.href);
         }).catch(function() {});

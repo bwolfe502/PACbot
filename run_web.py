@@ -1,4 +1,4 @@
-"""PACbot — web-only entry point.
+"""9Bot — web-only entry point.
 
 Starts the Flask dashboard in a pywebview native window.  Phone access via
 ``http://<LAN-IP>:8080`` works simultaneously.
@@ -48,7 +48,7 @@ def _open_app_window(url, log):
                 # window-size flags aren't ignored by an existing Edge.
                 app_data = os.path.join(os.environ.get("LOCALAPPDATA",
                                         os.path.expanduser("~")),
-                                        "PACbot", "edge-app")
+                                        "9Bot", "edge-app")
                 subprocess.Popen([path, f"--app={url}",
                                   "--window-size=420,750",
                                   f"--user-data-dir={app_data}"])
@@ -175,7 +175,7 @@ def main():
     if webview is not None:
         try:
             from updater import get_current_version
-            title = f"PACbot v{get_current_version()}"
+            title = f"9Bot v{get_current_version()}"
 
             # Set taskbar icon on Windows
             icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.ico")
@@ -216,12 +216,12 @@ def main():
         print(f"\n  Dashboard: http://{local_ip}:8080\n")
         # On restart, the existing browser window reconnects automatically —
         # don't open a duplicate.
-        if os.environ.pop("PACBOT_RESTART", None):
+        if os.environ.pop("NINEBOT_RESTART", None) or os.environ.pop("PACBOT_RESTART", None):
             log.info("Restart detected — reusing existing browser window")
         else:
             _open_app_window(url, log)
         try:
-            print("Press Ctrl+C to stop PACbot.\n")
+            print("Press Ctrl+C to stop 9Bot.\n")
             while True:
                 time.sleep(1)
         except KeyboardInterrupt:

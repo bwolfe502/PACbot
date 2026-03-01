@@ -64,7 +64,7 @@ class TestIndexRoute:
     def test_index_returns_200(self, mock_instances, mock_devs, client):
         resp = client.get("/")
         assert resp.status_code == 200
-        assert b"PACbot" in resp.data
+        assert b"9Bot" in resp.data
 
     @patch("web.dashboard.get_devices", return_value=[])
     @patch("web.dashboard.get_emulator_instances", return_value={})
@@ -421,7 +421,7 @@ class TestEnsureFirewallOpen:
     @patch("web.dashboard.sys")
     def test_rule_already_exists(self, mock_sys):
         mock_sys.platform = "win32"
-        rule_name = "PACbot Web Dashboard (TCP 8080)"
+        rule_name = "9Bot Web Dashboard (TCP 8080)"
         mock_result = MagicMock(returncode=0, stdout=f"Rule Name: {rule_name}\n")
         with patch("subprocess.run", return_value=mock_result) as mock_run:
             assert ensure_firewall_open(8080) is True
@@ -550,7 +550,7 @@ class TestTerritoryGridApi:
 class TestBugReportApi:
     @patch("startup.create_bug_report_zip")
     def test_bug_report_returns_zip(self, mock_zip, client):
-        mock_zip.return_value = (b"PK\x03\x04fake_zip_data", "pacbot_bugreport_test.zip")
+        mock_zip.return_value = (b"PK\x03\x04fake_zip_data", "9bot_bugreport_test.zip")
         resp = client.post("/api/bug-report")
         assert resp.status_code == 200
         assert resp.content_type == "application/zip"
@@ -610,7 +610,7 @@ class TestCreateBugReportZip:
         import io
         from startup import create_bug_report_zip
         zip_bytes, filename = create_bug_report_zip()
-        assert filename.startswith("pacbot_bugreport_")
+        assert filename.startswith("9bot_bugreport_")
         assert filename.endswith(".zip")
         # Verify it's a valid zip
         buf = io.BytesIO(zip_bytes)
@@ -627,7 +627,7 @@ class TestCreateBugReportZip:
         buf = io.BytesIO(zip_bytes)
         with zipfile.ZipFile(buf, "r") as zf:
             info = zf.read("report_info.txt").decode("utf-8")
-            assert "PACbot Bug Report" in info
+            assert "9Bot Bug Report" in info
             assert "Python:" in info
             assert "OS:" in info
 

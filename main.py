@@ -137,7 +137,7 @@ def create_gui():
     # Set app ID before creating window so taskbar shows our icon
     try:
         import ctypes
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("pacbot.app")
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("9bot.app")
     except:
         pass
 
@@ -145,7 +145,7 @@ def create_gui():
     ctk.set_default_color_theme("dark-blue")
 
     window = ctk.CTk()
-    window.title(f"PACbot v{version}")
+    window.title(f"9Bot v{version}")
     window.resizable(False, True)
     window.configure(fg_color=THEME["bg_deep"])
 
@@ -200,7 +200,7 @@ def create_gui():
     # ── Title ──
     title_frame = tk.Frame(window, bg=THEME["bg_deep"])
     title_frame.pack(fill=tk.X, pady=(10, 4))
-    ctk.CTkLabel(title_frame, text=f"PACbot v{version}",
+    ctk.CTkLabel(title_frame, text=f"9Bot v{version}",
                  font=ctk.CTkFont(family=_FONT_FAMILY, size=18, weight="bold"),
                  text_color=THEME["accent_cyan"]).pack()
     ctk.CTkLabel(title_frame, text="Made by Nine",
@@ -790,7 +790,7 @@ def create_gui():
                                            capture_output=True, timeout=120)
                             messagebox.showinfo("Installed",
                                 "Flask installed successfully!\n\n"
-                                "Restart PACbot to start the dashboard.")
+                                "Restart 9Bot to start the dashboard.")
                         except Exception as ex:
                             messagebox.showerror("Error", f"Failed to install Flask:\n{ex}")
                     threading.Thread(target=_install, daemon=True).start()
@@ -1444,7 +1444,7 @@ def create_gui():
         log = get_logger("main")
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        default_name = f"pacbot_bugreport_{timestamp}.zip"
+        default_name = f"9bot_bugreport_{timestamp}.zip"
 
         save_path = filedialog.asksaveasfilename(
             defaultextension=".zip",
@@ -1459,9 +1459,9 @@ def create_gui():
             with zipfile.ZipFile(save_path, "w", zipfile.ZIP_DEFLATED) as zf:
                 # Logs (current + rotated backups)
                 for suffix in ["", ".1", ".2", ".3"]:
-                    logfile = os.path.join(LOG_DIR, f"pacbot.log{suffix}")
+                    logfile = os.path.join(LOG_DIR, f"9bot.log{suffix}")
                     if os.path.isfile(logfile):
-                        zf.write(logfile, f"logs/pacbot.log{suffix}")
+                        zf.write(logfile, f"logs/9bot.log{suffix}")
 
                 # Failure screenshots
                 failures_dir = os.path.join(SCRIPT_DIR, "debug", "failures")
@@ -1494,7 +1494,7 @@ def create_gui():
                 ram_gb = _get_ram_gb()
 
                 info_lines = [
-                    f"PACbot Bug Report",
+                    f"9Bot Bug Report",
                     f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
                     f"",
                     f"=== System ===",

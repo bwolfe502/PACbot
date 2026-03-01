@@ -1,4 +1,4 @@
-# PACbot Roadmap
+# 9Bot Roadmap
 
 Forward-looking development plan from **v1.3.0**.
 Priority: bug fixes, clean code, maintainability, usability — then new features.
@@ -68,7 +68,7 @@ Jinja2 auto-escaping active, all subprocess calls use list args without shell=Tr
 
 - [x] Switch relay tunnel to `wss://` (TLS) — nginx + Let's Encrypt on `1453.life`
 - [x] Move relay secret from URL query param to `Authorization: Bearer` header
-- [x] Run relay server as non-root `pacbot` user in systemd
+- [x] Run relay server as non-root `9bot` user in systemd
 - [x] Atomic settings write — temp file + `os.replace()` prevents corruption on crash
 
 ### Remaining (prioritized)
@@ -131,6 +131,7 @@ Entirely new game automations.
 
 - [ ] Automatic frost giant function
 - [ ] Automatic lava haka spawning
+- [ ] EG theft prevention — collect training data to detect other players' Evil Guards and avoid stealing them. Need screenshots of own vs others' EG markers/rallies for template or ML-based classification
 
 ## Phase 6 — UX & Notifications
 

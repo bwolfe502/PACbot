@@ -5,7 +5,7 @@ cd /d "%~dp0"
 REM UTF-8 encoding for Python (prevents Unicode crashes on Windows console)
 set PYTHONIOENCODING=utf-8
 echo ============================
-echo PACbot - Setup + Run
+echo 9Bot - Setup + Run
 echo ============================
 
 REM Download ADB if missing (fallback for source installs without bundled binaries)
@@ -101,11 +101,11 @@ py run_web.py
 if errorlevel 1 (
   echo.
   echo ==========================================
-  echo PACbot crashed! See error message above.
+  echo 9Bot crashed! See error message above.
   echo ==========================================
   pause
   exit /b 1
 )
 echo.
-echo PACbot exited.
+echo 9Bot exited.
 exit /b 0

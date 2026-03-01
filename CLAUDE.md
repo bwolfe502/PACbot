@@ -1,4 +1,4 @@
-# PACbot — AI Technical Reference
+# 9Bot — AI Technical Reference
 
 Android game automation bot: ADB screenshots + OpenCV template matching + EasyOCR.
 Runs on Windows with BlueStacks or MuMu Player emulators. GUI built with tkinter.
@@ -136,6 +136,8 @@ All session-scoped, reset on restart:
 - `runners.py` is shared by both `main.py` (GUI) and `web/dashboard.py` (Flask) — no duplication
 - Thread-local storage in vision.py for `get_last_best()` template scores
 - **Error recovery**: All auto runners track consecutive failures. After `MAX_CONSECUTIVE_ERRORS` (5) consecutive exceptions, the task stops. After `MAX_CONSECUTIVE_NAV_FAILURES` (10) consecutive navigate() failures, the task stops. Counters reset on any success. Backoff: `10 + N*5` seconds between retries.
+- **Smart idle status**: `_deployed_status(device)` in `run_auto_quest` reads the troop snapshot and shows "Gathering/Defending..." instead of generic "Waiting for Troops..." when all troops are deployed.
+- **Periodic quest check**: `run_auto_quest` calls `check_quests` every 60s (`_QUEST_CHECK_INTERVAL`) even when all troops are deployed, to detect quest completion and recall troops promptly.
 - **ADB auto-reconnect**: `_try_reconnect(device)` in vision.py runs `adb connect` on TCP devices when `load_screenshot`/`adb_tap`/`adb_swipe` timeout. One retry after reconnect.
 
 ### Screen Resolution
@@ -244,6 +246,22 @@ PVP dispatches a troop then continues to other quests while it marches (non-bloc
 Gold gathering is blocked while titan/EG rallies are in-flight (pending). The bot waits for
 rally completion instead of deploying gather troops, preserving troop availability for retries.
 
+**Gold mining gates**: Gold is the lowest priority action. Two additional guards prevent premature mining:
+1. **PVP gate**: If a PVP quest is available but not yet dispatched (not on cooldown), gold mining
+   is skipped. `_all_quests_visually_complete()` checks PVP cooldown; the actionable path also
+   checks `_pvp_last_dispatch` before the `has_gather` branch.
+2. **Pending rally gate**: If titan/EG rallies are in-flight, gold is blocked (preserves troop
+   availability for retries).
+
+**Stray troop recovery**: `_recall_stray_stationed(device)` runs at the start of each `check_quests`
+cycle (on MAP screen). If the troop snapshot shows any STATIONING troops (stuck from a failed EG
+rally), it taps `statuses/stationing.png` on the panel to center the map, then taps `stationed.png`
+→ `return.png` to send the troop home.
+
+**EG troop gate**: `_eg_troops_available(device)` requires 2 troops not gathering or defending.
+Troops that are rallying, marching, returning, etc. are counted as available since they'll free up.
+Falls back to `troops_avail() >= 2` if no troop snapshot exists.
+
 **Tower quest**: `_navigate_to_tower()` opens target menu, taps **Friend tab** `(540, 330)`, looks for
 `friend_marker.png`, then taps the marker to center the map on the tower. `occupy_tower()` then
 taps the tower, reinforces, and departs. `recall_tower_troop()` recalls when the quest completes.
@@ -308,7 +326,7 @@ banner displays the LAN URL for mobile remote control.
 **Pages**: Dashboard (`/`), Settings (`/settings`), Debug (`/debug`), Logs (`/logs`), Territory Grid (`/territory`), Device View (`/d/<dhash>?token=...`)
 
 **API endpoints**:
-- `GET /api/status` — device statuses, troop snapshots, quest tracking, mithril timer, active tasks, tunnel status (polled every 3s)
+- `GET /api/status` — device statuses, troop snapshots, quest tracking, quest age (seconds since last check), mithril timer, active tasks, tunnel status (polled every 3s)
 - `POST /api/devices/refresh` — reconnect ADB devices
 - `POST /tasks/start` — launch auto-mode or one-shot task
 - `POST /tasks/stop` — stop a specific task
@@ -334,12 +352,12 @@ banner displays the LAN URL for mobile remote control.
 - `POST /d/<dhash>/tasks/stop-all` — stop all tasks (full access only)
 
 **Dashboard UI components**:
-- **Device card**: status dot (pulsing green when active), status text (color-coded), troop slots, quest pills, mithril countdown timer (purple accent)
+- **Device card**: status dot (pulsing green when active), status text (color-coded), troop summary pills (grouped by action, colored, centered), quest pills with age timer, mithril countdown timer (purple accent)
 - **Access banners**: LAN + relay URL banners with tap-to-copy, QR code button, and tunnel status indicator (dot + label, updated via polling: green=connected, amber=connecting, red=disconnected, gray=disabled)
 - **Share button**: per-device "Share" button in device header, opens modal with Full Control / View Only tabs, shareable URL + QR code
 - **Collapsible controls**: click "Controls" header to toggle between full toggle switches and compact colored status pills (green when active)
 - **Auto mode toggles**: iOS-style toggle switches in responsive grid (`auto-fit`), grouped by category (Combat/Farming/Events)
-- **Action chips**: minimal bordered buttons in 3-column grid, farm actions (blue accent), war actions (red accent), debug actions (purple accent, `.action-chip-debug`)
+- **Action chips**: minimal bordered buttons in 3-column grid, farm actions (blue accent, includes Gather Gold as one-shot), war actions (red accent), debug actions (purple accent, `.action-chip-debug`)
 - **Live View**: full-width button per device, MJPEG stream with polling fallback for older relay
 - **Running tasks list**: active task names with circular stop (×) buttons
 - **Bottom bar**: Stop All, Refresh, Restart (amber), Quit (muted gray) — owner only
@@ -351,7 +369,7 @@ banner displays the LAN URL for mobile remote control.
 **Templates**: `base.html` (nav, shared JS), `index.html` (dashboard + device view), `settings.html` (with per-device tabs), `debug.html` (debug actions), `logs.html`
 
 ### Relay Tunnel (tunnel.py + relay/)
-WebSocket relay for remote access — lets users control PACbot from outside the LAN.
+WebSocket relay for remote access — lets users control 9Bot from outside the LAN.
 
 **Zero-config**: Relay auto-configures from the license key. No user-facing URL/secret/bot-name
 settings. `get_relay_config(settings)` in `startup.py` returns `(relay_url, relay_secret, bot_name)`
@@ -364,7 +382,7 @@ Reconnects with exponential backoff (5s→60s cap). Secret sent via `Authorizati
 header (not URL query param).
 
 **Server stack**: nginx (TLS termination, Let's Encrypt auto-renew) → aiohttp relay on port 8090.
-Service runs as non-root `pacbot` user via systemd.
+Service runs as non-root `9bot` user via systemd.
 
 **Settings**: Single `remote_access` boolean (default `True`). When `False`, relay is disabled.
 Relay URL and secret are base64-obfuscated constants in `startup.py` (not in settings.json).
@@ -457,7 +475,7 @@ and the web dashboard. Updated via `config.set_device_status(device, msg)`, clea
 ## Tests
 
 ```bash
-py -m pytest          # run all ~687 tests
+py -m pytest          # run all ~708 tests
 py -m pytest -x       # stop on first failure
 py -m pytest -k name  # filter by test name
 ```
@@ -477,7 +495,7 @@ No fixtures require a running emulator — all use mocked ADB/vision.
 | `test_rally_blacklist.py` | Direct blacklist, failure thresholds, 30-min expiry, reset (`actions.rallies`) |
 | `test_rally_wait.py` | Troop-tracked rally, slot tracking, panel-based waiting, false positive detection (`actions.quests`) |
 | `test_quest_tracking.py` | Multi-device quest rally tracking, `_track_quest_progress`, `_record_rally_started` (`actions.quests`) |
-| `test_check_quests_helpers.py` | `_deduplicate_quests`, `_get_actionable_quests`, `_all_quests_visually_complete` (PVP cooldown), `_attack_pvp_tower` (handler unit tests), PVP dispatch integration (`actions.quests`) |
+| `test_check_quests_helpers.py` | `_deduplicate_quests`, `_get_actionable_quests`, `_all_quests_visually_complete` (PVP cooldown), `_attack_pvp_tower` (handler unit tests), PVP dispatch integration (PVP blocks gold mining, cooldown allows gold), `_eg_troops_available` (snapshot-based: gathering/defending tied up, rallying/marching available, fallback), `_recall_stray_stationed` (success, no-op, panel miss, map miss, stop check) (`actions.quests`) |
 | `test_classify_quest.py` | `_classify_quest_text` OCR classification (all QuestType values) (`actions.quests`) |
 | `test_combat.py` | `_check_dead`, `_find_green_pixel`, `_detect_player_at_eg`, `teleport` (happy path, timeout, dead detection, cancel) (`actions.combat`) |
 | `test_territory.py` | `_classify_square_team` (exact/noisy colors, thresholds, team configs), `_get_border_color` (sampling, clock avoidance), `_has_flag` (red pixel detection), `_is_adjacent_to_my_territory` (adjacency, throne, edges), `attack_territory` (full workflow), `auto_occupy_loop` (cycle, stop signal), blue calibration (observed values, boundary distances), `set_territory_config` (auto-derived enemies, threshold changes), red edge cases (near-threshold values), clock overlay row 0 (dimming gaps), `diagnose_grid` (smoke tests) (`territory`) |
@@ -509,7 +527,7 @@ No fixtures require a running emulator — all use mocked ADB/vision.
 ## Project Files
 
 ```
-PACbot/
+9Bot/
 ├── CLAUDE.md            # AI technical reference (this file)
 ├── ROADMAP.md           # Development roadmap
 ├── TESTING.md           # Tester protocol (bug reporting + active testing guide)
@@ -521,7 +539,7 @@ PACbot/
 ├── actions/             # Game actions package
 │   ├── __init__.py      # Re-exports all public functions
 │   ├── _helpers.py      # Shared state (_last_depart_slot, _interruptible_sleep)
-│   ├── quests.py        # Quest system + tower quest (~910 lines)
+│   ├── quests.py        # Quest system + tower quest (~1100 lines)
 │   ├── rallies.py       # Rally joining + blacklist (~810 lines)
 │   ├── combat.py        # Attacks, targeting, teleport (~390 lines)
 │   ├── titans.py        # Titan rally + AP restore (~456 lines)
@@ -557,7 +575,7 @@ PACbot/
 │   └── relay_server.py  # asyncio WebSocket relay server
 ├── data/                # Persistent data files (territory coordinates)
 ├── updater.py           # Auto-update from GitHub releases (zip-slip protected)
-├── tests/               # pytest suite (~687 tests)
+├── tests/               # pytest suite (~708 tests)
 ├── logs/                # Log files
 ├── stats/               # Session stats JSON
 └── debug/               # Debug screenshots

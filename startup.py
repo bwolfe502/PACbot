@@ -1,4 +1,4 @@
-"""PACbot startup & shutdown — shared initialization for all entry points.
+"""9Bot startup & shutdown — shared initialization for all entry points.
 
 Used by both ``run_web.py`` (web-only) and ``main.py`` (legacy tkinter GUI).
 """
@@ -151,7 +151,7 @@ def initialize():
 
     # Compatibility bridge: capture print() calls to legacy log file
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    _log_path = os.path.join(script_dir, "pacbot.log")
+    _log_path = os.path.join(script_dir, "9bot.log")
     _log_file = open(_log_path, "w", encoding="utf-8")
 
     class _Tee:
@@ -201,7 +201,7 @@ def initialize():
     from vision import warmup_ocr
     threading.Thread(target=warmup_ocr, daemon=True).start()
 
-    log.info("PACbot initialized.")
+    log.info("9Bot initialized.")
     return settings
 
 
@@ -275,14 +275,14 @@ def create_bug_report_zip():
 
     buf = io.BytesIO()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"pacbot_bugreport_{timestamp}.zip"
+    filename = f"9bot_bugreport_{timestamp}.zip"
 
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         # Logs (current + rotated backups)
         for suffix in ["", ".1", ".2", ".3"]:
-            logfile = os.path.join(LOG_DIR, f"pacbot.log{suffix}")
+            logfile = os.path.join(LOG_DIR, f"9bot.log{suffix}")
             if os.path.isfile(logfile):
-                zf.write(logfile, f"logs/pacbot.log{suffix}")
+                zf.write(logfile, f"logs/9bot.log{suffix}")
 
         # Failure screenshots
         failures_dir = os.path.join(SCRIPT_DIR, "debug", "failures")
@@ -322,7 +322,7 @@ def create_bug_report_zip():
         ram_gb = _get_ram_gb()
 
         info_lines = [
-            "PACbot Bug Report",
+            "9Bot Bug Report",
             f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
             "",
             "=== System ===",

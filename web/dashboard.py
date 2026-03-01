@@ -1,4 +1,4 @@
-"""PACbot Web Dashboard — mobile-friendly remote control via Flask.
+"""9Bot Web Dashboard — mobile-friendly remote control via Flask.
 
 Runs alongside the tkinter GUI in a background thread.  Both share the same
 process, so they see the same ``config.running_tasks``, ``config.DEVICE_STATUS``,
@@ -24,7 +24,7 @@ import functools
 from flask import Flask, render_template, request, redirect, url_for, jsonify, abort
 
 # ---------------------------------------------------------------------------
-# PACbot imports (same as main.py)
+# 9Bot imports (same as main.py)
 # ---------------------------------------------------------------------------
 import config
 from config import (running_tasks, QuestType, RallyType, Screen)
@@ -205,7 +205,7 @@ def ensure_firewall_open(port=8080):
 
     import subprocess as _sp
 
-    rule_name = f"PACbot Web Dashboard (TCP {port})"
+    rule_name = f"9Bot Web Dashboard (TCP {port})"
 
     # Check if rule already exists
     try:
@@ -361,7 +361,7 @@ def create_app():
                 active_tasks.append(key)
         log_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
         lines = []
-        log_file = os.path.join(log_dir, "pacbot.log")
+        log_file = os.path.join(log_dir, "9bot.log")
         if os.path.isfile(log_file):
             try:
                 with open(log_file, "r", encoding="utf-8", errors="replace") as f:
@@ -378,7 +378,7 @@ def create_app():
     def logs_page():
         log_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
         lines = []
-        log_file = os.path.join(log_dir, "pacbot.log")
+        log_file = os.path.join(log_dir, "9bot.log")
         if os.path.isfile(log_file):
             try:
                 with open(log_file, "r", encoding="utf-8", errors="replace") as f:
@@ -699,7 +699,7 @@ def create_app():
 
         def _do_restart():
             time.sleep(0.5)  # let the HTTP response flush
-            os.environ["PACBOT_RESTART"] = "1"  # skip opening new window
+            os.environ["NINEBOT_RESTART"] = "1"  # skip opening new window
             # Close pywebview window first so the new process can open one
             cb = config._quit_callback
             if cb:
@@ -751,7 +751,7 @@ def create_app():
     @app.route("/api/logs")
     def api_logs():
         log_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
-        log_file = os.path.join(log_dir, "pacbot.log")
+        log_file = os.path.join(log_dir, "9bot.log")
         lines = []
         if os.path.isfile(log_file):
             try:

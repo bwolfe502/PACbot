@@ -6,12 +6,12 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="theme-color" content="#1a1a2e">
-    <title>PACbot{% block title_suffix %}{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=51">
+    <title>9Bot{% block title_suffix %}{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=52">
 </head>
 <body class="{% block body_class %}{% endblock %}">
     <nav>
-        <a href="{% if device_filter is defined and device_filter %}/d/{{ device_hash }}?token={{ device_token }}{% else %}/{% endif %}" class="nav-brand" data-relay-href>PACbot</a>
+        <a href="{% if device_filter is defined and device_filter %}/d/{{ device_hash }}?token={{ device_token }}{% else %}/{% endif %}" class="nav-brand" data-relay-href>9Bot</a>
         {% if not (device_filter is defined and device_filter) %}
         <div class="nav-links">
             <a href="/" class="{% if request.path == '/' %}active{% endif %}" data-relay-href>Dashboard</a>
@@ -65,7 +65,7 @@
     };
     {% if not (device_filter is defined and device_filter) %}
     function confirmRestart() {
-        if (!confirm('Restart PACbot? All running tasks will be stopped.')) return;
+        if (!confirm('Restart 9Bot? All running tasks will be stopped.')) return;
         var btn = document.getElementById('restart-btn');
         btn.disabled = true;
         btn.textContent = 'Restarting...';
@@ -81,7 +81,7 @@
         setTimeout(waitForServer, 2000);
     }
     function confirmQuit() {
-        if (!confirm('Quit PACbot? The application will stop completely.')) return;
+        if (!confirm('Quit 9Bot? The application will stop completely.')) return;
         var btn = document.getElementById('quit-btn');
         btn.disabled = true;
         btn.textContent = 'Quitting...';

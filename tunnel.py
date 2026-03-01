@@ -1,5 +1,5 @@
 """
-PACbot WebSocket Tunnel Client
+9Bot WebSocket Tunnel Client
 
 Connects to a relay server and forwards proxied HTTP requests to the local
 Flask dashboard at localhost:8080.  Runs in a daemon thread with its own

@@ -1,5 +1,5 @@
 """
-PACbot Auto-Updater
+9Bot Auto-Updater
 Checks GitHub releases for new versions and updates automatically.
 """
 

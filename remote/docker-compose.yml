@@ -4,7 +4,7 @@ services:
     privileged: true
     ports:
       - "6080:6080"   # noVNC web viewer (browser-based game screen)
-      - "5555:5555"   # ADB (PACbot connects here)
+      - "5555:5555"   # ADB (9Bot connects here)
     environment:
       EMULATOR_DEVICE: "Samsung Galaxy S10"
       DATAPARTITION: "4g"

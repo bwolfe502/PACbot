@@ -1,4 +1,4 @@
-"""PACbot game actions package.
+"""9Bot game actions package.
 
 Re-exports all public action functions so that ``from actions import X``
 continues to work throughout the codebase.
@@ -25,6 +25,7 @@ from actions.quests import (
     _quest_pending_since, _quest_rally_slots, _tower_quest_state,
     _is_troop_defending, _navigate_to_tower, _run_tower_quest,
     _wait_for_rallies, _ocr_quest_rows, _claim_quest_rewards,
+    _eg_troops_available, _recall_stray_stationed,
     PENDING_TIMEOUT_S,
 )
 

@@ -1,8 +1,8 @@
 """
-PACbot WebSocket Relay Server
+9Bot WebSocket Relay Server
 
 Standalone aiohttp server deployed on a DigitalOcean Droplet (or any VPS).
-Accepts WebSocket connections from PACbot instances and proxies HTTP requests
+Accepts WebSocket connections from 9Bot instances and proxies HTTP requests
 from browsers to the appropriate bot.
 
 Supports streaming responses (MJPEG) via stream_start/stream_chunk/stream_end
@@ -73,9 +73,9 @@ def _landing_page() -> str:
     return (
         f"<!DOCTYPE html><html><head><meta charset='utf-8'>"
         f"<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        f"<title>PACbot Relay</title><style>{_STYLE}</style>"
-        f"</head><body><h1>PACbot Relay</h1>"
-        f'<p class="muted">Use your PACbot dashboard to find your remote URL.</p>'
+        f"<title>9Bot Relay</title><style>{_STYLE}</style>"
+        f"</head><body><h1>9Bot Relay</h1>"
+        f'<p class="muted">Use your 9Bot dashboard to find your remote URL.</p>'
         f"</body></html>"
     )
 

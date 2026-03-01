@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# PACbot Relay Server Setup — Ubuntu 22.04+ / Debian
+# 9Bot Relay Server Setup — Ubuntu 22.04+ / Debian
 # ============================================================
 # Run as root on a fresh DigitalOcean Droplet (or any VPS):
 #   chmod +x setup.sh && sudo ./setup.sh
@@ -12,9 +12,9 @@
 set -e
 
 RELAY_DOMAIN="${RELAY_DOMAIN:-${1:-}}"
-APP_DIR="/opt/pacbot-relay"
-SERVICE_NAME="pacbot-relay"
-SERVICE_USER="pacbot"
+APP_DIR="/opt/9bot-relay"
+SERVICE_NAME="9bot-relay"
+SERVICE_USER="9bot"
 RELAY_PORT=8090  # internal port, nginx proxies to this
 
 if [ -z "$RELAY_DOMAIN" ]; then
@@ -23,7 +23,7 @@ if [ -z "$RELAY_DOMAIN" ]; then
     exit 1
 fi
 
-echo "=== PACbot Relay Server Setup ==="
+echo "=== 9Bot Relay Server Setup ==="
 echo "Domain: $RELAY_DOMAIN"
 
 # 1. Install dependencies
@@ -68,7 +68,7 @@ fi
 echo "[5/7] Creating systemd service..."
 cat > "/etc/systemd/system/${SERVICE_NAME}.service" <<EOF
 [Unit]
-Description=PACbot WebSocket Relay
+Description=9Bot WebSocket Relay
 After=network.target
 
 [Service]

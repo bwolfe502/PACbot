@@ -1,4 +1,4 @@
-"""Shared task runners for PACbot.
+"""Shared task runners for 9Bot.
 
 All auto-mode loop functions live here — used by both the tkinter GUI (main.py)
 and the Flask web dashboard (web/dashboard.py). This eliminates the previous

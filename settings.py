@@ -1,4 +1,4 @@
-"""Shared settings persistence for PACbot.
+"""Shared settings persistence for 9Bot.
 
 Provides load/save for settings.json with validation and defaults.
 Used by both main.py (GUI) and web/dashboard.py (Flask).

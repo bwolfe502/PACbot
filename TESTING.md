@@ -1,6 +1,6 @@
-# PACbot Tester Protocol
+# 9Bot Tester Protocol
 
-Guide for users helping test and improve PACbot.
+Guide for users helping test and improve 9Bot.
 
 ## Two Ways to Help
 
@@ -8,7 +8,7 @@ Guide for users helping test and improve PACbot.
 You've found something broken and want to let us know. Minimum effort, maximum value.
 
 **What to do:**
-1. Run PACbot normally
+1. Run 9Bot normally
 2. When something goes wrong, note what happened
 3. Use the built-in bug report feature (generates a zip file with logs, stats, screenshots, settings)
 4. Send the zip + a short description of what you saw
@@ -39,13 +39,13 @@ The bug report zip automatically collects:
 
 | Data | Purpose |
 |------|---------|
-| `logs/pacbot.log*` | Action history, errors, warnings, timing |
+| `logs/9bot.log*` | Action history, errors, warnings, timing |
 | `stats/session_*.json` | Per-action success rates, template match scores, ADB timing |
 | `debug/failures/` | Screenshots captured at moment of failure |
 | `settings.json` | Your configuration (thresholds, toggles, intervals) |
 | `report_info.txt` | Version, OS, Python, devices, transition timing stats |
 
-**Privacy:** Bug reports contain only PACbot operational data. No personal info, passwords, or account details are included.
+**Privacy:** Bug reports contain only 9Bot operational data. No personal info, passwords, or account details are included.
 
 ## Machine Profile
 
@@ -81,7 +81,7 @@ When assigned a test scenario, here's the format:
 ### Scenario Template
 ```
 SCENARIO: [Name]
-VERSION: [PACbot version to test]
+VERSION: [9Bot version to test]
 DURATION: [How long to run]
 SETTINGS: [Any specific settings to configure]
 ACTIONS: [What to enable/run]
@@ -111,6 +111,6 @@ REPORT: Send bug report zip + count of successful/failed gathers from logs
 ## Version History
 
 When testing across versions, note which version you're running. The version is shown in:
-- The PACbot window title
+- The 9Bot window title
 - The log file header (`NEW SESSION — ... — vX.Y.Z`)
 - `report_info.txt` in the bug report zip
